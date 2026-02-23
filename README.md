@@ -1,6 +1,6 @@
 # phasma
 
-**Terminal interface for the [caustic](https://github.com/youruser/caustic) Vlasov–Poisson solver.**
+**Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov–Poisson solver.**
 
 [![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -120,7 +120,7 @@ cargo install phasma
 ### From source
 
 ```bash
-git clone https://github.com/youruser/phasma
+git clone https://github.com/resonant-jovian/phasma
 cd phasma
 cargo build --release
 ./target/release/phasma
