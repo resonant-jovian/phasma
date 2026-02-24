@@ -4,7 +4,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI](https://github.com//phasma/workflows/CI/badge.svg)](https://github.com//phasma/actions)
+[![CI](https://github.com/resonant-jovian/phasma/workflows/CI/badge.svg)](https://github.com/resonant-jovian/phasma/actions)
 
 ---
 
