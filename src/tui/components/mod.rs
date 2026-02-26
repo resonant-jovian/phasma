@@ -1,5 +1,11 @@
+pub mod density_map;
+pub mod exit_tab;
 pub mod fps;
 pub mod home;
+pub mod prep_tab;
+pub mod run_tab;
+pub mod tab_view;
+
 use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::{
     Frame,

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
+use crate::sim::SimState;
+
+#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize)]
 pub enum Action {
     Tick,
     Render,
@@ -12,4 +14,15 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
+    // Tab navigation
+    TabNext,
+    TabPrev,
+    SelectTab(usize),
+    // Simulation control
+    SimStart,
+    SimPause,
+    SimResume,
+    SimStop,
+    #[strum(to_string = "SimUpdate")]
+    SimUpdate(SimState),
 }

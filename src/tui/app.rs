@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
-use crate::tui::{
-    action::Action,
-    components::{Component, fps::FpsCounter, home::Home},
-    config::Config,
-    {Event, Tui},
+use crate::{
+    sim::{SimControl, SimHandle},
+    tui::{
+        action::Action,
+        components::{Component, fps::FpsCounter, tab_view::TabView},
+        config::Config,
+        {Event, Tui},
+    },
 };
 
 pub struct App {
@@ -22,6 +25,9 @@ pub struct App {
     last_tick_key_events: Vec<KeyEvent>,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
+    sim_handle: Option<SimHandle>,
+    config_path: Option<String>,
+    auto_run: bool,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -31,12 +37,18 @@ pub enum Mode {
 }
 
 impl App {
-    pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
+    pub fn new(
+        tick_rate: f64,
+        frame_rate: f64,
+        config_path: Option<String>,
+        auto_run: bool,
+    ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let tab_view = TabView::new(config_path.clone());
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![Box::new(Home::new()), Box::new(FpsCounter::default())],
+            components: vec![Box::new(tab_view), Box::new(FpsCounter::default())],
             should_quit: false,
             should_suspend: false,
             config: Config::new()?,
@@ -44,6 +56,9 @@ impl App {
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
+            sim_handle: None,
+            config_path,
+            auto_run,
         })
     }
 
@@ -64,6 +79,11 @@ impl App {
             component.init(tui.size()?)?;
         }
 
+        // Auto-start sim if --run was passed
+        if self.auto_run {
+            self.action_tx.send(Action::SimStart)?;
+        }
+
         let action_tx = self.action_tx.clone();
         loop {
             self.handle_events(&mut tui).await?;
@@ -75,6 +95,10 @@ impl App {
                 // tui.mouse(true);
                 tui.enter()?;
             } else if self.should_quit {
+                // Stop sim gracefully before quitting
+                if let Some(ref handle) = self.sim_handle {
+                    let _ = handle.control_tx.send(SimControl::Stop);
+                }
                 tui.stop()?;
                 break;
             }
@@ -101,6 +125,14 @@ impl App {
                 action_tx.send(action)?;
             }
         }
+
+        // Drain sim state updates (non-blocking)
+        if let Some(ref mut handle) = self.sim_handle {
+            while let Ok(state) = handle.state_rx.try_recv() {
+                self.action_tx.send(Action::SimUpdate(state))?;
+            }
+        }
+
         Ok(())
     }
 
@@ -132,7 +164,10 @@ impl App {
     fn handle_actions(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         while let Ok(action) = self.action_rx.try_recv() {
             if action != Action::Tick && action != Action::Render {
-                debug!("{action:?}");
+                match &action {
+                    Action::SimUpdate(_) => debug!("SimUpdate(...)"),
+                    _ => debug!("{action:?}"),
+                }
             }
             match action {
                 Action::Tick => {
@@ -144,6 +179,28 @@ impl App {
                 Action::ClearScreen => tui.terminal.clear()?,
                 Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
                 Action::Render => self.render(tui)?,
+                Action::SimStart => {
+                    if self.sim_handle.is_none() {
+                        let path = self.config_path.clone().unwrap_or_default();
+                        self.sim_handle = Some(SimHandle::spawn(path));
+                    }
+                }
+                Action::SimStop => {
+                    if let Some(ref handle) = self.sim_handle {
+                        let _ = handle.control_tx.send(SimControl::Stop);
+                    }
+                    self.sim_handle = None;
+                }
+                Action::SimPause => {
+                    if let Some(ref handle) = self.sim_handle {
+                        let _ = handle.control_tx.send(SimControl::Pause);
+                    }
+                }
+                Action::SimResume => {
+                    if let Some(ref handle) = self.sim_handle {
+                        let _ = handle.control_tx.send(SimControl::Resume);
+                    }
+                }
                 _ => {}
             }
             for component in self.components.iter_mut() {

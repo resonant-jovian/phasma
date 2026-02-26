@@ -12,6 +12,18 @@ pub struct Cli {
     /// Frame rate, i.e. number of frames per second
     #[arg(short, long, value_name = "FLOAT", default_value_t = 60.0)]
     pub frame_rate: f64,
+
+    /// Path to simulation config file (TOML)
+    #[arg(short, long, value_name = "PATH")]
+    pub config: Option<String>,
+
+    /// Start simulation immediately on launch
+    #[arg(long)]
+    pub run: bool,
+
+    /// Headless batch mode — run simulation without TUI (for HPC)
+    #[arg(long)]
+    pub batch: bool,
 }
 
 const VERSION_MESSAGE: &str = concat!(

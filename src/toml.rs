@@ -109,12 +109,12 @@ impl InitConfig {
                 splitting: self.solver.splitting,
             },
             time: Time {
-                t_final: Decimal::from_str_exact(&*self.exit.mass_threshold)?,
-                dt: self.time.t_final,
-                cfl_factor: Decimal::from_str_exact(&*self.exit.mass_threshold)?,
+                t_final: Decimal::from_str_exact(&*self.time.t_final)?,
+                dt: self.time.dt,
+                cfl_factor: Decimal::from_str_exact(&*self.time.cfl_factor)?,
             },
             output: Output {
-                interval: Decimal::from_str_exact(&*self.exit.mass_threshold)?,
+                interval: Decimal::from_str_exact(&*self.output.interval)?,
                 directory: self.output.directory,
                 format: self.output.format,
             },
