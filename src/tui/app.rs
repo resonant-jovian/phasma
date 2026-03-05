@@ -8,7 +8,7 @@ use crate::{
     sim::{SimControl, SimHandle},
     tui::{
         action::Action,
-        components::{Component, fps::FpsCounter, tab_view::TabView},
+        components::{Component, tab_view::TabView},
         config::Config,
         {Event, Tui},
     },
@@ -48,7 +48,7 @@ impl App {
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![Box::new(tab_view), Box::new(FpsCounter::default())],
+            components: vec![Box::new(tab_view)],
             should_quit: false,
             should_suspend: false,
             config: Config::new()?,

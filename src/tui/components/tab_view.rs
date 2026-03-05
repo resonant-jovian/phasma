@@ -2,7 +2,8 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Tabs},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Tabs},
 };
 use strum::{Display, EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 use tokio::sync::mpsc::UnboundedSender;
@@ -125,8 +126,12 @@ impl Component for TabView {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let [tabs_area, content_area] =
-            Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
+        let [tabs_area, content_area, help_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(area);
 
         // Render the tab bar
         let titles: Vec<String> = Tab::iter().map(|t| t.to_string()).collect();
@@ -134,20 +139,72 @@ impl Component for TabView {
             .select(self.selected as usize)
             .highlight_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD),
             )
-            .divider("|")
-            .block(Block::bordered());
+            .divider("|");
         frame.render_widget(tabs, tabs_area);
 
-        // Render the active sub-tab
+        // Wrap content in active-tab border with ► indicator
+        let tab_title = match self.selected {
+            Tab::Prep => " ► Prep ",
+            Tab::Run => " ► Run ",
+            Tab::Exit => " ► Exit ",
+        };
+        let content_block = Block::bordered()
+            .title(tab_title)
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = content_block.inner(content_area);
+        frame.render_widget(content_block, content_area);
+
+        // Render the active sub-tab inside the bordered region
         match self.selected {
-            Tab::Prep => self.prep.draw(frame, content_area)?,
-            Tab::Run => self.run.draw(frame, content_area)?,
-            Tab::Exit => self.exit.draw(frame, content_area)?,
+            Tab::Prep => self.prep.draw(frame, inner)?,
+            Tab::Run => self.run.draw(frame, inner)?,
+            Tab::Exit => self.exit.draw(frame, inner)?,
         }
+
+        // Help footer
+        let help = Paragraph::new(help_line(self.selected))
+            .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+        frame.render_widget(help, help_area);
 
         Ok(())
     }
+}
+
+fn help_line(selected: Tab) -> Line<'static> {
+    let key = |s: &'static str| {
+        Span::styled(s, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+    };
+    let desc = |s: &'static str| Span::styled(s, Style::default().fg(Color::DarkGray));
+
+    let mut spans = vec![
+        key("[F1]"), desc(" Prep  "),
+        key("[F2]"), desc(" Run  "),
+        key("[F3]"), desc(" Exit  "),
+        key("[Tab]"), desc(" Next  "),
+        key("[q]"), desc(" Quit"),
+    ];
+
+    match selected {
+        Tab::Prep => {
+            spans.push(desc("    "));
+            spans.push(key("[r]"));
+            spans.push(desc(" Run sim  "));
+            spans.push(key("[l]"));
+            spans.push(desc(" Load config"));
+        }
+        Tab::Run => {
+            spans.push(desc("    "));
+            spans.push(key("[p/Space]"));
+            spans.push(desc(" Pause  "));
+            spans.push(key("[s]"));
+            spans.push(desc(" Stop"));
+        }
+        Tab::Exit => {}
+    }
+
+    Line::from(spans)
 }

@@ -94,19 +94,18 @@ impl Component for RunTab {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let outer = Block::bordered()
-            .title(" Run ")
-            .border_style(Style::default().fg(Color::DarkGray));
-        let inner = outer.inner(area);
-        frame.render_widget(outer, area);
+        // outer Block is owned by TabView
+
+        // Each map takes 50% of area.width; terminal cells ~2:1 (w:h) → square height = width/4
+        let ideal_map_h = (area.width / 4).clamp(8, area.height.saturating_sub(16));
 
         // Vertical split: gauges | maps | chart+diag
         let [gauge_area, maps_area, bottom_area] = Layout::vertical([
             Constraint::Length(4),
-            Constraint::Min(10),
-            Constraint::Length(10),
+            Constraint::Length(ideal_map_h),
+            Constraint::Min(12),
         ])
-        .areas(inner);
+        .areas(area);
 
         self.draw_gauges(frame, gauge_area);
         self.draw_maps(frame, maps_area);
@@ -123,8 +122,19 @@ impl RunTab {
 
         match &self.sim_state {
             None => {
-                let msg = Paragraph::new("No simulation running. Press [r] on the Prep tab to start.")
-                    .style(Style::default().fg(Color::DarkGray));
+                let msg = Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        "No simulation running.",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(vec![
+                        Span::styled("  → Go to Prep tab  ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("[F1]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled("  and press  ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled("  to start", Style::default().fg(Color::DarkGray)),
+                    ]),
+                ]);
                 frame.render_widget(msg, area);
             }
             Some(state) => {
@@ -164,9 +174,11 @@ impl RunTab {
     }
 
     fn draw_maps(&self, frame: &mut Frame, area: Rect) {
-        let [density_area, phase_area] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(area);
+        let [density_area, phase_area] = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .areas(area);
 
         match &self.sim_state {
             None => {
@@ -200,9 +212,12 @@ impl RunTab {
     }
 
     fn draw_bottom(&self, frame: &mut Frame, area: Rect) {
-        let [chart_area, diag_area] =
-            Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .areas(area);
+        let chart_min_w = 40_u16;
+        let [chart_area, diag_area] = if area.width > chart_min_w + 20 {
+            Layout::horizontal([Constraint::Min(chart_min_w), Constraint::Length(26)]).areas(area)
+        } else {
+            Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(area)
+        };
 
         // Energy chart
         if self.energy_history.is_empty() {

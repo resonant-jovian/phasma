@@ -67,17 +67,12 @@ impl Component for ExitTab {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let outer = Block::bordered()
-            .title(" Exit ")
-            .border_style(Style::default().fg(Color::DarkGray));
-        let inner = outer.inner(area);
-        frame.render_widget(outer, area);
-
+        // outer Block is owned by TabView
         let [status_area, table_area] = Layout::vertical([
             Constraint::Length(5),
             Constraint::Min(0),
         ])
-        .areas(inner);
+        .areas(area);
 
         // --- Status / exit reason ---
         let status_text = match &self.sim_state {

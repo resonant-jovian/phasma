@@ -113,18 +113,13 @@ impl Component for PrepTab {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let outer = Block::bordered()
-            .title(" Prep ")
-            .border_style(Style::default().fg(Color::DarkGray));
-        let inner = outer.inner(area);
-        frame.render_widget(outer, area);
-
+        // outer Block is owned by TabView
         let [header_area, config_area, status_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(3),
         ])
-        .areas(inner);
+        .areas(area);
 
         // --- Header: config path + run hint ---
         let path_display = self
@@ -173,17 +168,18 @@ impl Component for PrepTab {
         }
 
         // --- Status bar ---
-        let status_str = if self.sim_running {
-            Span::styled(
-                "● Running — switch to [F2 Run] to watch live diagnostics",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            )
+        let status_line = if self.sim_running {
+            Line::from(vec![
+                Span::styled("● Running — switch to Run tab  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("[F2]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("  to watch live diagnostics", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ])
         } else if self.config_loaded {
-            Span::styled("Ready — press [r] to start", Style::default().fg(Color::Yellow))
+            Line::from(Span::styled("Ready — press [r] to start", Style::default().fg(Color::Yellow)))
         } else {
-            Span::styled("Config not loaded", Style::default().fg(Color::DarkGray))
+            Line::from(Span::styled("Config not loaded", Style::default().fg(Color::DarkGray)))
         };
-        let status = Paragraph::new(Line::from(status_str))
+        let status = Paragraph::new(status_line)
             .block(Block::bordered().title(" Status "));
         frame.render_widget(status, status_area);
 
