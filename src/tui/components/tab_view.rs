@@ -108,6 +108,9 @@ impl Component for TabView {
                 let prev = (self.selected as usize + Tab::COUNT - 1) % Tab::COUNT;
                 self.selected = Tab::from_repr(prev).unwrap_or_default();
             }
+            Action::SimStart => {
+                self.selected = Tab::Run;
+            }
             _ => {}
         }
 

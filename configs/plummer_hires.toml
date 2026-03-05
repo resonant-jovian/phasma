@@ -1,0 +1,34 @@
+# Plummer sphere — medium resolution
+# Better energy conservation; use for production runs.
+
+[model]
+type         = "plummer"
+mass         = "1.0"
+scale_radius = "0.1"
+
+[domain]
+spatial_extent      = "2.0"
+velocity_extent     = "4.0"
+spatial_resolution  = "32"
+velocity_resolution = "32"
+boundary            = "open"
+
+[solver]
+representation = "uniform"
+poisson        = "fft"
+advection      = "semi_lagrangian"
+splitting      = "strang"
+
+[time]
+t_final    = "20.0"
+dt         = "adaptive"
+cfl_factor = "0.4"
+
+[output]
+interval  = "1.0"
+directory = "output/plummer_hires"
+format    = "hdf5"
+
+[exit]
+energy_tolerance = "1e-4"
+mass_threshold   = "0.005"

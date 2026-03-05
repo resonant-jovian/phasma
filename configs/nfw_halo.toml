@@ -1,0 +1,35 @@
+# NFW halo — Navarro-Frenk-White profile
+# Standard dark matter halo from cosmological N-body simulations.
+# Concentration c = 10 (Milky-Way-like).
+
+[model]
+type         = "nfw"
+mass         = "1.0"
+scale_radius = "0.3"
+
+[domain]
+spatial_extent      = "8.0"
+velocity_extent     = "2.5"
+spatial_resolution  = "32"
+velocity_resolution = "32"
+boundary            = "open"
+
+[solver]
+representation = "uniform"
+poisson        = "fft"
+advection      = "semi_lagrangian"
+splitting      = "yoshida"
+
+[time]
+t_final    = "30.0"
+dt         = "adaptive"
+cfl_factor = "0.4"
+
+[output]
+interval  = "2.0"
+directory = "output/nfw_halo"
+format    = "hdf5"
+
+[exit]
+energy_tolerance = "1e-4"
+mass_threshold   = "0.005"

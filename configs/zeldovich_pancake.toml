@@ -1,0 +1,34 @@
+# Zel'dovich pancake — cosmological cold dark matter sheet
+# Tests caustic formation; first shell-crossing at t ≈ 1/omega_0.
+
+[model]
+type         = "zeldovich"
+mass         = "1.0"
+scale_radius = "1.0"
+
+[domain]
+spatial_extent      = "6.28318"
+velocity_extent     = "3.0"
+spatial_resolution  = "32"
+velocity_resolution = "32"
+boundary            = "periodic"
+
+[solver]
+representation = "uniform"
+poisson        = "fft"
+advection      = "semi_lagrangian"
+splitting      = "strang"
+
+[time]
+t_final    = "1.2"
+dt         = "adaptive"
+cfl_factor = "0.3"
+
+[output]
+interval  = "0.1"
+directory = "output/zeldovich_pancake"
+format    = "hdf5"
+
+[exit]
+energy_tolerance = "1e-3"
+mass_threshold   = "0.01"
