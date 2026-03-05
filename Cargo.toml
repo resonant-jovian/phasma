@@ -1,6 +1,6 @@
 [package]
 name = "phasma"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "TUI frontend imlp for caustic"
 authors = ["Albin <albin@sjoegren.se>"]
@@ -10,7 +10,7 @@ license = "GPL-3"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#caustic = "0.1.0"
+caustic = { path = "../caustic" }
 toml = "1.0.3+spec-1.1.0"
 better-panic = "0.3.0"
 clap = { version = "4.5.60", features = [
