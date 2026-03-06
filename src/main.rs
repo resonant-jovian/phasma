@@ -21,14 +21,26 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Headless batch mode — run the simulation stub without the TUI.
-/// Intended for HPC / scripted use with `--batch`.
+/// Headless batch mode — runs the caustic simulation and prints progress to stderr.
 async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
     let path = config_path.unwrap_or_else(|| "run.toml".to_string());
     eprintln!("phasma batch: starting simulation  config={path}");
-    // TODO: caustic::Simulation::new() + step loop with progress written to stderr
-    let handle = sim::SimHandle::spawn(path);
-    let _ = handle.task.await;
+    let mut handle = sim::SimHandle::spawn(path);
+    // Drain state_rx until the sim thread finishes (channel closes) or sends an exit reason.
+    while let Some(state) = handle.state_rx.recv().await {
+        eprintln!(
+            "  t={:.4}  step={}  |ΔE/E|={:.2e}  M={:.4}",
+            state.t,
+            state.step,
+            state.energy_drift(),
+            state.total_mass,
+        );
+        if state.exit_reason.is_some() {
+            eprintln!("phasma batch: exit — {}", state.exit_reason.unwrap());
+            break;
+        }
+    }
+    handle.task.abort();
     eprintln!("phasma batch: simulation complete");
     Ok(())
 }

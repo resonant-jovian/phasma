@@ -1,0 +1,51 @@
+# MVP configuration — verified working with the implemented pipeline.
+#
+# Uses only implemented components:
+#   PlummerIC + sample_on_grid  (isolated.rs)
+#   UniformGrid6D               (algos/uniform.rs)
+#   FftPoisson (periodic)       (poisson/fft.rs)
+#   SemiLagrangian              (algos/lagrangian.rs)
+#   StrangSplitting             (time/strang.rs)
+#   IOManager (binary format)   (io.rs)
+#
+# Domain sizing rationale:
+#   Plummer with M=1, a=1, G=1 → escape velocity v_esc = sqrt(2GM/a) = sqrt(2) ≈ 1.41
+#   velocity_extent = 2.5 covers all bound orbits.
+#   velocity_resolution = 8 → dv = 0.625; cell centres at ±0.3125, ±0.9375, ...
+#   Innermost spatial cells at r ≈ sqrt(3)*1.0 ≈ 1.73; φ(1.73) ≈ -0.50.
+#   Minimum E = 0.5*(3*0.3125²) - 0.50 = -0.35 < 0 → Plummer DF nonzero. ✓
+#
+# Dynamical time: t_dyn ≈ 1/sqrt(G*rho_max) ≈ 10; t_final = 4 ≈ 0.4 t_dyn.
+# Energy drift on this grid: ~3% per step (coarse; use plummer_hires for production).
+
+[model]
+type         = "plummer"
+mass         = "1.0"
+scale_radius = "1.0"   # a = 1 in natural units
+
+[domain]
+spatial_extent      = "8.0"   # box half-width L; domain [-8,8]³ pc
+velocity_extent     = "2.5"   # velocity half-width; domain [-2.5,2.5]³ km/s
+spatial_resolution  = "8"     # 8³ = 512 spatial cells; dx = 2.0
+velocity_resolution = "8"     # 8³ = 512 velocity cells; dv = 0.625
+boundary            = "periodic|truncated"   # spatial: periodic, velocity: truncated
+
+[solver]
+representation = "uniform"          # UniformGrid6D — only implemented repr
+poisson        = "fft"              # FftPoisson (periodic BC) — only implemented solver
+advection      = "semi_lagrangian"  # SemiLagrangian (Catmull-Rom) — only implemented advector
+splitting      = "strang"           # StrangSplitting (2nd-order) — only implemented integrator
+
+[time]
+t_final    = "4.0"      # run for ~0.4 dynamical times
+dt         = "adaptive" # CFL-adaptive timestep via StrangSplitting::max_dt
+cfl_factor = "0.5"      # dt = 0.5 / sqrt(G * rho_max)
+
+[output]
+interval  = "1.0"           # save diagnostics every 1 time unit
+directory = "output/mvp"    # relative to working directory
+format    = "binary"        # implemented; "hdf5" is not yet implemented
+
+[exit]
+energy_tolerance = "5e-1"   # 50% drift allowed — appropriate for 8³ coarse grid
+mass_threshold   = "0.1"    # exit if <10% of initial mass remains in box
