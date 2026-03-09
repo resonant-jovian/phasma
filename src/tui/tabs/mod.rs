@@ -63,18 +63,24 @@ pub enum Tab {
     Settings,
 }
 
+pub struct TabAreas {
+    pub tab_bar: Rect,
+    pub content: Rect,
+    pub footer: Rect,
+}
+
 pub struct TabView {
     pub selected: Tab,
-    setup:          SetupTab,
-    run_control:    RunControlTab,
-    density:        DensityTab,
-    phase_space:    PhaseSpaceTab,
-    energy:         EnergyTab,
-    rank:           RankTab,
-    profiles:       ProfilesTab,
-    performance:    PerformanceTab,
+    setup: SetupTab,
+    run_control: RunControlTab,
+    density: DensityTab,
+    phase_space: PhaseSpaceTab,
+    energy: EnergyTab,
+    rank: RankTab,
+    profiles: ProfilesTab,
+    performance: PerformanceTab,
     poisson_detail: PoissonDetailTab,
-    settings:       SettingsTab,
+    settings: SettingsTab,
     command_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -87,10 +93,10 @@ impl TabView {
             density: DensityTab::default(),
             phase_space: PhaseSpaceTab::default(),
             energy: EnergyTab::default(),
-            rank: RankTab::default(),
+            rank: RankTab,
             profiles: ProfilesTab::default(),
             performance: PerformanceTab::default(),
-            poisson_detail: PoissonDetailTab::default(),
+            poisson_detail: PoissonDetailTab,
             settings: SettingsTab::default(),
             command_tx: None,
         }
@@ -179,28 +185,40 @@ impl TabView {
                 let prev = (self.selected as usize + Tab::COUNT - 1) % Tab::COUNT;
                 self.selected = Tab::from_repr(prev).unwrap_or_default();
             }
-            Action::SimStart => {
+            Action::SimStart | Action::SimRestart => {
                 self.selected = Tab::RunControl;
+                self.performance.reset();
             }
             _ => {}
         }
 
         let mut result = None;
-        if let Some(a) = self.setup.update(action) { result = Some(a); }
-        if let Some(a) = self.run_control.update(action) { result = result.or(Some(a)); }
-        if let Some(a) = self.density.update(action) { result = result.or(Some(a)); }
-        if let Some(a) = self.phase_space.update(action) { result = result.or(Some(a)); }
-        if let Some(a) = self.energy.update(action) { result = result.or(Some(a)); }
-        if let Some(a) = self.profiles.update(action) { result = result.or(Some(a)); }
+        if let Some(a) = self.setup.update(action) {
+            result = Some(a);
+        }
+        if let Some(a) = self.run_control.update(action) {
+            result = result.or(Some(a));
+        }
+        if let Some(a) = self.density.update(action) {
+            result = result.or(Some(a));
+        }
+        if let Some(a) = self.phase_space.update(action) {
+            result = result.or(Some(a));
+        }
+        if let Some(a) = self.energy.update(action) {
+            result = result.or(Some(a));
+        }
+        if let Some(a) = self.profiles.update(action) {
+            result = result.or(Some(a));
+        }
+        self.performance.update(action);
         result
     }
 
     pub fn draw(
         &mut self,
         frame: &mut Frame,
-        tab_bar_area: Rect,
-        content_area: Rect,
-        footer_area: Rect,
+        areas: TabAreas,
         theme: &ThemeColors,
         colormap: Colormap,
         data_provider: &LiveDataProvider,
@@ -217,7 +235,7 @@ impl TabView {
             )
             .divider("|")
             .style(Style::default().fg(theme.dim));
-        frame.render_widget(tabs, tab_bar_area);
+        frame.render_widget(tabs, areas.tab_bar);
 
         // Bordered content block
         let tab_title = match self.selected {
@@ -235,14 +253,20 @@ impl TabView {
         let content_block = Block::bordered()
             .title(tab_title)
             .border_style(Style::default().fg(theme.border));
-        let inner = content_block.inner(content_area);
-        frame.render_widget(content_block, content_area);
+        let inner = content_block.inner(areas.content);
+        frame.render_widget(content_block, areas.content);
 
         match self.selected {
             Tab::Setup => self.setup.draw(frame, inner, theme),
-            Tab::RunControl => self.run_control.draw(frame, inner, theme, colormap, data_provider),
-            Tab::Density => self.density.draw(frame, inner, theme, colormap, data_provider),
-            Tab::PhaseSpace => self.phase_space.draw(frame, inner, theme, colormap, data_provider),
+            Tab::RunControl => self
+                .run_control
+                .draw(frame, inner, theme, colormap, data_provider),
+            Tab::Density => self
+                .density
+                .draw(frame, inner, theme, colormap, data_provider),
+            Tab::PhaseSpace => self
+                .phase_space
+                .draw(frame, inner, theme, colormap, data_provider),
             Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
             Tab::Rank => self.rank.draw(frame, inner, theme),
             Tab::Profiles => self.profiles.draw(frame, inner, theme, data_provider),
@@ -253,44 +277,98 @@ impl TabView {
 
         // Footer hint
         let hint = help_line(self.selected);
-        frame.render_widget(ratatui::widgets::Paragraph::new(hint)
-            .style(Style::default().fg(theme.dim)), footer_area);
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+            areas.footer,
+        );
     }
 }
 
 fn help_line(selected: Tab) -> Line<'static> {
-    let key = |s: &'static str| Span::styled(s, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let key = |s: &'static str| {
+        Span::styled(
+            s,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
     let desc = |s: &'static str| Span::styled(s, Style::default().fg(Color::DarkGray));
 
     let mut spans = vec![
-        key("[F1-F10]"), desc(" tabs  "),
-        key("[Space]"), desc(" pause  "),
-        key("[q]"), desc(" quit  "),
-        key("[?]"), desc(" help  "),
-        key("[e]"), desc(" export"),
+        key("[F1-F10]"),
+        desc(" tabs  "),
+        key("[Space]"),
+        desc(" pause  "),
+        key("[◄/►]"),
+        desc(" scrub  "),
+        key("[q]"),
+        desc(" quit  "),
+        key("[?]"),
+        desc(" help  "),
+        key("[e]"),
+        desc(" export"),
     ];
 
     match selected {
         Tab::Setup => {
-            spans.extend([key("  [r]"), desc(" run  "), key("[Enter]"), desc(" load config")]);
+            spans.extend([
+                key("  [r]"),
+                desc(" run  "),
+                key("[Enter]"),
+                desc(" load config"),
+            ]);
         }
         Tab::RunControl => {
-            spans.extend([key("  [p]"), desc(" pause  "), key("[s]"), desc(" stop  "), key("[1-3]"), desc(" log filter")]);
+            spans.extend([
+                key("  [p]"),
+                desc(" pause  "),
+                key("[s]"),
+                desc(" stop  "),
+                key("[1-3]"),
+                desc(" log filter"),
+            ]);
         }
         Tab::Density => {
-            spans.extend([key("  [x/y/z]"), desc(" axis  "), key("[+/-/arrows]"), desc(" zoom/pan  "), key("[r]"), desc(" reset")]);
+            spans.extend([
+                key("  [x/y/z]"),
+                desc(" axis  "),
+                key("[+/-]"),
+                desc(" zoom  "),
+                key("[r]"),
+                desc(" reset"),
+            ]);
         }
         Tab::PhaseSpace => {
-            spans.extend([key("  [1-6]"), desc(" dims  "), key("[{/}]"), desc(" slice  "), key("[+/-/arrows]"), desc(" zoom/pan")]);
+            spans.extend([key("  [1-6]"), desc(" dims  "), key("[+/-]"), desc(" zoom")]);
         }
         Tab::Energy => {
-            spans.extend([key("  [t]"), desc(" traces  "), key("[h/l]"), desc(" scroll  "), key("[f]"), desc(" fit  "), key("[d]"), desc(" drift")]);
+            spans.extend([
+                key("  [t/k/w]"),
+                desc(" traces  "),
+                key("[d]"),
+                desc(" drift  "),
+                key("[1-4]"),
+                desc(" panel"),
+            ]);
         }
         Tab::Profiles => {
-            spans.extend([key("  [1-5]"), desc(" profile  "), key("[l]"), desc(" log  "), key("[a]"), desc(" analytic")]);
+            spans.extend([
+                key("  [1-5]"),
+                desc(" profile  "),
+                key("[l]"),
+                desc(" log  "),
+                key("[a]"),
+                desc(" analytic"),
+            ]);
         }
         Tab::Settings => {
-            spans.extend([key("  [◄/►]"), desc(" change  "), key("[▲/▼]"), desc(" navigate")]);
+            spans.extend([
+                key("  [◄/►]"),
+                desc(" change  "),
+                key("[▲/▼]"),
+                desc(" navigate"),
+            ]);
         }
         _ => {}
     }

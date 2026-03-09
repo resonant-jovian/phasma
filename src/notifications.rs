@@ -2,7 +2,6 @@
 pub enum NotificationKind {
     SimComplete,
     SimError,
-    CheckpointSaved,
     ExportComplete,
 }
 
@@ -13,7 +12,6 @@ pub fn notify(kind: NotificationKind, msg: &str) {
     let _title = match kind {
         NotificationKind::SimComplete => "Phasma: Simulation complete",
         NotificationKind::SimError => "Phasma: Simulation error",
-        NotificationKind::CheckpointSaved => "Phasma: Checkpoint saved",
         NotificationKind::ExportComplete => "Phasma: Export complete",
     };
 

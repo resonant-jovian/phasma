@@ -8,9 +8,7 @@ use crate::{
     colormaps::Colormap,
     data::DataProvider,
     data::live::LiveDataProvider,
-    export,
-    notifications,
-    session,
+    export, notifications, session,
     sim::{SimControl, SimHandle},
     themes::Theme,
     tui::{
@@ -73,7 +71,7 @@ impl App {
         let colormap = Colormap::from_name(&saved.colormap);
 
         let mut tab_view = TabView::new(config_path.clone());
-        tab_view.restore_tab(saved.active_tab);
+        tab_view.restore_tab(0); // Always start on F1 Setup
 
         let config_name = config_path
             .as_deref()
@@ -117,7 +115,8 @@ impl App {
             .mouse(true);
         tui.enter()?;
 
-        self.tab_view.register_action_handler(self.action_tx.clone());
+        self.tab_view
+            .register_action_handler(self.action_tx.clone());
         self.tab_view.register_config_handler(self.config.clone());
 
         // Auto-start sim if --run was passed
@@ -166,7 +165,7 @@ impl App {
         // Drain sim state updates (non-blocking)
         if let Some(ref mut handle) = self.sim_handle {
             while let Ok(state) = handle.state_rx.try_recv() {
-                self.action_tx.send(Action::SimUpdate(state))?;
+                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
             }
         }
 
@@ -205,34 +204,30 @@ impl App {
 
         // Export menu intercepts all keys when visible
         if self.export_menu.visible {
-            if let Some(action) = self.export_menu.handle_key_event(key) {
-                if matches!(action, Action::ExportMenuClose) {
-                    // Perform the export
-                    let fmt = self.export_menu.selected_format();
-                    let dir = std::path::PathBuf::from("./phasma_export");
-                    let state = self.data_provider.current_state();
-                    let result = export::export_diagnostics(
-                        &dir,
-                        fmt,
-                        &self.data_provider.diagnostics,
-                        state,
-                    );
-                    match &result {
-                        Ok(path) => {
-                            notifications::notify(
-                                notifications::NotificationKind::ExportComplete,
-                                &format!("Exported {} to {path}", fmt.name()),
-                            );
-                        }
-                        Err(e) => {
-                            notifications::notify(
-                                notifications::NotificationKind::SimError,
-                                &format!("Export failed: {e}"),
-                            );
-                        }
+            if let Some(action) = self.export_menu.handle_key_event(key)
+                && matches!(action, Action::ExportMenuClose)
+            {
+                // Perform the export
+                let fmt = self.export_menu.selected_format();
+                let dir = std::path::PathBuf::from("./phasma_export");
+                let state = self.data_provider.current_state();
+                let result =
+                    export::export_diagnostics(&dir, fmt, &self.data_provider.diagnostics, state);
+                match &result {
+                    Ok(path) => {
+                        notifications::notify(
+                            notifications::NotificationKind::ExportComplete,
+                            &format!("Exported {} to {path}", fmt.name()),
+                        );
                     }
-                    self.export_menu.last_result = Some(result);
+                    Err(e) => {
+                        notifications::notify(
+                            notifications::NotificationKind::SimError,
+                            &format!("Export failed: {e}"),
+                        );
+                    }
                 }
+                self.export_menu.last_result = Some(result);
             }
             return Ok(());
         }
@@ -282,6 +277,23 @@ impl App {
         if let Some(action) = self.tab_view.handle_key_event(key) {
             action_tx.send(action)?;
             return Ok(());
+        }
+
+        // Arrow keys for scrubbing — only if the active tab didn't consume them
+        match key.code {
+            KeyCode::Left => {
+                action_tx.send(Action::ScrubBackward)?;
+                return Ok(());
+            }
+            KeyCode::Right => {
+                action_tx.send(Action::ScrubForward)?;
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                action_tx.send(Action::ScrubToLive)?;
+                return Ok(());
+            }
+            _ => {}
         }
 
         // Then check keybinding config
@@ -341,16 +353,25 @@ impl App {
                 Action::Render => self.render(tui)?,
                 Action::ConfigLoaded(path) => {
                     self.config_path = Some(path.clone());
-                    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                    let name = path.rsplit('/').next().unwrap_or(path).to_string();
                     self.status_bar.set_config_name(name);
+                    // Load config into data provider for analytic overlays etc.
+                    if let Ok(cfg) = crate::config::load(path) {
+                        self.data_provider.set_config(cfg);
+                    }
                 }
                 Action::SimStart => {
-                    if self.sim_handle.is_none() {
-                        if let Some(ref path) = self.config_path {
-                            self.sim_handle = Some(SimHandle::spawn(path.clone()));
-                            self.sim_paused = false;
-                            self.status_bar.on_sim_start();
-                        }
+                    // Stop any existing sim first
+                    if let Some(ref handle) = self.sim_handle {
+                        let _ = handle.control_tx.send(SimControl::Stop);
+                        self.sim_handle = None;
+                    }
+                    // Clear all diagnostics/history from previous run
+                    self.data_provider.reset();
+                    if let Some(ref path) = self.config_path {
+                        self.sim_handle = Some(SimHandle::spawn(path.clone()));
+                        self.sim_paused = false;
+                        self.status_bar.on_sim_start();
                     }
                 }
                 Action::SimStop => {
@@ -375,14 +396,46 @@ impl App {
                     self.sim_paused = false;
                     self.status_bar.on_sim_resume();
                 }
+                Action::SimRestart => {
+                    // Stop current sim if any, then start fresh
+                    if let Some(ref handle) = self.sim_handle {
+                        let _ = handle.control_tx.send(SimControl::Stop);
+                    }
+                    self.sim_handle = None;
+                    self.sim_paused = false;
+                    self.status_bar.on_sim_stop();
+                    // Clear all diagnostics/history from previous run
+                    self.data_provider.reset();
+                    // Now start
+                    if let Some(ref path) = self.config_path {
+                        self.sim_handle = Some(SimHandle::spawn(path.clone()));
+                        self.sim_paused = false;
+                        self.status_bar.on_sim_start();
+                    }
+                }
                 Action::SimUpdate(state) => {
                     self.data_provider.update(state);
                     self.status_bar.on_state_update(state);
-                    // Notify on sim completion
+                    // Notify on sim completion and clear handle so re-run is possible
                     if let Some(ref reason) = state.exit_reason {
                         let msg = format!("Exit: {reason} at t={:.4}", state.t);
                         notifications::notify(notifications::NotificationKind::SimComplete, &msg);
+                        self.sim_handle = None;
                     }
+                }
+                Action::ScrubBackward => {
+                    self.data_provider.scrub_backward();
+                    self.status_bar
+                        .set_scrub_position(self.data_provider.scrub_position());
+                }
+                Action::ScrubForward => {
+                    self.data_provider.scrub_forward();
+                    self.status_bar
+                        .set_scrub_position(self.data_provider.scrub_position());
+                }
+                Action::ScrubToLive => {
+                    self.data_provider.scrub_to_live();
+                    self.status_bar.set_scrub_position(None);
                 }
                 Action::VizCycleColormap => {
                     // If the settings tab triggered it, use its value; otherwise cycle.
@@ -444,9 +497,11 @@ impl App {
                 // Tab bar + content + footer
                 self.tab_view.draw(
                     frame,
-                    layout.tab_bar_area,
-                    layout.content_area,
-                    layout.footer_area,
+                    crate::tui::tabs::TabAreas {
+                        tab_bar: layout.tab_bar_area,
+                        content: layout.content_area,
+                        footer: layout.footer_area,
+                    },
                     &theme,
                     colormap,
                     &self.data_provider,
@@ -499,9 +554,19 @@ fn draw_quit_confirm(
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  [y/Enter]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  [y/Enter]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" Yes  ", Style::default().fg(theme.fg)),
-            Span::styled("[n/Esc]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[n/Esc]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" No", Style::default().fg(theme.fg)),
         ]),
     ];

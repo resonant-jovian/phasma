@@ -9,7 +9,7 @@ use ratatui::{
 pub struct SparklineRow {
     pub label: String,
     pub value: f64,
-    pub drift: f64,         // (current - initial) / |initial|
+    pub drift: f64, // (current - initial) / |initial|
     pub warn_threshold: f64,
     pub error_threshold: f64,
     pub unit: String,
@@ -61,33 +61,49 @@ impl<'a> SparklineTable<'a> {
     }
 
     pub fn draw(&self, frame: &mut Frame, area: Rect) {
-        let header = Row::new(vec!["Quantity", "Value", "Drift", ""])
-            .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan));
+        let header = Row::new(vec!["Quantity", "Value", "Drift", ""]).style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
+        );
 
-        let table_rows: Vec<Row> = self.rows.iter().map(|r| {
-            let (sym, sym_color) = r.status_symbol();
-            let drift_color = sym_color;
+        let table_rows: Vec<Row> = self
+            .rows
+            .iter()
+            .map(|r| {
+                let (sym, sym_color) = r.status_symbol();
+                let drift_color = sym_color;
 
-            let value_str = if r.value.abs() >= 1000.0 || (r.value.abs() < 0.001 && r.value != 0.0) {
-                format!("{:.3e}", r.value)
-            } else {
-                format!("{:.6}", r.value)
-            };
+                let value_str =
+                    if r.value.abs() >= 1000.0 || (r.value.abs() < 0.001 && r.value != 0.0) {
+                        format!("{:.3e}", r.value)
+                    } else {
+                        format!("{:.6}", r.value)
+                    };
 
-            let drift_str = if r.drift.abs() >= 1e-10 {
-                format!("{:+.2e}", r.drift)
-            } else {
-                "~0".to_string()
-            };
+                let drift_str = if r.drift.abs() >= 1e-10 {
+                    format!("{:+.2e}", r.drift)
+                } else {
+                    "~0".to_string()
+                };
 
-            Row::new(vec![
-                Cell::from(r.label.clone()).style(Style::default().fg(Color::White)),
-                Cell::from(format!("{value_str}{}", if r.unit.is_empty() { String::new() } else { format!(" {}", r.unit) }))
+                Row::new(vec![
+                    Cell::from(r.label.clone()).style(Style::default().fg(Color::White)),
+                    Cell::from(format!(
+                        "{value_str}{}",
+                        if r.unit.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {}", r.unit)
+                        }
+                    ))
                     .style(Style::default().fg(Color::Gray)),
-                Cell::from(drift_str).style(Style::default().fg(drift_color)),
-                Cell::from(sym).style(Style::default().fg(sym_color).add_modifier(Modifier::BOLD)),
-            ])
-        }).collect();
+                    Cell::from(drift_str).style(Style::default().fg(drift_color)),
+                    Cell::from(sym)
+                        .style(Style::default().fg(sym_color).add_modifier(Modifier::BOLD)),
+                ])
+            })
+            .collect();
 
         let table = Table::new(
             table_rows,

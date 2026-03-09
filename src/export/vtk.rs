@@ -5,10 +5,7 @@ use crate::sim::SimState;
 
 /// Export 3D density field to VTK structured-points legacy format.
 /// Readable by ParaView, VisIt, and other VTK-compatible tools.
-pub fn export_vtk(
-    dir: &Path,
-    state: Option<&SimState>,
-) -> Result<String, String> {
+pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String> {
     let Some(state) = state else {
         return Err("no simulation state to export".to_string());
     };
@@ -23,13 +20,41 @@ pub fn export_vtk(
 
     // Reconstruct full 3D density from the three 2D projections is not possible;
     // export the three projected 2D slices as separate VTK files.
-    export_vtk_2d(dir, "density_xy.vtk", &state.density_xy, nx, ny, "density_xy")?;
-    export_vtk_2d(dir, "density_xz.vtk", &state.density_xz, nx, nz, "density_xz")?;
-    export_vtk_2d(dir, "density_yz.vtk", &state.density_yz, ny, nz, "density_yz")?;
+    export_vtk_2d(
+        dir,
+        "density_xy.vtk",
+        &state.density_xy,
+        nx,
+        ny,
+        "density_xy",
+    )?;
+    export_vtk_2d(
+        dir,
+        "density_xz.vtk",
+        &state.density_xz,
+        nx,
+        nz,
+        "density_xz",
+    )?;
+    export_vtk_2d(
+        dir,
+        "density_yz.vtk",
+        &state.density_yz,
+        ny,
+        nz,
+        "density_yz",
+    )?;
 
     // Also export phase-space slice
     if !state.phase_slice.is_empty() {
-        export_vtk_2d(dir, "phase_xvx.vtk", &state.phase_slice, state.phase_nx, state.phase_nv, "phase_xvx")?;
+        export_vtk_2d(
+            dir,
+            "phase_xvx.vtk",
+            &state.phase_slice,
+            state.phase_nx,
+            state.phase_nv,
+            "phase_xvx",
+        )?;
     }
 
     Ok(dir.join("density_xy.vtk").display().to_string())

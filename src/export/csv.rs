@@ -18,9 +18,7 @@ pub fn export_csv(dir: &Path, diagnostics: &DiagnosticsStore) -> Result<String, 
     let entropy_data = diagnostics.entropy.iter_chart_data();
     let virial_data = diagnostics.virial_ratio.iter_chart_data();
 
-    for i in 0..energy_data.len() {
-        let t = energy_data[i].0;
-        let e = energy_data[i].1;
+    for (i, &(t, e)) in energy_data.iter().enumerate() {
         let k = kinetic_data.get(i).map(|x| x.1).unwrap_or(0.0);
         let w = potential_data.get(i).map(|x| x.1).unwrap_or(0.0);
         let m = mass_data.get(i).map(|x| x.1).unwrap_or(0.0);

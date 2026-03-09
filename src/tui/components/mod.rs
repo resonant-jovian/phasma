@@ -12,8 +12,7 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::tui::{action::Action, config::Config, Event};
-
+use crate::tui::{Event, action::Action, config::Config};
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.
 ///

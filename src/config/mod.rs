@@ -87,9 +87,15 @@ pub struct ModelConfig {
     pub custom_file: Option<CustomFileConfig>,
 }
 
-fn default_model_type() -> String { "plummer".to_string() }
-fn default_mass() -> f64 { 1.0 }
-fn default_scale_radius() -> f64 { 1.0 }
+fn default_model_type() -> String {
+    "plummer".to_string()
+}
+fn default_mass() -> f64 {
+    1.0
+}
+fn default_scale_radius() -> f64 {
+    1.0
+}
 
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -160,15 +166,20 @@ pub struct SolverConfig {
     pub advection: String,
     #[serde(default = "default_splitting")]
     pub integrator: String,
-    /// Alias for "integrator" (old field name)
-    #[serde(skip)]
-    pub splitting: String,
 }
 
-fn default_representation() -> String { "uniform".to_string() }
-fn default_poisson() -> String { "fft_periodic".to_string() }
-fn default_advection() -> String { "semi_lagrangian".to_string() }
-fn default_splitting() -> String { "strang".to_string() }
+fn default_representation() -> String {
+    "uniform".to_string()
+}
+fn default_poisson() -> String {
+    "fft_periodic".to_string()
+}
+fn default_advection() -> String {
+    "semi_lagrangian".to_string()
+}
+fn default_splitting() -> String {
+    "strang".to_string()
+}
 
 impl Default for SolverConfig {
     fn default() -> Self {
@@ -177,7 +188,6 @@ impl Default for SolverConfig {
             poisson: default_poisson(),
             advection: default_advection(),
             integrator: default_splitting(),
-            splitting: default_splitting(),
         }
     }
 }
@@ -201,12 +211,24 @@ pub struct TimeConfig {
     pub dt_max: f64,
 }
 
-fn default_t_final() -> f64 { 10.0 }
-fn default_dt_mode() -> String { "adaptive".to_string() }
-fn default_dt_fixed() -> f64 { 0.1 }
-fn default_cfl_factor() -> f64 { 0.5 }
-fn default_dt_min() -> f64 { 1e-6 }
-fn default_dt_max() -> f64 { 1.0 }
+fn default_t_final() -> f64 {
+    10.0
+}
+fn default_dt_mode() -> String {
+    "adaptive".to_string()
+}
+fn default_dt_fixed() -> f64 {
+    0.1
+}
+fn default_cfl_factor() -> f64 {
+    0.5
+}
+fn default_dt_min() -> f64 {
+    1e-6
+}
+fn default_dt_max() -> f64 {
+    1.0
+}
 
 impl Default for TimeConfig {
     fn default() -> Self {
@@ -239,12 +261,24 @@ pub struct OutputConfig {
     pub format: String,
 }
 
-fn default_output_dir() -> String { "output".to_string() }
-fn default_prefix() -> String { "run".to_string() }
-fn default_snapshot_interval() -> f64 { 1.0 }
-fn default_checkpoint_interval() -> f64 { 10.0 }
-fn default_diagnostics_interval() -> f64 { 0.1 }
-fn default_format() -> String { "binary".to_string() }
+fn default_output_dir() -> String {
+    "output".to_string()
+}
+fn default_prefix() -> String {
+    "run".to_string()
+}
+fn default_snapshot_interval() -> f64 {
+    1.0
+}
+fn default_checkpoint_interval() -> f64 {
+    10.0
+}
+fn default_diagnostics_interval() -> f64 {
+    0.1
+}
+fn default_format() -> String {
+    "binary".to_string()
+}
 
 impl Default for OutputConfig {
     fn default() -> Self {
@@ -285,12 +319,24 @@ pub struct ExitConfig {
     pub steady_state_tolerance: f64,
 }
 
-fn default_energy_drift_tol() -> f64 { 0.5 }
-fn default_mass_drift_tol() -> f64 { 0.1 }
-fn default_virial_tol() -> f64 { 0.05 }
-fn default_rank_sat_steps() -> u32 { 5 }
-fn default_true() -> bool { true }
-fn default_steady_state_tol() -> f64 { 1e-6 }
+fn default_energy_drift_tol() -> f64 {
+    0.5
+}
+fn default_mass_drift_tol() -> f64 {
+    0.1
+}
+fn default_virial_tol() -> f64 {
+    0.05
+}
+fn default_rank_sat_steps() -> u32 {
+    5
+}
+fn default_true() -> bool {
+    true
+}
+fn default_steady_state_tol() -> f64 {
+    1e-6
+}
 
 impl Default for ExitConfig {
     fn default() -> Self {
@@ -325,10 +371,18 @@ pub struct PerformanceConfig {
     pub allocator: String,
 }
 
-fn default_num_threads() -> u32 { 0 } // 0 = use all available
-fn default_memory_budget() -> f64 { 4.0 }
-fn default_rank_budget_warn() -> u32 { 64 }
-fn default_allocator() -> String { "system".to_string() }
+fn default_num_threads() -> u32 {
+    0
+} // 0 = use all available
+fn default_memory_budget() -> f64 {
+    4.0
+}
+fn default_rank_budget_warn() -> u32 {
+    64
+}
+fn default_allocator() -> String {
+    "system".to_string()
+}
 
 impl Default for PerformanceConfig {
     fn default() -> Self {
@@ -362,7 +416,9 @@ pub struct PlaybackConfig {
     pub end_time: Option<f64>,
 }
 
-fn default_fps() -> f64 { 10.0 }
+fn default_fps() -> f64 {
+    10.0
+}
 
 // ── Appearance ────────────────────────────────────────────────────────────────
 
@@ -388,13 +444,27 @@ pub struct AppearanceConfig {
     pub min_rows: u16,
 }
 
-fn default_theme() -> String { "dark".to_string() }
-fn default_colormap() -> String { "viridis".to_string() }
-fn default_border_style() -> String { "rounded".to_string() }
-fn default_aspect_mode() -> String { "letterbox".to_string() }
-fn default_cell_aspect() -> f64 { 0.5 }
-fn default_min_columns() -> u16 { 80 }
-fn default_min_rows() -> u16 { 24 }
+fn default_theme() -> String {
+    "dark".to_string()
+}
+fn default_colormap() -> String {
+    "viridis".to_string()
+}
+fn default_border_style() -> String {
+    "rounded".to_string()
+}
+fn default_aspect_mode() -> String {
+    "letterbox".to_string()
+}
+fn default_cell_aspect() -> f64 {
+    0.5
+}
+fn default_min_columns() -> u16 {
+    80
+}
+fn default_min_rows() -> u16 {
+    24
+}
 
 impl Default for AppearanceConfig {
     fn default() -> Self {
@@ -419,46 +489,4 @@ pub fn load(path: &str) -> anyhow::Result<PhasmaConfig> {
     let s = std::fs::read_to_string(path)?;
     let cfg: PhasmaConfig = toml::from_str(&s)?;
     Ok(cfg)
-}
-
-/// Save a PhasmaConfig to a TOML file.
-pub fn save(cfg: &PhasmaConfig, path: &str) -> anyhow::Result<()> {
-    let s = toml::to_string_pretty(cfg)?;
-    std::fs::write(path, s)?;
-    Ok(())
-}
-
-/// Extract a flat f64 parameter set from PhasmaConfig for use by sim.rs / runner.
-pub struct SimParams {
-    pub model_type: String,
-    pub total_mass: f64,
-    pub scale_radius: f64,
-    pub spatial_extent: f64,
-    pub velocity_extent: f64,
-    pub spatial_resolution: usize,
-    pub velocity_resolution: usize,
-    pub boundary: String,
-    pub t_final: f64,
-    pub cfl_factor: f64,
-    pub energy_tolerance: f64,
-    pub mass_threshold: f64,
-    pub output_directory: String,
-}
-
-pub fn sim_params_from_config(cfg: &PhasmaConfig) -> SimParams {
-    SimParams {
-        model_type: cfg.model.model_type.clone(),
-        total_mass: cfg.model.total_mass,
-        scale_radius: cfg.model.scale_radius,
-        spatial_extent: cfg.domain.spatial_extent,
-        velocity_extent: cfg.domain.velocity_extent,
-        spatial_resolution: cfg.domain.spatial_resolution as usize,
-        velocity_resolution: cfg.domain.velocity_resolution as usize,
-        boundary: cfg.domain.boundary.clone(),
-        t_final: cfg.time.t_final,
-        cfl_factor: cfg.time.cfl_factor,
-        energy_tolerance: cfg.exit.energy_drift_tolerance,
-        mass_threshold: cfg.exit.mass_drift_tolerance,
-        output_directory: cfg.output.directory.clone(),
-    }
 }

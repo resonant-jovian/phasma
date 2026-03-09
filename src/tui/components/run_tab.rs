@@ -17,6 +17,7 @@ use crate::{
 /// Maximum number of energy history points to keep (caps memory use).
 const MAX_HISTORY: usize = 500;
 
+#[derive(Default)]
 pub struct RunTab {
     sim_state: Option<SimState>,
     /// Accumulated (t, E/E₀) pairs for the energy chart.
@@ -24,18 +25,6 @@ pub struct RunTab {
     paused: bool,
     command_tx: Option<UnboundedSender<Action>>,
     config: Config,
-}
-
-impl Default for RunTab {
-    fn default() -> Self {
-        Self {
-            sim_state: None,
-            energy_history: Vec::new(),
-            paused: false,
-            command_tx: None,
-            config: Config::default(),
-        }
-    }
 }
 
 impl Component for RunTab {
@@ -81,7 +70,7 @@ impl Component for RunTab {
                     }
                     self.energy_history.push((state.t, e_ratio));
                 }
-                self.sim_state = Some(state);
+                self.sim_state = Some(*state);
             }
             Action::SimPause => self.paused = true,
             Action::SimResume => self.paused = false,
@@ -129,9 +118,19 @@ impl RunTab {
                     )),
                     Line::from(vec![
                         Span::styled("  → Go to Prep tab  ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("[F1]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "[F1]",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled("  and press  ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "[r]",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled("  to start", Style::default().fg(Color::DarkGray)),
                     ]),
                 ]);
@@ -174,11 +173,9 @@ impl RunTab {
     }
 
     fn draw_maps(&self, frame: &mut Frame, area: Rect) {
-        let [density_area, phase_area] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(area);
+        let [density_area, phase_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(area);
 
         match &self.sim_state {
             None => {
@@ -221,9 +218,10 @@ impl RunTab {
 
         // Energy chart
         if self.energy_history.is_empty() {
-            let placeholder = Paragraph::new("Energy history will appear here once the sim starts.")
-                .block(Block::bordered().title(" Energy E(t)/E₀ "))
-                .style(Style::default().fg(Color::DarkGray));
+            let placeholder =
+                Paragraph::new("Energy history will appear here once the sim starts.")
+                    .block(Block::bordered().title(" Energy E(t)/E₀ "))
+                    .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(placeholder, chart_area);
         } else {
             let t_min = self.energy_history.first().map(|(t, _)| *t).unwrap_or(0.0);
@@ -234,19 +232,24 @@ impl RunTab {
                 .unwrap_or(1.0)
                 .max(t_min + 0.001);
 
-            let (e_min, e_max) = self.energy_history.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, e)| {
-                (lo.min(*e), hi.max(*e))
-            });
+            let (e_min, e_max) = self
+                .energy_history
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, e)| {
+                    (lo.min(*e), hi.max(*e))
+                });
             let e_lo = (e_min - 0.001).min(0.99);
             let e_hi = (e_max + 0.001).max(1.01);
 
             let data: &[(f64, f64)] = &self.energy_history;
-            let datasets = vec![Dataset::default()
-                .name("E/E₀")
-                .marker(symbols::Marker::Dot)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(Color::Cyan))
-                .data(data)];
+            let datasets = vec![
+                Dataset::default()
+                    .name("E/E₀")
+                    .marker(symbols::Marker::Dot)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::Cyan))
+                    .data(data),
+            ];
 
             let chart = Chart::new(datasets)
                 .block(Block::bordered().title(" Energy E(t)/E₀ "))
@@ -278,13 +281,18 @@ impl RunTab {
         // Diagnostics sidebar
         let diag_text = match &self.sim_state {
             None => vec![
-                Line::from(Span::styled("Diagnostics", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Diagnostics",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
                 Line::from("—"),
             ],
             Some(state) => vec![
                 Line::from(Span::styled(
                     "Diagnostics",
-                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Cyan),
                 )),
                 Line::from(format!("M   = {:.6}", state.total_mass)),
                 Line::from(format!(

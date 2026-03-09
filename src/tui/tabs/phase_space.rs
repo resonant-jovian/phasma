@@ -12,11 +12,7 @@ use crate::{
     data::DataProvider,
     data::live::LiveDataProvider,
     themes::ThemeColors,
-    tui::{
-        action::Action,
-        aspect::AspectCorrection,
-        widgets::heatmap::HeatmapWidget,
-    },
+    tui::{action::Action, aspect::AspectCorrection, widgets::heatmap::HeatmapWidget},
 };
 
 pub struct PhaseSpaceTab {
@@ -24,14 +20,10 @@ pub struct PhaseSpaceTab {
     dim_x: usize,
     /// Which velocity dimension for y-axis (0=v₁, 1=v₂, 2=v₃)
     dim_v: usize,
-    /// Slice positions for fixed dimensions (dim_index, fractional_position 0..1)
-    fixed_positions: [f64; 6],
     log_scale: bool,
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
-    pan_x: f32,
-    pan_y: f32,
 }
 
 impl Default for PhaseSpaceTab {
@@ -39,13 +31,10 @@ impl Default for PhaseSpaceTab {
         Self {
             dim_x: 0,
             dim_v: 0,
-            fixed_positions: [0.5; 6], // centre of each dimension
             log_scale: false,
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
         }
     }
 }
@@ -58,8 +47,6 @@ impl PhaseSpaceTab {
             self.zoom = (self.zoom / 1.15).max(1.0);
             if self.zoom <= 1.01 {
                 self.zoom = 1.0;
-                self.pan_x = 0.0;
-                self.pan_y = 0.0;
             }
         }
     }
@@ -67,45 +54,67 @@ impl PhaseSpaceTab {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             // Select spatial dimension with 1-3
-            KeyCode::Char('1') => { self.dim_x = 0; None }
-            KeyCode::Char('2') => { self.dim_x = 1; None }
-            KeyCode::Char('3') => { self.dim_x = 2; None }
+            KeyCode::Char('1') => {
+                self.dim_x = 0;
+                None
+            }
+            KeyCode::Char('2') => {
+                self.dim_x = 1;
+                None
+            }
+            KeyCode::Char('3') => {
+                self.dim_x = 2;
+                None
+            }
             // Select velocity dimension with 4-6
-            KeyCode::Char('4') => { self.dim_v = 0; None }
-            KeyCode::Char('5') => { self.dim_v = 1; None }
-            KeyCode::Char('6') => { self.dim_v = 2; None }
-            // Adjust slice position for non-displayed dims
-            KeyCode::Char('{') => {
-                self.nudge_slice(-0.05);
+            KeyCode::Char('4') => {
+                self.dim_v = 0;
                 None
             }
-            KeyCode::Char('}') => {
-                self.nudge_slice(0.05);
+            KeyCode::Char('5') => {
+                self.dim_v = 1;
                 None
             }
-            KeyCode::Char('l') => { self.log_scale = !self.log_scale; None }
-            KeyCode::Char('c') => { self.colormap = self.colormap.next(); None }
-            KeyCode::Char('i') => { self.show_info = !self.show_info; None }
-            KeyCode::Char('+') => { self.zoom = (self.zoom * 1.25).min(8.0); None }
-            KeyCode::Char('-') => { self.zoom = (self.zoom / 1.25).max(0.25); None }
+            KeyCode::Char('6') => {
+                self.dim_v = 2;
+                None
+            }
+            KeyCode::Char('l') => {
+                self.log_scale = !self.log_scale;
+                None
+            }
+            KeyCode::Char('c') => {
+                self.colormap = self.colormap.next();
+                None
+            }
+            KeyCode::Char('i') => {
+                self.show_info = !self.show_info;
+                None
+            }
+            KeyCode::Char('+') => {
+                self.zoom = (self.zoom * 1.25).min(8.0);
+                None
+            }
+            KeyCode::Char('-') => {
+                self.zoom = (self.zoom / 1.25).max(0.25);
+                None
+            }
             KeyCode::Char('r') | KeyCode::Char('0') => {
                 self.zoom = 1.0;
-                self.pan_x = 0.0;
-                self.pan_y = 0.0;
                 None
             }
-            KeyCode::Left  => { self.pan_x -= 0.1 / self.zoom; None }
-            KeyCode::Right => { self.pan_x += 0.1 / self.zoom; None }
-            KeyCode::Up    => { self.pan_y -= 0.1 / self.zoom; None }
-            KeyCode::Down  => { self.pan_y += 0.1 / self.zoom; None }
             _ => None,
         }
     }
 
     pub fn update(&mut self, action: &Action) -> Option<Action> {
         match action {
-            Action::VizCycleColormap => { self.colormap = self.colormap.next(); }
-            Action::VizToggleLog => { self.log_scale = !self.log_scale; }
+            Action::VizCycleColormap => {
+                self.colormap = self.colormap.next();
+            }
+            Action::VizToggleLog => {
+                self.log_scale = !self.log_scale;
+            }
             _ => {}
         }
         None
@@ -121,12 +130,19 @@ impl PhaseSpaceTab {
     ) {
         let effective_cmap = colormap;
 
-        // Currently uses the default x₁-v₁ slice from SimState
         let Some((data, nx, nv)) = data_provider.phase_slice(self.dim_x, self.dim_v, &[]) else {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled("No phase-space data yet — start a simulation on ", Style::default().fg(theme.dim)),
-                    Span::styled("[F2]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "No phase-space data yet — start a simulation on ",
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        "[F2]",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ])),
                 area,
             );
@@ -148,7 +164,7 @@ impl PhaseSpaceTab {
             [area, Rect::new(area.x, area.y, 0, 0)]
         };
 
-        let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom, self.pan_x, self.pan_y);
+        let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
 
         let asp = AspectCorrection::default();
         frame.render_widget(
@@ -162,8 +178,13 @@ impl PhaseSpaceTab {
         );
 
         if self.show_info && info_area.width > 0 {
+            let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
+                format!("  SCRUB {}/{total}", idx + 1)
+            } else {
+                String::new()
+            };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [{{/}}] slice  [+/-] zoom  [arrows] pan  [r/0] reset  [l] log  [i] hide",
+                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(
@@ -172,34 +193,19 @@ impl PhaseSpaceTab {
             );
         }
     }
-
-    fn nudge_slice(&mut self, delta: f64) {
-        // Nudge the first fixed dimension (not dim_x or dim_v in spatial set)
-        for i in 0..6 {
-            if i == self.dim_x || i == (self.dim_v + 3) {
-                continue;
-            }
-            self.fixed_positions[i] = (self.fixed_positions[i] + delta).clamp(0.0, 1.0);
-            return;
-        }
-    }
 }
 
-fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32, pan_x: f32, pan_y: f32) -> (Vec<f64>, usize, usize) {
-    if zoom <= 1.0 && pan_x == 0.0 && pan_y == 0.0 {
+fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32) -> (Vec<f64>, usize, usize) {
+    if zoom <= 1.0 {
         return (data.to_vec(), nx, ny);
     }
-    let zoom = zoom.max(1.0);
-    let view_w = (nx as f32 / zoom).ceil() as usize;
-    let view_h = (ny as f32 / zoom).ceil() as usize;
-    let view_w = view_w.max(1).min(nx);
-    let view_h = view_h.max(1).min(ny);
+    let view_w = (nx as f32 / zoom).ceil().max(1.0) as usize;
+    let view_h = (ny as f32 / zoom).ceil().max(1.0) as usize;
+    let view_w = view_w.min(nx);
+    let view_h = view_h.min(ny);
 
-    let cx = (nx as f32 / 2.0 + pan_x * nx as f32).clamp(view_w as f32 / 2.0, nx as f32 - view_w as f32 / 2.0);
-    let cy = (ny as f32 / 2.0 + pan_y * ny as f32).clamp(view_h as f32 / 2.0, ny as f32 - view_h as f32 / 2.0);
-
-    let x0 = (cx - view_w as f32 / 2.0).max(0.0) as usize;
-    let y0 = (cy - view_h as f32 / 2.0).max(0.0) as usize;
+    let x0 = (nx - view_w) / 2;
+    let y0 = (ny - view_h) / 2;
 
     let mut out = Vec::with_capacity(view_w * view_h);
     for iy in y0..y0 + view_h {

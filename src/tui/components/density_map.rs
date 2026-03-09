@@ -21,7 +21,12 @@ pub struct DensityMap<'a> {
 
 impl<'a> DensityMap<'a> {
     pub fn new(data: &'a [f64], nx: usize, ny: usize, title: &'a str) -> Self {
-        Self { data, nx, ny, title }
+        Self {
+            data,
+            nx,
+            ny,
+            title,
+        }
     }
 }
 
@@ -34,7 +39,12 @@ impl Widget for DensityMap<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if inner.width == 0 || inner.height == 0 || self.data.is_empty() || self.nx == 0 || self.ny == 0 {
+        if inner.width == 0
+            || inner.height == 0
+            || self.data.is_empty()
+            || self.nx == 0
+            || self.ny == 0
+        {
             return;
         }
 
@@ -62,11 +72,12 @@ impl Widget for DensityMap<'_> {
 
                 let x = inner.x + col as u16;
                 let y = inner.y + row as u16;
-                if x < inner.x + inner.width && y < inner.y + inner.height {
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        cell.set_symbol(sym);
-                        cell.set_fg(color);
-                    }
+                if x < inner.x + inner.width
+                    && y < inner.y + inner.height
+                    && let Some(cell) = buf.cell_mut((x, y))
+                {
+                    cell.set_symbol(sym);
+                    cell.set_fg(color);
                 }
             }
         }

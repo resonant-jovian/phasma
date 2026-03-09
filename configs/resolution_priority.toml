@@ -1,0 +1,39 @@
+# Resolution Priority — 32^3 x 32^3 Plummer with Yoshida 4th-order
+# High accuracy run, requires ~32 GB RAM
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 32
+velocity_resolution = 32
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "yoshida"
+
+[time]
+t_final = 20.0
+dt_mode = "adaptive"
+cfl_factor = 0.4
+
+[output]
+directory = "output/resolution_priority"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 0.1
+mass_drift_tolerance = 0.05
+
+[performance]
+memory_budget_gb = 40.0

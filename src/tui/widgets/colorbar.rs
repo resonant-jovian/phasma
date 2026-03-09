@@ -1,10 +1,6 @@
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 
-use crate::colormaps::{lookup, Colormap};
+use crate::colormaps::{Colormap, lookup};
 
 /// Render a vertical colorbar into the given area.
 pub fn render_colorbar(

@@ -6,34 +6,25 @@ use ratatui::{
     widgets::{Block, Clear, List, ListItem},
 };
 
-use crate::{
-    export::ExportFormat,
-    themes::ThemeColors,
-    tui::action::Action,
-};
+use crate::{export::ExportFormat, themes::ThemeColors, tui::action::Action};
 
 const FORMATS: &[ExportFormat] = &[
     ExportFormat::Csv,
     ExportFormat::Json,
     ExportFormat::Npy,
     ExportFormat::Markdown,
-    ExportFormat::Zip,
     ExportFormat::Screenshot,
     ExportFormat::Parquet,
     ExportFormat::Vtk,
     ExportFormat::Animation,
+    ExportFormat::Zip,
 ];
 
+#[derive(Default)]
 pub struct ExportMenu {
     pub visible: bool,
     selected: usize,
     pub last_result: Option<Result<String, String>>,
-}
-
-impl Default for ExportMenu {
-    fn default() -> Self {
-        Self { visible: false, selected: 0, last_result: None }
-    }
 }
 
 impl ExportMenu {
@@ -80,7 +71,9 @@ impl ExportMenu {
     }
 
     pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        if !self.visible { return; }
+        if !self.visible {
+            return;
+        }
 
         let w = area.width.min(40);
         let h = area.height.min(14);
@@ -97,16 +90,22 @@ impl ExportMenu {
         let inner = block.inner(overlay);
         frame.render_widget(block, overlay);
 
-        let items: Vec<ListItem> = FORMATS.iter().enumerate().map(|(i, fmt)| {
-            let style = if i == self.selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg)
-            };
-            let marker = if i == self.selected { "► " } else { "  " };
-            let shortcut = i + 1;
-            ListItem::new(format!("{marker}[{shortcut}] {}", fmt.name())).style(style)
-        }).collect();
+        let items: Vec<ListItem> = FORMATS
+            .iter()
+            .enumerate()
+            .map(|(i, fmt)| {
+                let style = if i == self.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.fg)
+                };
+                let marker = if i == self.selected { "► " } else { "  " };
+                let shortcut = i + 1;
+                ListItem::new(format!("{marker}[{shortcut}] {}", fmt.name())).style(style)
+            })
+            .collect();
 
         let list = List::new(items);
         frame.render_widget(list, inner);

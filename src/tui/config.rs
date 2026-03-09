@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use directories::ProjectDirs;
 use lazy_static::lazy_static;
 use ratatui::style::{Color, Modifier, Style};
-use serde::{de::Deserializer, Deserialize};
+use serde::{Deserialize, de::Deserializer};
 use tracing::error;
 
 use crate::tui::{action::Action, app::Mode};
@@ -95,25 +95,23 @@ impl Config {
 }
 
 pub fn get_data_dir() -> PathBuf {
-    let directory = if let Some(s) = DATA_FOLDER.clone() {
+    if let Some(s) = DATA_FOLDER.clone() {
         s
     } else if let Some(proj_dirs) = project_directory() {
         proj_dirs.data_local_dir().to_path_buf()
     } else {
         PathBuf::from("../..").join(".data")
-    };
-    directory
+    }
 }
 
 pub fn get_config_dir() -> PathBuf {
-    let directory = if let Some(s) = CONFIG_FOLDER.clone() {
+    if let Some(s) = CONFIG_FOLDER.clone() {
         s
     } else if let Some(proj_dirs) = project_directory() {
         proj_dirs.config_local_dir().to_path_buf()
     } else {
         PathBuf::from("../..").join("../../.config")
-    };
-    directory
+    }
 }
 
 fn project_directory() -> Option<ProjectDirs> {
@@ -293,12 +291,11 @@ pub fn parse_key_sequence(raw: &str) -> color_eyre::Result<Vec<KeyEvent>, String
     if raw.chars().filter(|c| *c == '>').count() != raw.chars().filter(|c| *c == '<').count() {
         return Err(format!("Unable to parse `{}`", raw));
     }
-    let raw = if !raw.contains("><") {
-        let raw = raw.strip_prefix('<').unwrap_or(raw);
-        let raw = raw.strip_prefix('>').unwrap_or(raw);
+    let raw = if raw.contains("><") {
         raw
     } else {
-        raw
+        let raw = raw.strip_prefix('<').unwrap_or(raw);
+        raw.strip_prefix('>').unwrap_or(raw)
     };
     let sequences = raw
         .split("><")

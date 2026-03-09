@@ -27,8 +27,12 @@ pub enum Action {
     SimStop,
     SimRestart,
     #[strum(to_string = "SimUpdate")]
-    SimUpdate(SimState),
+    SimUpdate(Box<SimState>),
     StatusMsg(String),
+    // Scrubbing (time navigation)
+    ScrubBackward,
+    ScrubForward,
+    ScrubToLive,
     // Visualization
     VizCycleColormap,
     VizToggleLog,

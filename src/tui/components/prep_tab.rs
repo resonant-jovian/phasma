@@ -10,6 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::Component;
 use crate::tui::{action::Action, config::Config};
 
+#[derive(Default)]
 pub struct PrepTab {
     config_path: Option<String>,
     /// Whether the config has been loaded successfully.
@@ -24,21 +25,6 @@ pub struct PrepTab {
     available_configs: Vec<String>,
     /// Highlighted index in the browser list.
     browser_selected: usize,
-}
-
-impl Default for PrepTab {
-    fn default() -> Self {
-        Self {
-            config_path: None,
-            config_loaded: false,
-            config_lines: Vec::new(),
-            sim_running: false,
-            command_tx: None,
-            config: Config::default(),
-            available_configs: Vec::new(),
-            browser_selected: 0,
-        }
-    }
 }
 
 impl PrepTab {
@@ -106,8 +92,7 @@ impl PrepTab {
         entries.sort();
         self.available_configs = entries;
         if !self.available_configs.is_empty() {
-            self.browser_selected =
-                self.browser_selected.min(self.available_configs.len() - 1);
+            self.browser_selected = self.browser_selected.min(self.available_configs.len() - 1);
         } else {
             self.browser_selected = 0;
         }
@@ -136,10 +121,10 @@ impl Component for PrepTab {
     fn init(&mut self, _area: ratatui::layout::Size) -> color_eyre::Result<()> {
         self.refresh_config_list();
         // If a CLI config was provided, try to select it in the browser too
-        if let Some(ref path) = self.config_path.clone() {
-            if let Some(idx) = self.available_configs.iter().position(|p| p == path) {
-                self.browser_selected = idx;
-            }
+        if let Some(ref path) = self.config_path.clone()
+            && let Some(idx) = self.available_configs.iter().position(|p| p == path)
+        {
+            self.browser_selected = idx;
         }
         Ok(())
     }
@@ -185,7 +170,7 @@ impl Component for PrepTab {
             Action::SimStop => {
                 self.sim_running = false;
             }
-            Action::SimUpdate(ref state) => {
+            Action::SimUpdate(state) => {
                 if state.exit_reason.is_some() {
                     self.sim_running = false;
                 }
@@ -196,17 +181,11 @@ impl Component for PrepTab {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let [main_area, status_area] = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .areas(area);
+        let [main_area, status_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area);
 
-        let [browser_area, preview_area] = Layout::horizontal([
-            Constraint::Length(24),
-            Constraint::Min(0),
-        ])
-        .areas(main_area);
+        let [browser_area, preview_area] =
+            Layout::horizontal([Constraint::Length(24), Constraint::Min(0)]).areas(main_area);
 
         // --- Config browser (left panel) ---
         let browser_block = Block::bordered().title(" Configs ");
@@ -230,11 +209,15 @@ impl Component for PrepTab {
                         ListItem::new(Line::from(vec![
                             Span::styled(
                                 "► ",
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 label.to_string(),
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                         ]))
                     } else {
@@ -269,12 +252,17 @@ impl Component for PrepTab {
                 .map(|l| {
                     if l.starts_with('#') {
                         // Comment lines — show in dark gray, slightly indented
-                        Line::from(Span::styled(l.clone(), Style::default().fg(Color::DarkGray)))
+                        Line::from(Span::styled(
+                            l.clone(),
+                            Style::default().fg(Color::DarkGray),
+                        ))
                     } else if l.starts_with('[') {
                         // Section headers — cyan bold
                         Line::from(Span::styled(
                             l.clone(),
-                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
                         ))
                     } else if l.starts_with('✗') {
                         Line::from(Span::styled(l.clone(), Style::default().fg(Color::Red)))
@@ -292,9 +280,16 @@ impl Component for PrepTab {
             Line::from(vec![
                 Span::styled(
                     "● Running — ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("[F2]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[F2]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     " to watch live diagnostics",
                     Style::default().fg(Color::Green),
@@ -303,7 +298,12 @@ impl Component for PrepTab {
         } else if self.config_loaded {
             Line::from(vec![
                 Span::styled("Ready — press ", Style::default().fg(Color::Yellow)),
-                Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[r]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" to start", Style::default().fg(Color::Yellow)),
             ])
         } else {

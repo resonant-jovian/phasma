@@ -8,12 +8,7 @@ use ratatui::{
 use strum::{Display, EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{
-    Component,
-    exit_tab::ExitTab,
-    prep_tab::PrepTab,
-    run_tab::RunTab,
-};
+use super::{Component, exit_tab::ExitTab, prep_tab::PrepTab, run_tab::RunTab};
 use crate::tui::{action::Action, config::Config};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Display, EnumIter, EnumCount, FromRepr)]
@@ -179,16 +174,26 @@ impl Component for TabView {
 
 fn help_line(selected: Tab) -> Line<'static> {
     let key = |s: &'static str| {
-        Span::styled(s, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        Span::styled(
+            s,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
     };
     let desc = |s: &'static str| Span::styled(s, Style::default().fg(Color::DarkGray));
 
     let mut spans = vec![
-        key("[F1]"), desc(" Prep  "),
-        key("[F2]"), desc(" Run  "),
-        key("[F3]"), desc(" Exit  "),
-        key("[Tab]"), desc(" Next  "),
-        key("[q]"), desc(" Quit"),
+        key("[F1]"),
+        desc(" Prep  "),
+        key("[F2]"),
+        desc(" Run  "),
+        key("[F3]"),
+        desc(" Exit  "),
+        key("[Tab]"),
+        desc(" Next  "),
+        key("[q]"),
+        desc(" Quit"),
     ];
 
     match selected {

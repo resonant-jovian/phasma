@@ -24,6 +24,8 @@ pub struct StatusBar {
     max_density: f64,
     sim_start_time: Option<Instant>,
     rss_mb: f64,
+    /// Scrub position: None = live, Some((index, total))
+    scrub_position: Option<(usize, usize)>,
 }
 
 impl Default for StatusBar {
@@ -40,11 +42,16 @@ impl Default for StatusBar {
             max_density: 0.0,
             sim_start_time: None,
             rss_mb: 0.0,
+            scrub_position: None,
         }
     }
 }
 
 impl StatusBar {
+    pub fn set_scrub_position(&mut self, pos: Option<(usize, usize)>) {
+        self.scrub_position = pos;
+    }
+
     pub fn set_config_name(&mut self, name: impl Into<String>) {
         self.config_name = name.into();
     }
@@ -57,12 +64,17 @@ impl StatusBar {
         self.sim_start_time = Some(Instant::now());
     }
 
-    pub fn on_sim_pause(&mut self) { self.sim_paused = true; }
-    pub fn on_sim_resume(&mut self) { self.sim_paused = false; }
+    pub fn on_sim_pause(&mut self) {
+        self.sim_paused = true;
+    }
+    pub fn on_sim_resume(&mut self) {
+        self.sim_paused = false;
+    }
 
     pub fn on_sim_stop(&mut self) {
         self.sim_running = false;
         self.sim_done = true;
+        self.sim_start_time = None;
     }
 
     pub fn on_state_update(&mut self, s: &SimState) {
@@ -79,13 +91,14 @@ impl StatusBar {
         }
 
         // Update RSS every ~10 steps to avoid syscall overhead
-        if s.step % 10 == 0 {
+        if s.step.is_multiple_of(10) {
             self.rss_mb = read_rss_mb();
         }
 
         if s.exit_reason.is_some() {
             self.sim_running = false;
             self.sim_done = true;
+            self.sim_start_time = None;
         }
     }
 
@@ -93,17 +106,28 @@ impl StatusBar {
         if self.step_times.len() < 2 {
             return 0.0;
         }
-        let dt = self.step_times.back().unwrap().duration_since(*self.step_times.front().unwrap()).as_secs_f64();
-        if dt <= 0.0 { return 0.0; }
+        let dt = self
+            .step_times
+            .back()
+            .unwrap()
+            .duration_since(*self.step_times.front().unwrap())
+            .as_secs_f64();
+        if dt <= 0.0 {
+            return 0.0;
+        }
         (self.step_times.len() - 1) as f64 / dt
     }
 
     /// Estimate time remaining based on elapsed wall time and simulation progress.
     pub fn eta_seconds(&self) -> Option<f64> {
         let start = self.sim_start_time?;
-        if self.t_final <= 0.0 || self.last_t <= 0.0 { return None; }
+        if self.t_final <= 0.0 || self.last_t <= 0.0 {
+            return None;
+        }
         let progress = self.last_t / self.t_final;
-        if progress <= 0.01 || progress >= 1.0 { return None; }
+        if progress <= 0.01 || progress >= 1.0 {
+            return None;
+        }
         let elapsed = start.elapsed().as_secs_f64();
         Some(elapsed * (1.0 - progress) / progress)
     }
@@ -120,7 +144,10 @@ impl StatusBar {
         } else if self.sim_done {
             Span::styled(" ■ Done", Style::default().fg(theme.ok))
         } else {
-            Span::styled(" ▶ Running", Style::default().fg(theme.ok).add_modifier(Modifier::BOLD))
+            Span::styled(
+                " ▶ Running",
+                Style::default().fg(theme.ok).add_modifier(Modifier::BOLD),
+            )
         };
 
         let version = env!("CARGO_PKG_VERSION");
@@ -130,7 +157,9 @@ impl StatusBar {
         let mut spans = vec![
             Span::styled(
                 format!(" PHASMA v{version}"),
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
             ),
             sep.clone(),
             Span::styled(self.config_name.clone(), Style::default().fg(theme.fg)),
@@ -172,6 +201,16 @@ impl StatusBar {
             }
         }
 
+        if let Some((idx, total)) = self.scrub_position {
+            spans.push(sep.clone());
+            spans.push(Span::styled(
+                format!(" SCRUB {}/{total}  [Backspace] live", idx + 1),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
         if self.rss_mb > 0.0 {
             spans.push(Span::styled(" │ ", Style::default().fg(theme.dim)));
             spans.push(Span::styled(
@@ -180,8 +219,7 @@ impl StatusBar {
             ));
         }
 
-        let bar = Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(theme.highlight));
+        let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.highlight));
         frame.render_widget(bar, area);
     }
 }

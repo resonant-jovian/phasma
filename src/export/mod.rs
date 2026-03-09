@@ -41,20 +41,6 @@ impl ExportFormat {
             Self::Animation => "Animation frames",
         }
     }
-
-    pub fn extension(&self) -> &'static str {
-        match self {
-            Self::Csv => "csv",
-            Self::Json => "json",
-            Self::Npy => "npy",
-            Self::Markdown => "md",
-            Self::Zip => "zip",
-            Self::Screenshot => "txt",
-            Self::Parquet => "parquet",
-            Self::Vtk => "vtk",
-            Self::Animation => "npy",
-        }
-    }
 }
 
 /// Export diagnostics time series to the given directory.

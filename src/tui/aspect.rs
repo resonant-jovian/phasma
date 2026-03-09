@@ -17,7 +17,9 @@ pub struct AspectCorrection {
 
 impl Default for AspectCorrection {
     fn default() -> Self {
-        Self { cell_aspect_ratio: 0.5 }
+        Self {
+            cell_aspect_ratio: 0.5,
+        }
     }
 }
 
@@ -37,7 +39,11 @@ impl AspectCorrection {
         data_x_range: f64,
         data_y_range: f64,
     ) -> LetterboxRect {
-        if available.width == 0 || available.height == 0 || data_x_range == 0.0 || data_y_range == 0.0 {
+        if available.width == 0
+            || available.height == 0
+            || data_x_range == 0.0
+            || data_y_range == 0.0
+        {
             return LetterboxRect { rect: available };
         }
 

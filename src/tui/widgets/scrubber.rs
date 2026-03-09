@@ -16,7 +16,13 @@ pub struct Scrubber {
 
 impl Default for Scrubber {
     fn default() -> Self {
-        Self { t: 0.0, t_min: 0.0, t_max: 1.0, playing: false, speed: 1.0 }
+        Self {
+            t: 0.0,
+            t_min: 0.0,
+            t_max: 1.0,
+            playing: false,
+            speed: 1.0,
+        }
     }
 }
 

@@ -98,7 +98,8 @@ impl SettingsTab {
                         Some(Action::ThemeCycle) // we'll handle direction in app
                     }
                     SettingsSection::Colormap => {
-                        self.colormap_idx = (self.colormap_idx + COLORMAPS.len() - 1) % COLORMAPS.len();
+                        self.colormap_idx =
+                            (self.colormap_idx + COLORMAPS.len() - 1) % COLORMAPS.len();
                         Some(Action::VizCycleColormap)
                     }
                     SettingsSection::CellAspect => {
@@ -115,39 +116,36 @@ impl SettingsTab {
                     }
                 }
             }
-            KeyCode::Right | KeyCode::Char('l') => {
-                match section {
-                    SettingsSection::Theme => {
-                        self.theme_idx = (self.theme_idx + 1) % THEMES.len();
-                        Some(Action::ThemeCycle)
-                    }
-                    SettingsSection::Colormap => {
-                        self.colormap_idx = (self.colormap_idx + 1) % COLORMAPS.len();
-                        Some(Action::VizCycleColormap)
-                    }
-                    SettingsSection::CellAspect => {
-                        self.cell_aspect = (self.cell_aspect + 0.05).min(1.0);
-                        None
-                    }
-                    SettingsSection::MinTermCols => {
-                        self.min_cols = (self.min_cols + 10).min(300);
-                        None
-                    }
-                    SettingsSection::MinTermRows => {
-                        self.min_rows = (self.min_rows + 2).min(100);
-                        None
-                    }
+            KeyCode::Right | KeyCode::Char('l') => match section {
+                SettingsSection::Theme => {
+                    self.theme_idx = (self.theme_idx + 1) % THEMES.len();
+                    Some(Action::ThemeCycle)
                 }
-            }
+                SettingsSection::Colormap => {
+                    self.colormap_idx = (self.colormap_idx + 1) % COLORMAPS.len();
+                    Some(Action::VizCycleColormap)
+                }
+                SettingsSection::CellAspect => {
+                    self.cell_aspect = (self.cell_aspect + 0.05).min(1.0);
+                    None
+                }
+                SettingsSection::MinTermCols => {
+                    self.min_cols = (self.min_cols + 10).min(300);
+                    None
+                }
+                SettingsSection::MinTermRows => {
+                    self.min_rows = (self.min_rows + 2).min(100);
+                    None
+                }
+            },
             _ => None,
         }
     }
 
     pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let [settings_area, preview_area] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).areas(area);
+        let [settings_area, preview_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(area);
 
         self.draw_settings_list(frame, settings_area, theme);
         self.draw_preview(frame, preview_area, theme);
@@ -172,12 +170,16 @@ impl SettingsTab {
             let focused = i == self.focused;
             let marker = if focused { "►" } else { " " };
             let label_style = if focused {
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg)
             };
             let value_style = if focused {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg)
             };
@@ -204,12 +206,19 @@ impl SettingsTab {
                 }
             };
 
-            let bg = if focused { theme.highlight } else { Color::Reset };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{marker} "), label_style),
-                Span::styled(format!("{:<22}", label), label_style),
-                Span::styled(value, value_style),
-            ]).style(Style::default().bg(bg)));
+            let bg = if focused {
+                theme.highlight
+            } else {
+                Color::Reset
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::styled(format!("{marker} "), label_style),
+                    Span::styled(format!("{:<22}", label), label_style),
+                    Span::styled(value, value_style),
+                ])
+                .style(Style::default().bg(bg)),
+            );
         }
 
         lines.push(Line::from(""));
@@ -299,10 +308,7 @@ impl SettingsTab {
 
             lines.push(Line::from(vec![
                 Span::styled("  0.0", Style::default().fg(tc.dim)),
-                Span::styled(
-                    " ".repeat(bar_width.saturating_sub(7)),
-                    Style::default(),
-                ),
+                Span::styled(" ".repeat(bar_width.saturating_sub(7)), Style::default()),
                 Span::styled("1.0", Style::default().fg(tc.dim)),
             ]));
         }

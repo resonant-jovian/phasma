@@ -31,12 +31,24 @@ pub fn export_parquet(
 
     let time_arr: Vec<f64> = energy.iter().map(|(t, _)| *t).collect();
     let energy_arr: Vec<f64> = energy.iter().map(|(_, v)| *v).collect();
-    let kinetic_arr: Vec<f64> = (0..n).map(|i| kinetic.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
-    let potential_arr: Vec<f64> = (0..n).map(|i| potential.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
-    let mass_arr: Vec<f64> = (0..n).map(|i| mass.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
-    let c2_arr: Vec<f64> = (0..n).map(|i| c2.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
-    let entropy_arr: Vec<f64> = (0..n).map(|i| entropy.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
-    let virial_arr: Vec<f64> = (0..n).map(|i| virial.get(i).map(|x| x.1).unwrap_or(0.0)).collect();
+    let kinetic_arr: Vec<f64> = (0..n)
+        .map(|i| kinetic.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
+    let potential_arr: Vec<f64> = (0..n)
+        .map(|i| potential.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
+    let mass_arr: Vec<f64> = (0..n)
+        .map(|i| mass.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
+    let c2_arr: Vec<f64> = (0..n)
+        .map(|i| c2.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
+    let entropy_arr: Vec<f64> = (0..n)
+        .map(|i| entropy.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
+    let virial_arr: Vec<f64> = (0..n)
+        .map(|i| virial.get(i).map(|x| x.1).unwrap_or(0.0))
+        .collect();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("time", DataType::Float64, false),
@@ -61,13 +73,16 @@ pub fn export_parquet(
             Arc::new(Float64Array::from(entropy_arr)),
             Arc::new(Float64Array::from(virial_arr)),
         ],
-    ).map_err(|e| format!("record batch: {e}"))?;
+    )
+    .map_err(|e| format!("record batch: {e}"))?;
 
     let file = std::fs::File::create(&path).map_err(|e| format!("create file: {e}"))?;
-    let mut writer = ArrowWriter::try_new(file, schema, None)
-        .map_err(|e| format!("parquet writer: {e}"))?;
+    let mut writer =
+        ArrowWriter::try_new(file, schema, None).map_err(|e| format!("parquet writer: {e}"))?;
 
-    writer.write(&batch).map_err(|e| format!("write batch: {e}"))?;
+    writer
+        .write(&batch)
+        .map_err(|e| format!("write batch: {e}"))?;
     writer.close().map_err(|e| format!("close parquet: {e}"))?;
 
     Ok(path.display().to_string())

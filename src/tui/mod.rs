@@ -1,20 +1,19 @@
 #![allow(dead_code)] // Remove this once you start using the code
-pub mod app;
-pub mod cli;
-pub mod logging;
-pub mod errors;
-pub mod config;
-pub mod components;
 pub mod action;
+pub mod app;
+pub mod aspect;
+pub mod cli;
+pub mod components;
+pub mod config;
+pub mod errors;
+pub mod export_menu;
+pub mod guard;
+pub mod help;
+pub mod layout;
+pub mod logging;
+pub mod status_bar;
 pub mod tabs;
 pub mod widgets;
-pub mod layout;
-pub mod aspect;
-pub mod guard;
-pub mod status_bar;
-pub mod help;
-pub mod export_menu;
-
 
 use std::{
     io::{Stdout, stdout},

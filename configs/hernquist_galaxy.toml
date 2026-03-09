@@ -1,0 +1,36 @@
+# Hernquist Galaxy — analytic DF galaxy model
+# Tests equilibrium preservation with Yoshida integrator
+
+[model]
+type = "hernquist"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "yoshida"
+
+[time]
+t_final = 25.0
+dt_mode = "adaptive"
+cfl_factor = 0.4
+
+[output]
+directory = "output/hernquist_galaxy"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 0.5

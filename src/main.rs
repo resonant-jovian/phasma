@@ -22,6 +22,10 @@ async fn main() -> color_eyre::Result<()> {
     let args = Cli::parse();
 
     // Modes that don't launch the TUI
+    if args.generate_man {
+        Cli::print_man_page()?;
+        return Ok(());
+    }
     if args.batch {
         return run_batch(args.config).await;
     }
@@ -74,7 +78,7 @@ async fn main() -> color_eyre::Result<()> {
         return Ok(());
     }
 
-    let mut app = App::new(args.tick_rate, args.frame_rate, args.config, args.run)?;
+    let mut app = App::new(4.0, 60.0, args.config, args.run)?;
     app.run().await?;
     Ok(())
 }
@@ -92,8 +96,8 @@ async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
             state.energy_drift(),
             state.total_mass,
         );
-        if state.exit_reason.is_some() {
-            eprintln!("phasma batch: exit — {}", state.exit_reason.unwrap());
+        if let Some(reason) = state.exit_reason {
+            eprintln!("phasma batch: exit — {reason}");
             break;
         }
     }

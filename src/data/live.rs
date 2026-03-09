@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
-use crate::{config::PhasmaConfig, sim::SimState};
 use super::DataProvider;
+use crate::{config::PhasmaConfig, sim::SimState};
 
 // ── TimeSeriesStore ───────────────────────────────────────────────────────────
 
@@ -70,16 +70,16 @@ impl TimeSeriesStore {
 
 #[derive(Default)]
 pub struct DiagnosticsStore {
-    pub total_energy:     TimeSeriesStore,
-    pub kinetic_energy:   TimeSeriesStore,
+    pub total_energy: TimeSeriesStore,
+    pub kinetic_energy: TimeSeriesStore,
     pub potential_energy: TimeSeriesStore,
-    pub total_mass:       TimeSeriesStore,
-    pub momentum_x:       TimeSeriesStore,
-    pub momentum_y:       TimeSeriesStore,
-    pub momentum_z:       TimeSeriesStore,
-    pub casimir_c2:       TimeSeriesStore,
-    pub entropy:          TimeSeriesStore,
-    pub virial_ratio:     TimeSeriesStore,
+    pub total_mass: TimeSeriesStore,
+    pub momentum_x: TimeSeriesStore,
+    pub momentum_y: TimeSeriesStore,
+    pub momentum_z: TimeSeriesStore,
+    pub casimir_c2: TimeSeriesStore,
+    pub entropy: TimeSeriesStore,
+    pub virial_ratio: TimeSeriesStore,
 }
 
 impl DiagnosticsStore {
@@ -101,26 +101,48 @@ impl DiagnosticsStore {
         self.total_energy.is_empty()
     }
 
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
     pub fn energy_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(e0) = self.total_energy.first_value() else { return Vec::new() };
-        if e0 == 0.0 { return Vec::new(); }
-        self.total_energy.recent.iter()
+        let Some(e0) = self.total_energy.first_value() else {
+            return Vec::new();
+        };
+        if e0 == 0.0 {
+            return Vec::new();
+        }
+        self.total_energy
+            .recent
+            .iter()
             .map(|&(t, e)| (t, (e - e0) / e0.abs()))
             .collect()
     }
 
     pub fn mass_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(m0) = self.total_mass.first_value() else { return Vec::new() };
-        if m0 == 0.0 { return Vec::new(); }
-        self.total_mass.recent.iter()
+        let Some(m0) = self.total_mass.first_value() else {
+            return Vec::new();
+        };
+        if m0 == 0.0 {
+            return Vec::new();
+        }
+        self.total_mass
+            .recent
+            .iter()
             .map(|&(t, m)| (t, (m - m0) / m0.abs()))
             .collect()
     }
 
     pub fn c2_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(c0) = self.casimir_c2.first_value() else { return Vec::new() };
-        if c0 == 0.0 { return Vec::new(); }
-        self.casimir_c2.recent.iter()
+        let Some(c0) = self.casimir_c2.first_value() else {
+            return Vec::new();
+        };
+        if c0 == 0.0 {
+            return Vec::new();
+        }
+        self.casimir_c2
+            .recent
+            .iter()
             .map(|&(t, c)| (t, (c - c0) / c0.abs()))
             .collect()
     }
@@ -128,10 +150,18 @@ impl DiagnosticsStore {
 
 // ── LiveDataProvider ─────────────────────────────────────────────────────────
 
+const SNAPSHOT_HISTORY_CAP: usize = 100;
+
 pub struct LiveDataProvider {
     current: Option<SimState>,
     pub diagnostics: DiagnosticsStore,
     config: Option<PhasmaConfig>,
+    /// Ring buffer of recent SimState snapshots for scrubbing.
+    snapshot_history: VecDeque<SimState>,
+    /// Index into snapshot_history for scrubbing. None = live (latest).
+    scrub_index: Option<usize>,
+    /// Subsample counter to avoid storing every single step.
+    snap_subsample: usize,
 }
 
 impl Default for LiveDataProvider {
@@ -140,33 +170,110 @@ impl Default for LiveDataProvider {
             current: None,
             diagnostics: DiagnosticsStore::default(),
             config: None,
+            snapshot_history: VecDeque::with_capacity(SNAPSHOT_HISTORY_CAP),
+            scrub_index: None,
+            snap_subsample: 0,
         }
     }
 }
 
 impl LiveDataProvider {
-    pub fn new(config: Option<PhasmaConfig>) -> Self {
-        Self { current: None, diagnostics: DiagnosticsStore::default(), config }
+    pub fn set_config(&mut self, config: PhasmaConfig) {
+        self.config = Some(config);
+    }
+
+    /// Reset all data for a new simulation run (preserves config).
+    pub fn reset(&mut self) {
+        self.current = None;
+        self.diagnostics.clear();
+        self.snapshot_history.clear();
+        self.scrub_index = None;
+        self.snap_subsample = 0;
+        // config is preserved — it's set by ConfigLoaded action
     }
 
     /// Ingest a new SimState (called from App when SimUpdate arrives).
     pub fn update(&mut self, state: &SimState) {
         self.diagnostics.push_state(state);
+
+        // Store snapshots for scrubbing (every 5th step to limit memory)
+        self.snap_subsample += 1;
+        if self.snap_subsample >= 5 {
+            if self.snapshot_history.len() >= SNAPSHOT_HISTORY_CAP {
+                self.snapshot_history.pop_front();
+                // Adjust scrub index if it was pointing into the removed region
+                if let Some(ref mut idx) = self.scrub_index {
+                    if *idx > 0 {
+                        *idx -= 1;
+                    } else {
+                        self.scrub_index = None;
+                    }
+                }
+            }
+            self.snapshot_history.push_back(state.clone());
+            self.snap_subsample = 0;
+        }
+
         self.current = Some(state.clone());
+    }
+
+    /// Scrub backward one snapshot in history.
+    pub fn scrub_backward(&mut self) {
+        if self.snapshot_history.is_empty() {
+            return;
+        }
+        match self.scrub_index {
+            None => {
+                // Go from live to the last snapshot
+                self.scrub_index = Some(self.snapshot_history.len().saturating_sub(1));
+            }
+            Some(idx) => {
+                if idx > 0 {
+                    self.scrub_index = Some(idx - 1);
+                }
+            }
+        }
+    }
+
+    /// Scrub forward one snapshot toward live.
+    pub fn scrub_forward(&mut self) {
+        if let Some(idx) = self.scrub_index {
+            if idx + 1 >= self.snapshot_history.len() {
+                self.scrub_index = None; // back to live
+            } else {
+                self.scrub_index = Some(idx + 1);
+            }
+        }
+    }
+
+    /// Jump back to live (latest state).
+    pub fn scrub_to_live(&mut self) {
+        self.scrub_index = None;
+    }
+
+    /// Returns (current_index, total_snapshots) for scrub position display.
+    pub fn scrub_position(&self) -> Option<(usize, usize)> {
+        self.scrub_index
+            .map(|idx| (idx, self.snapshot_history.len()))
+    }
+
+    /// Get the effective state (scrubbed or live).
+    fn effective_state(&self) -> Option<&SimState> {
+        if let Some(idx) = self.scrub_index {
+            self.snapshot_history.get(idx)
+        } else {
+            self.current.as_ref()
+        }
     }
 }
 
 impl DataProvider for LiveDataProvider {
     fn current_state(&self) -> Option<&SimState> {
-        self.current.as_ref()
-    }
-
-    fn diagnostics(&self) -> &DiagnosticsStore {
-        &self.diagnostics
+        self.effective_state()
     }
 
     fn density_projection(&self, axis: usize) -> Option<(Vec<f64>, usize, usize)> {
-        let s = self.current.as_ref()?;
+        let s = self.effective_state()?;
         match axis {
             0 => Some((s.density_yz.clone(), s.density_ny, s.density_nz)),
             1 => Some((s.density_xz.clone(), s.density_nx, s.density_nz)),
@@ -176,23 +283,27 @@ impl DataProvider for LiveDataProvider {
 
     fn phase_slice(
         &self,
-        _dim_x: usize,
-        _dim_v: usize,
+        dim_x: usize,
+        dim_v: usize,
         _fixed: &[(usize, f64)],
     ) -> Option<(Vec<f64>, usize, usize)> {
-        let s = self.current.as_ref()?;
-        Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+        let s = self.effective_state()?;
+        let idx = dim_x.min(2) * 3 + dim_v.min(2);
+        if let Some(slice) = s.phase_slices.get(idx) {
+            if !slice.is_empty() {
+                // Infer nx/nv from the slice: phase_nx/phase_nv are for dim 0.
+                // All spatial dims have same resolution and all velocity dims have same resolution.
+                Some((slice.clone(), s.phase_nx, s.phase_nv))
+            } else {
+                // Fallback to legacy single slice
+                Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+            }
+        } else {
+            Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+        }
     }
 
     fn config(&self) -> Option<&PhasmaConfig> {
         self.config.as_ref()
-    }
-
-    fn is_live(&self) -> bool {
-        true
-    }
-
-    fn tick(&mut self) -> bool {
-        false // caller drains channel and calls update()
     }
 }

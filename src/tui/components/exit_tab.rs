@@ -15,24 +15,13 @@ use crate::{
     tui::{action::Action, config::Config},
 };
 
+#[derive(Default)]
 pub struct ExitTab {
     sim_state: Option<SimState>,
     start_time: Option<Instant>,
     end_time: Option<Instant>,
     command_tx: Option<UnboundedSender<Action>>,
     config: Config,
-}
-
-impl Default for ExitTab {
-    fn default() -> Self {
-        Self {
-            sim_state: None,
-            start_time: None,
-            end_time: None,
-            command_tx: None,
-            config: Config::default(),
-        }
-    }
 }
 
 impl Component for ExitTab {
@@ -56,7 +45,7 @@ impl Component for ExitTab {
                 if state.exit_reason.is_some() {
                     self.end_time = Some(Instant::now());
                 }
-                self.sim_state = Some(state);
+                self.sim_state = Some(*state);
             }
             Action::SimStop => {
                 self.end_time = Some(Instant::now());
@@ -68,11 +57,8 @@ impl Component for ExitTab {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         // outer Block is owned by TabView
-        let [status_area, table_area] = Layout::vertical([
-            Constraint::Length(5),
-            Constraint::Min(0),
-        ])
-        .areas(area);
+        let [status_area, table_area] =
+            Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).areas(area);
 
         // --- Status / exit reason ---
         let status_text = match &self.sim_state {
@@ -89,7 +75,9 @@ impl Component for ExitTab {
                     Span::styled("Exit: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::styled(
                         reason.to_string(),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]),
             },
@@ -110,23 +98,28 @@ impl Component for ExitTab {
 
         // --- Conservation table ---
         if let Some(state) = &self.sim_state {
-            let header = Row::new(vec!["Quantity", "Initial", "Final", "Error"])
-                .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan));
+            let header = Row::new(vec!["Quantity", "Initial", "Final", "Error"]).style(
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Cyan),
+            );
 
             let e_err = state.energy_drift();
             let m_err = (state.total_mass - 1.0).abs();
-            let p_mag = (state.momentum[0].powi(2)
-                + state.momentum[1].powi(2)
-                + state.momentum[2].powi(2))
-            .sqrt();
+            let p_mag =
+                (state.momentum[0].powi(2) + state.momentum[1].powi(2) + state.momentum[2].powi(2))
+                    .sqrt();
 
             let rows = vec![
                 Row::new(vec![
                     Cell::from("Energy E"),
                     Cell::from(format!("{:.6}", state.initial_energy)),
                     Cell::from(format!("{:.6}", state.total_energy)),
-                    Cell::from(format!("|ΔE/E| = {e_err:.2e}"))
-                        .style(drift_style(e_err.abs(), 1e-4, 1e-2)),
+                    Cell::from(format!("|ΔE/E| = {e_err:.2e}")).style(drift_style(
+                        e_err.abs(),
+                        1e-4,
+                        1e-2,
+                    )),
                 ]),
                 Row::new(vec![
                     Cell::from("Mass M"),
@@ -139,8 +132,7 @@ impl Component for ExitTab {
                     Cell::from("Momentum |P|"),
                     Cell::from("0.000000"),
                     Cell::from(format!("{p_mag:.2e}")),
-                    Cell::from(format!("|P| = {p_mag:.2e}"))
-                        .style(drift_style(p_mag, 1e-8, 1e-4)),
+                    Cell::from(format!("|P| = {p_mag:.2e}")).style(drift_style(p_mag, 1e-8, 1e-4)),
                 ]),
                 Row::new(vec![
                     Cell::from("Casimir C₂"),

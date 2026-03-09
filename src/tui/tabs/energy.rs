@@ -8,11 +8,9 @@ use ratatui::{
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
 };
 
-use crate::{
-    data::live::LiveDataProvider,
-    themes::ThemeColors,
-    tui::action::Action,
-};
+use crate::{data::live::LiveDataProvider, themes::ThemeColors, tui::action::Action};
+
+type SeriesData<'a> = (&'a str, Vec<(f64, f64)>, Color);
 
 /// Which traces are visible in the energy chart
 #[derive(Default)]
@@ -20,15 +18,12 @@ struct TraceVisibility {
     total_energy: bool,
     kinetic_energy: bool,
     potential_energy: bool,
-    virial_ratio: bool,
 }
 
 pub struct EnergyTab {
     traces: TraceVisibility,
-    show_drift: bool,     // show fractional drift or absolute values
+    show_drift: bool,      // show fractional drift or absolute values
     selected_panel: usize, // 0=energy, 1=mass, 2=casimir, 3=entropy
-    /// Time window: None = auto-fit (show all data), Some((start, end)) = fixed window
-    time_window: Option<(f64, f64)>,
 }
 
 impl Default for EnergyTab {
@@ -38,11 +33,9 @@ impl Default for EnergyTab {
                 total_energy: true,
                 kinetic_energy: true,
                 potential_energy: true,
-                virial_ratio: false,
             },
             show_drift: false,
             selected_panel: 0,
-            time_window: None,
         }
     }
 }
@@ -50,94 +43,44 @@ impl Default for EnergyTab {
 impl EnergyTab {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Char('t') => { self.traces.total_energy = !self.traces.total_energy; None }
-            KeyCode::Char('k') => { self.traces.kinetic_energy = !self.traces.kinetic_energy; None }
-            KeyCode::Char('w') => { self.traces.potential_energy = !self.traces.potential_energy; None }
-            KeyCode::Char('v') => { self.traces.virial_ratio = !self.traces.virial_ratio; None }
-            KeyCode::Char('d') => { self.show_drift = !self.show_drift; None }
-            KeyCode::Char('1') => { self.selected_panel = 0; None }
-            KeyCode::Char('2') => { self.selected_panel = 1; None }
-            KeyCode::Char('3') => { self.selected_panel = 2; None }
-            KeyCode::Char('4') => { self.selected_panel = 3; None }
-            // Time scroll: h = scroll left, l = scroll right
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.scroll_time(-0.1);
+            KeyCode::Char('t') => {
+                self.traces.total_energy = !self.traces.total_energy;
                 None
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.scroll_time(0.1);
+            KeyCode::Char('k') => {
+                self.traces.kinetic_energy = !self.traces.kinetic_energy;
                 None
             }
-            // Expand/contract time window
-            KeyCode::Char('H') => {
-                self.expand_time(1.5);
+            KeyCode::Char('w') => {
+                self.traces.potential_energy = !self.traces.potential_energy;
                 None
             }
-            KeyCode::Char('L') => {
-                self.expand_time(1.0 / 1.5);
+            KeyCode::Char('d') => {
+                self.show_drift = !self.show_drift;
                 None
             }
-            // Fit all data
-            KeyCode::Char('f') => {
-                self.time_window = None;
+            KeyCode::Char('1') => {
+                self.selected_panel = 0;
+                None
+            }
+            KeyCode::Char('2') => {
+                self.selected_panel = 1;
+                None
+            }
+            KeyCode::Char('3') => {
+                self.selected_panel = 2;
+                None
+            }
+            KeyCode::Char('4') => {
+                self.selected_panel = 3;
                 None
             }
             _ => None,
         }
     }
 
-    fn scroll_time(&mut self, frac: f64) {
-        // Auto-initialize time window if not set — can't scroll without bounds
-        if self.time_window.is_none() {
-            return; // Will be set on first data point
-        }
-        if let Some((start, end)) = &mut self.time_window {
-            let span = *end - *start;
-            let shift = span * frac;
-            *start += shift;
-            *end += shift;
-        }
-    }
-
-    fn expand_time(&mut self, factor: f64) {
-        if self.time_window.is_none() {
-            return;
-        }
-        if let Some((start, end)) = &mut self.time_window {
-            let mid = (*start + *end) / 2.0;
-            let half = (*end - *start) / 2.0 * factor;
-            *start = mid - half;
-            *end = mid + half;
-        }
-    }
-
-    pub fn update(&mut self, action: &Action) -> Option<Action> {
-        // Auto-initialize time_window from first data if user starts scrolling
-        if let Action::SimUpdate(state) = action {
-            if self.time_window.is_none() && state.t > 0.0 {
-                // Keep auto-fit until user scrolls
-            }
-        }
+    pub fn update(&mut self, _action: &Action) -> Option<Action> {
         None
-    }
-
-    /// Initialize time window from data bounds on first scroll
-    fn ensure_time_window(&mut self, data_start: f64, data_end: f64) {
-        if self.time_window.is_none() {
-            self.time_window = Some((data_start, data_end));
-        }
-    }
-
-    fn clip_data(&self, data: &[(f64, f64)]) -> Vec<(f64, f64)> {
-        match self.time_window {
-            None => data.to_vec(),
-            Some((start, end)) => {
-                data.iter()
-                    .filter(|(t, _)| *t >= start && *t <= end)
-                    .copied()
-                    .collect()
-            }
-        }
     }
 
     pub fn draw(
@@ -150,8 +93,16 @@ impl EnergyTab {
         if data_provider.diagnostics.is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled("No diagnostics data yet — start a simulation on ", Style::default().fg(theme.dim)),
-                    Span::styled("[F2]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "No diagnostics data yet — start a simulation on ",
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        "[F2]",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ])),
                 area,
             );
@@ -159,20 +110,15 @@ impl EnergyTab {
         }
 
         // 2×2 grid layout
-        let [top, bottom] = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).areas(area);
+        let [top, bottom] =
+            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [top_left, top_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).areas(top);
+        let [top_left, top_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
 
-        let [bottom_left, bottom_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).areas(bottom);
+        let [bottom_left, bottom_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(bottom);
 
         self.draw_energy_chart(frame, top_left, theme, data_provider);
         self.draw_mass_chart(frame, top_right, theme, data_provider);
@@ -190,13 +136,13 @@ impl EnergyTab {
         let diag = &data_provider.diagnostics;
 
         if self.show_drift {
-            let drift_data = self.clip_data(&diag.energy_drift_series());
+            let drift_data = diag.energy_drift_series();
             draw_single_series(frame, area, " ΔE/E₀ ", &drift_data, Color::Red, theme);
         } else {
             let mut datasets = Vec::new();
-            let e_data = self.clip_data(&diag.total_energy.iter_chart_data());
-            let k_data = self.clip_data(&diag.kinetic_energy.iter_chart_data());
-            let w_data = self.clip_data(&diag.potential_energy.iter_chart_data());
+            let e_data = diag.total_energy.iter_chart_data();
+            let k_data = diag.kinetic_energy.iter_chart_data();
+            let w_data = diag.potential_energy.iter_chart_data();
 
             if self.traces.total_energy && !e_data.is_empty() {
                 datasets.push(("E_tot", e_data, Color::Cyan));
@@ -219,7 +165,7 @@ impl EnergyTab {
         theme: &ThemeColors,
         data_provider: &LiveDataProvider,
     ) {
-        let drift = self.clip_data(&data_provider.diagnostics.mass_drift_series());
+        let drift = data_provider.diagnostics.mass_drift_series();
         draw_single_series(frame, area, " ΔM/M₀ ", &drift, Color::Yellow, theme);
     }
 
@@ -230,7 +176,7 @@ impl EnergyTab {
         theme: &ThemeColors,
         data_provider: &LiveDataProvider,
     ) {
-        let drift = self.clip_data(&data_provider.diagnostics.c2_drift_series());
+        let drift = data_provider.diagnostics.c2_drift_series();
         draw_single_series(frame, area, " ΔC₂/C₂₀ ", &drift, Color::LightBlue, theme);
     }
 
@@ -241,7 +187,7 @@ impl EnergyTab {
         theme: &ThemeColors,
         data_provider: &LiveDataProvider,
     ) {
-        let data = self.clip_data(&data_provider.diagnostics.entropy.iter_chart_data());
+        let data = data_provider.diagnostics.entropy.iter_chart_data();
         draw_single_series(frame, area, " S(t) ", &data, Color::LightGreen, theme);
     }
 }
@@ -256,7 +202,9 @@ fn draw_single_series(
 ) {
     if data.is_empty() {
         frame.render_widget(
-            Block::bordered().title(title).border_style(Style::default().fg(theme.border)),
+            Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(theme.border)),
             area,
         );
         return;
@@ -271,7 +219,11 @@ fn draw_single_series(
         .data(data);
 
     let chart = Chart::new(vec![ds])
-        .block(Block::bordered().title(title).border_style(Style::default().fg(theme.border)))
+        .block(
+            Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(theme.border)),
+        )
         .x_axis(
             Axis::default()
                 .bounds([x_min, x_max])
@@ -292,12 +244,14 @@ fn draw_multi_series(
     frame: &mut Frame,
     area: Rect,
     title: &str,
-    series: &[(&str, Vec<(f64, f64)>, Color)],
+    series: &[SeriesData<'_>],
     theme: &ThemeColors,
 ) {
     if series.is_empty() {
         frame.render_widget(
-            Block::bordered().title(title).border_style(Style::default().fg(theme.border)),
+            Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(theme.border)),
             area,
         );
         return;
@@ -316,17 +270,24 @@ fn draw_multi_series(
         y_max = y_max.max(d);
     }
 
-    let datasets: Vec<Dataset> = series.iter().map(|(name, data, color)| {
-        Dataset::default()
-            .name(*name)
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(*color))
-            .data(data)
-    }).collect();
+    let datasets: Vec<Dataset> = series
+        .iter()
+        .map(|(name, data, color)| {
+            Dataset::default()
+                .name(*name)
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(*color))
+                .data(data)
+        })
+        .collect();
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(title).border_style(Style::default().fg(theme.border)))
+        .block(
+            Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(theme.border)),
+        )
         .x_axis(
             Axis::default()
                 .bounds([x_min, x_max])
@@ -349,13 +310,25 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     let mut y_min = f64::INFINITY;
     let mut y_max = f64::NEG_INFINITY;
     for &(x, y) in data {
-        if x < x_min { x_min = x; }
-        if x > x_max { x_max = x; }
-        if y < y_min { y_min = y; }
-        if y > y_max { y_max = y; }
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
     }
-    if x_min >= x_max { x_max = x_min + 1.0; }
-    if y_min >= y_max { y_max = y_min + 1.0; }
+    if x_min >= x_max {
+        x_max = x_min + 1.0;
+    }
+    if y_min >= y_max {
+        y_max = y_min + 1.0;
+    }
     // Add 5% padding
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, y_min - ypad, y_max + ypad)

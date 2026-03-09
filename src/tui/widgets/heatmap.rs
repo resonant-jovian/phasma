@@ -5,7 +5,7 @@ use ratatui::{
 };
 
 use crate::{
-    colormaps::{lookup, Colormap},
+    colormaps::{Colormap, lookup},
     tui::aspect::AspectCorrection,
     tui::widgets::colorbar::render_colorbar,
 };
@@ -39,12 +39,30 @@ impl<'a> HeatmapWidget<'a> {
         }
     }
 
-    pub fn colormap(mut self, c: Colormap) -> Self { self.colormap = c; self }
-    pub fn log_scale(mut self, v: bool) -> Self { self.log_scale = v; self }
-    pub fn show_colorbar(mut self, v: bool) -> Self { self.show_colorbar = v; self }
-    pub fn aspect(mut self, a: AspectCorrection) -> Self { self.aspect = Some(a); self }
-    pub fn x_range(mut self, r: f64) -> Self { self.x_range = r; self }
-    pub fn y_range(mut self, r: f64) -> Self { self.y_range = r; self }
+    pub fn colormap(mut self, c: Colormap) -> Self {
+        self.colormap = c;
+        self
+    }
+    pub fn log_scale(mut self, v: bool) -> Self {
+        self.log_scale = v;
+        self
+    }
+    pub fn show_colorbar(mut self, v: bool) -> Self {
+        self.show_colorbar = v;
+        self
+    }
+    pub fn aspect(mut self, a: AspectCorrection) -> Self {
+        self.aspect = Some(a);
+        self
+    }
+    pub fn x_range(mut self, r: f64) -> Self {
+        self.x_range = r;
+        self
+    }
+    pub fn y_range(mut self, r: f64) -> Self {
+        self.y_range = r;
+        self
+    }
 }
 
 impl Widget for HeatmapWidget<'_> {
@@ -64,11 +82,8 @@ impl Widget for HeatmapWidget<'_> {
 
         // Split off colorbar column
         let (cb_area, draw_area) = if self.show_colorbar && inner.width > 8 {
-            let [hm, cb] = Layout::horizontal([
-                Constraint::Min(0),
-                Constraint::Length(4),
-            ])
-            .areas(inner);
+            let [hm, cb] =
+                Layout::horizontal([Constraint::Min(0), Constraint::Length(4)]).areas(inner);
             (Some(cb), hm)
         } else {
             (None, inner)
@@ -135,27 +150,45 @@ fn data_range(data: &[f64], log_scale: bool) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for &v in data {
-        if log_scale && v <= 0.0 { continue; }
-        if v < min { min = v; }
-        if v > max { max = v; }
+        if log_scale && v <= 0.0 {
+            continue;
+        }
+        if v < min {
+            min = v;
+        }
+        if v > max {
+            max = v;
+        }
     }
-    if min == f64::INFINITY { min = 0.0; }
-    if max == f64::NEG_INFINITY { max = 1.0; }
-    if min == max { max = min + 1.0; }
+    if min == f64::INFINITY {
+        min = 0.0;
+    }
+    if max == f64::NEG_INFINITY {
+        max = 1.0;
+    }
+    if min == max {
+        max = min + 1.0;
+    }
     (min, max)
 }
 
 fn normalize(v: f64, min: f64, max: f64, log_scale: bool) -> f64 {
     if log_scale {
-        if v <= 0.0 || min <= 0.0 { return 0.0; }
+        if v <= 0.0 || min <= 0.0 {
+            return 0.0;
+        }
         let lv = v.ln();
         let lmin = min.ln();
         let lmax = max.ln();
-        if lmax == lmin { return 0.0; }
+        if lmax == lmin {
+            return 0.0;
+        }
         ((lv - lmin) / (lmax - lmin)).clamp(0.0, 1.0)
     } else {
         let range = max - min;
-        if range == 0.0 { return 0.0; }
+        if range == 0.0 {
+            return 0.0;
+        }
         ((v - min) / range).clamp(0.0, 1.0)
     }
 }

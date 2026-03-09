@@ -27,7 +27,9 @@ fn session_path() -> Option<std::path::PathBuf> {
 }
 
 pub fn load() -> Session {
-    let Some(sp) = session_path() else { return Session::default() };
+    let Some(sp) = session_path() else {
+        return Session::default();
+    };
     std::fs::read_to_string(&sp)
         .ok()
         .and_then(|s| toml::from_str(&s).ok())

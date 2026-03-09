@@ -13,7 +13,10 @@ pub struct TerminalGuard {
 
 impl Default for TerminalGuard {
     fn default() -> Self {
-        Self { min_cols: 80, min_rows: 24 }
+        Self {
+            min_cols: 80,
+            min_rows: 24,
+        }
     }
 }
 
@@ -30,24 +33,19 @@ impl TerminalGuard {
         frame.render_widget(Clear, area);
         let msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    " Terminal too small ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                " Terminal too small ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
             Line::from(""),
             Line::from(Span::styled(
                 format!("  Minimum: {}×{}", self.min_cols, self.min_rows),
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                format!(
-                    "  Current: {}×{}",
-                    area.width, area.height
-                ),
+                format!("  Current: {}×{}", area.width, area.height),
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),

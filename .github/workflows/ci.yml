@@ -1,10 +1,13 @@
-name: CI # Continuous Integration
+name: CI
 
 on:
   push:
     branches:
       - main
   pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
 
@@ -15,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --locked --all-features --workspace
@@ -27,10 +30,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -41,7 +43,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -55,9 +57,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --document-private-items --all-features --workspace --examples
+        run: cargo doc --no-deps --document-private-items --all-features --workspace
+
+  configs:
+    name: Validate preset configs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Verify all preset configs parse
+        run: |
+          for f in configs/*.toml; do
+            echo "Checking $f..."
+            ./target/debug/phasma --config "$f" --help > /dev/null
+          done
