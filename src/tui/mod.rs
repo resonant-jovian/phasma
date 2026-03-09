@@ -6,6 +6,14 @@ pub mod errors;
 pub mod config;
 pub mod components;
 pub mod action;
+pub mod tabs;
+pub mod widgets;
+pub mod layout;
+pub mod aspect;
+pub mod guard;
+pub mod status_bar;
+pub mod help;
+pub mod export_menu;
 
 
 use std::{

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -10,15 +12,26 @@ pub struct SimState {
     pub step: u64,
     pub total_energy: f64,
     pub initial_energy: f64,
+    pub kinetic_energy: f64,
+    pub potential_energy: f64,
+    pub virial_ratio: f64,
     pub total_mass: f64,
     pub momentum: [f64; 3],
     pub casimir_c2: f64,
     pub entropy: f64,
-    /// Projected density ρ(x,y), flat row-major nx×ny grid.
+    pub max_density: f64,
+    pub step_wall_ms: f64,
+    pub has_new_data: bool,
+    /// Projected density ρ(x,y) — sum over z. Flat row-major nx×ny.
     pub density_xy: Vec<f64>,
+    /// Projected density ρ(x,z) — sum over y. Flat row-major nx×nz.
+    pub density_xz: Vec<f64>,
+    /// Projected density ρ(y,z) — sum over x. Flat row-major ny×nz.
+    pub density_yz: Vec<f64>,
     pub density_nx: usize,
     pub density_ny: usize,
-    /// Phase-space slice f(x,vx), flat row-major nx×nv grid.
+    pub density_nz: usize,
+    /// Phase-space slice f(x,vx) — sum over x2,x3,v2,v3. Flat row-major nx×nv.
     pub phase_slice: Vec<f64>,
     pub phase_nx: usize,
     pub phase_nv: usize,
@@ -146,20 +159,23 @@ fn run_caustic_sim(
             continue;
         }
 
+        let step_start = Instant::now();
         match sim.step() {
             Ok(None) => {
-                let state = extract_sim_state(&sim, initial_energy, t_final, None);
+                let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+                let state = extract_sim_state(&sim, initial_energy, t_final, None, wall_ms);
                 if state_tx.send(state).is_err() {
                     return;
                 }
             }
             Ok(Some(reason)) => {
+                let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
                 let exit = map_exit_reason(reason);
-                let _ = state_tx.send(extract_sim_state(&sim, initial_energy, t_final, Some(exit)));
+                let _ = state_tx.send(extract_sim_state(&sim, initial_energy, t_final, Some(exit), wall_ms));
                 return;
             }
-            Err(e) => {
-                eprintln!("caustic step error: {e}");
+            Err(_e) => {
+                let _ = state_tx.send(error_state(format!("step error: {_e}")));
                 return;
             }
         }
@@ -168,8 +184,8 @@ fn run_caustic_sim(
 
 fn build_caustic_sim(config_path: &str) -> anyhow::Result<caustic::Simulation> {
     use caustic::{
-        Domain, FftPoisson, PlummerIC, SemiLagrangian, SpatialBoundType, StrangSplitting,
-        VelocityBoundType, sample_on_grid,
+        Domain, FftPoisson, PlummerIC, SemiLagrangian, StrangSplitting,
+        sample_on_grid,
     };
 
     let p = crate::toml::sim_params(config_path)?;
@@ -198,9 +214,10 @@ fn build_caustic_sim(config_path: &str) -> anyhow::Result<caustic::Simulation> {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(p.cfl_factor))
+        .integrator(StrangSplitting::new(1.0)) // G = 1.0
         .initial_conditions(snap)
         .time_final(p.t_final)
+        .cfl_factor(p.cfl_factor)
         .exit_on_energy_drift(p.energy_tolerance)
         .build()
         .map_err(Into::into)
@@ -228,23 +245,32 @@ fn extract_sim_state(
     initial_energy: f64,
     t_final: f64,
     exit_reason: Option<ExitReason>,
+    wall_ms: f64,
 ) -> SimState {
     let diag = sim.diagnostics.history.last().copied().unwrap_or_else(zero_diag);
 
-    // Density projection ρ(x,y): sum DensityField over z-axis.
+    // Density projections over 3 axes
     let density = sim.repr.compute_density();
     let [nx1, nx2, nx3] = density.shape;
+
     let mut density_xy = vec![0.0f64; nx1 * nx2];
+    let mut density_xz = vec![0.0f64; nx1 * nx3];
+    let mut density_yz = vec![0.0f64; nx2 * nx3];
+    let mut max_density = 0.0f64;
+
     for ix1 in 0..nx1 {
         for ix2 in 0..nx2 {
             for ix3 in 0..nx3 {
-                density_xy[ix1 * nx2 + ix2] +=
-                    density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                density_xy[ix1 * nx2 + ix2] += v;
+                density_xz[ix1 * nx3 + ix3] += v;
+                density_yz[ix2 * nx3 + ix3] += v;
+                if v > max_density { max_density = v; }
             }
         }
     }
 
-    // Phase-space slice f(x,vx): sum 6D snapshot over x2,x3,v2,v3.
+    // Phase-space slice f(x,vx): project 6D snapshot over x2,x3,v2,v3.
     let snap = sim.repr.to_snapshot(sim.time);
     let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
     let mut phase_slice = vec![0.0f64; sx1 * sv1];
@@ -280,13 +306,22 @@ fn extract_sim_state(
         step: sim.step,
         total_energy: diag.total_energy,
         initial_energy,
+        kinetic_energy: diag.kinetic_energy,
+        potential_energy: diag.potential_energy,
+        virial_ratio: diag.virial_ratio,
         total_mass: diag.mass_in_box,
         momentum: diag.total_momentum,
         casimir_c2: diag.casimir_c2,
         entropy: diag.entropy,
+        max_density,
+        step_wall_ms: wall_ms,
+        has_new_data: true,
         density_xy,
+        density_xz,
+        density_yz,
         density_nx: nx1,
         density_ny: nx2,
+        density_nz: nx3,
         phase_slice,
         phase_nx: sx1,
         phase_nv: sv1,
@@ -326,20 +361,29 @@ fn zero_diag() -> caustic::GlobalDiagnostics {
 }
 
 fn error_state(msg: String) -> SimState {
-    eprintln!("caustic build error: {msg}");
+    // Error is reported via the channel, not stderr (would corrupt TUI).
     SimState {
         t: 0.0,
         t_final: 0.0,
         step: 0,
         total_energy: 0.0,
         initial_energy: 0.0,
+        kinetic_energy: 0.0,
+        potential_energy: 0.0,
+        virial_ratio: 0.0,
         total_mass: 0.0,
         momentum: [0.0; 3],
         casimir_c2: 0.0,
         entropy: 0.0,
+        max_density: 0.0,
+        step_wall_ms: 0.0,
+        has_new_data: false,
         density_xy: vec![],
+        density_xz: vec![],
+        density_yz: vec![],
         density_nx: 0,
         density_ny: 0,
+        density_nz: 0,
         phase_slice: vec![],
         phase_nx: 0,
         phase_nv: 0,

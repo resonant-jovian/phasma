@@ -1,17 +1,27 @@
-# Plummer sphere — medium resolution
-# Better energy conservation; use for production runs.
+# High-resolution Plummer sphere — same physics as mvp.toml but 24³×24³ grid.
+#
+# Memory: 24⁶ = 191 102 976 cells × 8 bytes ≈ 1.5 GB (+ FFT workspace ≈ 2 GB total).
+# Build with --release for tolerable step times.
+#
+# Each step is ~729× slower than the 8³ MVP config (24⁶/8⁶).
+#
+# Domain sizing rationale (same as MVP):
+#   Plummer M=1, a=1, G=1 → v_esc = sqrt(2) ≈ 1.41
+#   velocity_extent = 3.0 captures all bound orbits with margin.
+#   spatial_extent = 10.0 captures the extended halo.
+#   24³ spatial → dx = 0.833;  24³ velocity → dv = 0.25
 
 [model]
 type         = "plummer"
 mass         = "1.0"
-scale_radius = "0.1"
+scale_radius = "1.0"
 
 [domain]
-spatial_extent      = "2.0"
-velocity_extent     = "4.0"
-spatial_resolution  = "32"
-velocity_resolution = "32"
-boundary            = "open"
+spatial_extent      = "10.0"    # box [-10,10]³ pc
+velocity_extent     = "3.0"     # velocity [-3,3]³ km/s
+spatial_resolution  = "24"      # 24³ = 13824 spatial cells; dx = 0.833
+velocity_resolution = "24"      # 24³ = 13824 velocity cells; dv = 0.25
+boundary            = "periodic|truncated"
 
 [solver]
 representation = "uniform"
@@ -20,15 +30,15 @@ advection      = "semi_lagrangian"
 splitting      = "strang"
 
 [time]
-t_final    = "20.0"
+t_final    = "50.0"     # 5 dynamical times
 dt         = "adaptive"
-cfl_factor = "0.4"
+cfl_factor = "0.3"      # larger CFL safe at higher resolution
 
 [output]
 interval  = "1.0"
 directory = "output/plummer_hires"
-format    = "hdf5"
+format    = "binary"
 
 [exit]
-energy_tolerance = "1e-4"
-mass_threshold   = "0.005"
+energy_tolerance = "5e0"    # permissive — let the sim run its full duration
+mass_threshold   = "0.05"

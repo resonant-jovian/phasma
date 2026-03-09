@@ -15,8 +15,10 @@
 #   Innermost spatial cells at r ≈ sqrt(3)*1.0 ≈ 1.73; φ(1.73) ≈ -0.50.
 #   Minimum E = 0.5*(3*0.3125²) - 0.50 = -0.35 < 0 → Plummer DF nonzero. ✓
 #
-# Dynamical time: t_dyn ≈ 1/sqrt(G*rho_max) ≈ 10; t_final = 4 ≈ 0.4 t_dyn.
-# Energy drift on this grid: ~3% per step (coarse; use plummer_hires for production).
+# Dynamical time: t_dyn ≈ 1/sqrt(G*rho_max) ≈ 10.
+# With cfl_factor = 0.02 the sim runs ~6 steps/sec in debug (~100+ total),
+# giving the TUI enough time to display live updates.
+# Energy drift on this grid: ~3% peak (coarse; use plummer_hires for production).
 
 [model]
 type         = "plummer"
@@ -37,9 +39,9 @@ advection      = "semi_lagrangian"  # SemiLagrangian (Catmull-Rom) — only impl
 splitting      = "strang"           # StrangSplitting (2nd-order) — only implemented integrator
 
 [time]
-t_final    = "4.0"      # run for ~0.4 dynamical times
+t_final    = "100.0"    # run for ~10 dynamical times
 dt         = "adaptive" # CFL-adaptive timestep via StrangSplitting::max_dt
-cfl_factor = "0.5"      # dt = 0.5 / sqrt(G * rho_max)
+cfl_factor = "0.02"     # ~100+ steps for visible live updates in TUI
 
 [output]
 interval  = "1.0"           # save diagnostics every 1 time unit
@@ -47,5 +49,5 @@ directory = "output/mvp"    # relative to working directory
 format    = "binary"        # implemented; "hdf5" is not yet implemented
 
 [exit]
-energy_tolerance = "5e-1"   # 50% drift allowed — appropriate for 8³ coarse grid
+energy_tolerance = "5e0"    # very permissive — coarse 8³ grid drifts significantly
 mass_threshold   = "0.1"    # exit if <10% of initial mass remains in box

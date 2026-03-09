@@ -18,11 +18,26 @@ pub enum Action {
     TabNext,
     TabPrev,
     SelectTab(usize),
+    // Config
+    ConfigLoaded(String),
     // Simulation control
     SimStart,
     SimPause,
     SimResume,
     SimStop,
+    SimRestart,
     #[strum(to_string = "SimUpdate")]
     SimUpdate(SimState),
+    StatusMsg(String),
+    // Visualization
+    VizCycleColormap,
+    VizToggleLog,
+    VizCycleProjection,
+    // Export
+    ExportMenuOpen,
+    ExportMenuClose,
+    // Help
+    HelpToggle,
+    // Theme
+    ThemeCycle,
 }
