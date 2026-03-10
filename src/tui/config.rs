@@ -11,7 +11,16 @@ use tracing::error;
 
 use crate::tui::{action::Action, app::Mode};
 
-const CONFIG: &str = include_str!("../../../../../.config/config.json5");
+const CONFIG: &str = r#"{
+    "keybindings": {
+        "Home": {
+            "<q>": "Quit", // Quit the application
+            "<Ctrl-d>": "Quit", // Another way to quit
+            "<Ctrl-c>": "Quit", // Yet another way to quit
+            "<Ctrl-z>": "Suspend" // Suspend the application
+        },
+    }
+}"#;
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct AppConfig {
