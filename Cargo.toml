@@ -20,7 +20,7 @@ include = [
 ]
 
 [dependencies]
-caustic = { path = "../caustic" }
+caustic = "0.0.5"    # { path = "../caustic" }
 toml = "1.0.6"
 better-panic = "0.3.0"
 clap = { version = "4.5.60", features = [
