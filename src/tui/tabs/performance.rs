@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
@@ -173,7 +173,7 @@ impl PerformanceTab {
             Line::from(Span::styled(
                 " Performance",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -227,7 +227,7 @@ impl PerformanceTab {
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(theme.chart[4]))
             .data(&data);
 
         let chart = Chart::new(vec![ds])
@@ -271,7 +271,7 @@ impl PerformanceTab {
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::LightRed))
+            .style(Style::default().fg(theme.chart[3]))
             .data(&data);
 
         let chart = Chart::new(vec![ds])
@@ -315,7 +315,7 @@ impl PerformanceTab {
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Green))
+            .style(Style::default().fg(theme.chart[1]))
             .data(&data);
 
         let chart = Chart::new(vec![ds])

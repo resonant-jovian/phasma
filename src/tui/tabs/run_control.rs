@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Axis, Block, Chart, Dataset, Gauge, GraphType, Paragraph},
@@ -218,14 +218,14 @@ impl RunControlTab {
                             Span::styled(
                                 "[F1]",
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme.accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(" and press ", Style::default().fg(theme.dim)),
                             Span::styled(
                                 "[r]",
                                 Style::default()
-                                    .fg(Color::Yellow)
+                                    .fg(theme.accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(" to start", Style::default().fg(theme.dim)),
@@ -380,7 +380,7 @@ impl RunControlTab {
                     .name("E/E₀")
                     .marker(symbols::Marker::Dot)
                     .graph_type(GraphType::Line)
-                    .style(Style::default().fg(Color::Cyan))
+                    .style(Style::default().fg(theme.chart[0]))
                     .data(&self.energy_history),
             ])
             .block(Block::bordered().title(" E(t)/E₀ "))
@@ -502,7 +502,7 @@ impl RunControlTab {
                     SparklineRow::new("Entropy S", state.entropy, 0.0),
                 ];
 
-                SparklineTable::new(&rows, " Diagnostics ").draw(frame, right_area);
+                SparklineTable::new(&rows, " Diagnostics ").draw(frame, right_area, theme);
             }
         }
     }

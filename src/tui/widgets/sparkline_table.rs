@@ -1,9 +1,11 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::{Block, Cell, Row, Table},
 };
+
+use crate::themes::ThemeColors;
 
 #[derive(Debug, Clone)]
 pub struct SparklineRow {
@@ -38,14 +40,14 @@ impl SparklineRow {
         self
     }
 
-    fn status_symbol(&self) -> (&'static str, Color) {
+    fn status_symbol(&self, theme: &ThemeColors) -> (&'static str, ratatui::style::Color) {
         let d = self.drift.abs();
         if d >= self.error_threshold {
-            ("✗", Color::Red)
+            ("✗", theme.error)
         } else if d >= self.warn_threshold {
-            ("⚠", Color::Yellow)
+            ("⚠", theme.warn)
         } else {
-            ("✓", Color::Green)
+            ("✓", theme.ok)
         }
     }
 }
@@ -60,18 +62,18 @@ impl<'a> SparklineTable<'a> {
         Self { rows, title }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
         let header = Row::new(vec!["Quantity", "Value", "Drift", ""]).style(
             Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(Color::Cyan),
+                .fg(theme.accent),
         );
 
         let table_rows: Vec<Row> = self
             .rows
             .iter()
             .map(|r| {
-                let (sym, sym_color) = r.status_symbol();
+                let (sym, sym_color) = r.status_symbol(theme);
                 let drift_color = sym_color;
 
                 let value_str =
@@ -88,7 +90,7 @@ impl<'a> SparklineTable<'a> {
                 };
 
                 Row::new(vec![
-                    Cell::from(r.label.clone()).style(Style::default().fg(Color::White)),
+                    Cell::from(r.label.clone()).style(Style::default().fg(theme.fg)),
                     Cell::from(format!(
                         "{value_str}{}",
                         if r.unit.is_empty() {
@@ -97,7 +99,7 @@ impl<'a> SparklineTable<'a> {
                             format!(" {}", r.unit)
                         }
                     ))
-                    .style(Style::default().fg(Color::Gray)),
+                    .style(Style::default().fg(theme.dim)),
                     Cell::from(drift_str).style(Style::default().fg(drift_color)),
                     Cell::from(sym)
                         .style(Style::default().fg(sym_color).add_modifier(Modifier::BOLD)),

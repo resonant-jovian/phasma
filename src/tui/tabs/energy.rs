@@ -100,7 +100,7 @@ impl EnergyTab {
                     Span::styled(
                         "[F2]",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])),
@@ -137,7 +137,7 @@ impl EnergyTab {
 
         if self.show_drift {
             let drift_data = diag.energy_drift_series();
-            draw_single_series(frame, area, " ΔE/E₀ ", &drift_data, Color::Red, theme);
+            draw_single_series(frame, area, " ΔE/E₀ ", &drift_data, theme.chart[3], theme);
         } else {
             let mut datasets = Vec::new();
             let e_data = diag.total_energy.iter_chart_data();
@@ -145,13 +145,13 @@ impl EnergyTab {
             let w_data = diag.potential_energy.iter_chart_data();
 
             if self.traces.total_energy && !e_data.is_empty() {
-                datasets.push(("E_tot", e_data, Color::Cyan));
+                datasets.push(("E_tot", e_data, theme.chart[0]));
             }
             if self.traces.kinetic_energy && !k_data.is_empty() {
-                datasets.push(("T", k_data, Color::Green));
+                datasets.push(("T", k_data, theme.chart[1]));
             }
             if self.traces.potential_energy && !w_data.is_empty() {
-                datasets.push(("W", w_data, Color::Magenta));
+                datasets.push(("W", w_data, theme.chart[2]));
             }
 
             draw_multi_series(frame, area, " Energy ", &datasets, theme);
@@ -166,7 +166,7 @@ impl EnergyTab {
         data_provider: &LiveDataProvider,
     ) {
         let drift = data_provider.diagnostics.mass_drift_series();
-        draw_single_series(frame, area, " ΔM/M₀ ", &drift, Color::Yellow, theme);
+        draw_single_series(frame, area, " ΔM/M₀ ", &drift, theme.chart[4], theme);
     }
 
     fn draw_casimir_chart(
@@ -177,7 +177,7 @@ impl EnergyTab {
         data_provider: &LiveDataProvider,
     ) {
         let drift = data_provider.diagnostics.c2_drift_series();
-        draw_single_series(frame, area, " ΔC₂/C₂₀ ", &drift, Color::LightBlue, theme);
+        draw_single_series(frame, area, " ΔC₂/C₂₀ ", &drift, theme.chart[5], theme);
     }
 
     fn draw_entropy_chart(
@@ -188,7 +188,7 @@ impl EnergyTab {
         data_provider: &LiveDataProvider,
     ) {
         let data = data_provider.diagnostics.entropy.iter_chart_data();
-        draw_single_series(frame, area, " S(t) ", &data, Color::LightGreen, theme);
+        draw_single_series(frame, area, " S(t) ", &data, theme.chart[6], theme);
     }
 }
 

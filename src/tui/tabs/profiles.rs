@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
@@ -98,7 +98,7 @@ impl ProfilesTab {
                     Span::styled(
                         "[F2]",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])),
@@ -123,11 +123,11 @@ impl ProfilesTab {
 
         // Select the appropriate data
         let (title, color, profile_data) = match self.kind {
-            ProfileKind::Density => (" ρ(r) ", Color::Cyan, &density_profile),
-            ProfileKind::Mass => (" M(<r) ", Color::Green, &mass_profile),
-            ProfileKind::Potential => (" Φ(r) ", Color::Magenta, &potential_profile),
-            ProfileKind::Velocity => (" σ(r) ", Color::Yellow, &sigma_profile),
-            ProfileKind::Anisotropy => (" β(r) ", Color::LightRed, &density_profile), // placeholder
+            ProfileKind::Density => (" ρ(r) ", theme.chart[0], &density_profile),
+            ProfileKind::Mass => (" M(<r) ", theme.chart[1], &mass_profile),
+            ProfileKind::Potential => (" Φ(r) ", theme.chart[2], &potential_profile),
+            ProfileKind::Velocity => (" σ(r) ", theme.chart[4], &sigma_profile),
+            ProfileKind::Anisotropy => (" β(r) ", theme.chart[3], &density_profile), // placeholder
         };
 
         // For anisotropy, show β=0 (isotropic) placeholder
@@ -198,7 +198,7 @@ impl ProfilesTab {
                         .name("analytic")
                         .marker(symbols::Marker::Braille)
                         .graph_type(GraphType::Line)
-                        .style(Style::default().fg(Color::White))
+                        .style(Style::default().fg(theme.dim))
                         .data(&analytic_data),
                 );
             }
