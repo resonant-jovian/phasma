@@ -15,7 +15,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Tabs},
+    widgets::Block,
 };
 use strum::{Display, EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 use tokio::sync::mpsc::UnboundedSender;
@@ -93,10 +93,10 @@ impl TabView {
             density: DensityTab::default(),
             phase_space: PhaseSpaceTab::default(),
             energy: EnergyTab::default(),
-            rank: RankTab,
+            rank: RankTab::default(),
             profiles: ProfilesTab::default(),
             performance: PerformanceTab::default(),
-            poisson_detail: PoissonDetailTab,
+            poisson_detail: PoissonDetailTab::default(),
             settings: SettingsTab::default(),
             command_tx: None,
         }
@@ -141,6 +141,15 @@ impl TabView {
         }
     }
 
+    /// Handle mouse move events (data cursor on density/phase tabs)
+    pub fn handle_mouse_move(&mut self, col: u16, row: u16) {
+        match self.selected {
+            Tab::Density => self.density.handle_mouse_move(col, row),
+            Tab::PhaseSpace => self.phase_space.handle_mouse_move(col, row),
+            _ => {}
+        }
+    }
+
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         use crossterm::event::KeyCode;
         match key.code {
@@ -164,10 +173,10 @@ impl TabView {
             Tab::Density => self.density.handle_key_event(key),
             Tab::PhaseSpace => self.phase_space.handle_key_event(key),
             Tab::Energy => self.energy.handle_key_event(key),
-            Tab::Rank => None,
+            Tab::Rank => self.rank.handle_key_event(key),
             Tab::Profiles => self.profiles.handle_key_event(key),
             Tab::Performance => None,
-            Tab::PoissonDetail => None,
+            Tab::PoissonDetail => self.poisson_detail.handle_key_event(key),
             Tab::Settings => self.settings.handle_key_event(key),
         }
     }
@@ -208,6 +217,9 @@ impl TabView {
         if let Some(a) = self.energy.update(action) {
             result = result.or(Some(a));
         }
+        if let Some(a) = self.rank.update(action) {
+            result = result.or(Some(a));
+        }
         if let Some(a) = self.profiles.update(action) {
             result = result.or(Some(a));
         }
@@ -223,19 +235,38 @@ impl TabView {
         colormap: Colormap,
         data_provider: &dyn DataProvider,
     ) {
-        // Tab bar
-        let titles: Vec<String> = Tab::iter().map(|t| t.to_string()).collect();
-        let tabs = Tabs::new(titles)
-            .select(self.selected as usize)
-            .highlight_style(
+        // Tab bar — manual rendering for per-tab dimming
+        let repr_type = data_provider
+            .current_state()
+            .map(|s| s.repr_type.as_str())
+            .unwrap_or("");
+        let is_ht = repr_type == "ht";
+
+        let mut tab_spans: Vec<Span> = Vec::new();
+        for (i, tab) in Tab::iter().enumerate() {
+            if i > 0 {
+                tab_spans.push(Span::styled(" | ", Style::default().fg(theme.dim)));
+            }
+            let label = tab.to_string();
+            let is_selected = i == self.selected as usize;
+            let is_dimmed = matches!(tab, Tab::Rank) && !is_ht;
+
+            let style = if is_selected {
                 Style::default()
                     .fg(Color::White)
                     .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .divider("|")
-            .style(Style::default().fg(theme.dim));
-        frame.render_widget(tabs, areas.tab_bar);
+                    .add_modifier(Modifier::BOLD)
+            } else if is_dimmed {
+                Style::default().fg(theme.dim).add_modifier(Modifier::DIM)
+            } else {
+                Style::default().fg(theme.dim)
+            };
+            tab_spans.push(Span::styled(label, style));
+        }
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(Line::from(tab_spans)),
+            areas.tab_bar,
+        );
 
         // Bordered content block
         let tab_title = match self.selected {
@@ -268,10 +299,10 @@ impl TabView {
                 .phase_space
                 .draw(frame, inner, theme, colormap, data_provider),
             Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
-            Tab::Rank => self.rank.draw(frame, inner, theme),
+            Tab::Rank => self.rank.draw(frame, inner, theme, data_provider),
             Tab::Profiles => self.profiles.draw(frame, inner, theme, data_provider),
             Tab::Performance => self.performance.draw(frame, inner, theme, data_provider),
-            Tab::PoissonDetail => self.poisson_detail.draw(frame, inner, theme),
+            Tab::PoissonDetail => self.poisson_detail.draw(frame, inner, theme, data_provider),
             Tab::Settings => self.settings.draw(frame, inner, theme),
         }
 
@@ -345,6 +376,8 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" log  "),
                 key("[c]"),
                 desc(" cmap  "),
+                key("[n]"),
+                desc(" contour  "),
                 key("[i]"),
                 desc(" info"),
             ]);
@@ -372,7 +405,15 @@ fn help_line(selected: Tab) -> Line<'static> {
                 key("[d]"),
                 desc(" drift  "),
                 key("[1-4]"),
-                desc(" panel"),
+                desc(" panel  "),
+                key("[h/l]"),
+                desc(" scroll  "),
+                key("[H/L]"),
+                desc(" zoom  "),
+                key("[f]"),
+                desc(" fit  "),
+                key("[g]"),
+                desc(" grid"),
             ]);
         }
         Tab::Profiles => {
@@ -382,7 +423,9 @@ fn help_line(selected: Tab) -> Line<'static> {
                 key("[l]"),
                 desc(" log  "),
                 key("[a]"),
-                desc(" analytic"),
+                desc(" analytic  "),
+                key("[s]"),
+                desc(" stacked/single"),
             ]);
         }
         Tab::Settings => {

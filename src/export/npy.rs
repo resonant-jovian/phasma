@@ -2,12 +2,12 @@ use std::path::Path;
 
 use crate::sim::SimState;
 
-pub fn export_npy(dir: &Path, state: Option<&SimState>) -> Result<String, String> {
+pub fn export_npy(dir: &Path, state: Option<&SimState>, stem: &str) -> Result<String, String> {
     let Some(state) = state else {
         return Err("no simulation state to export".to_string());
     };
 
-    let path = dir.join("density_xy.npy");
+    let path = dir.join(format!("{stem}_density_xy.npy"));
     let nx = state.density_nx;
     let ny = state.density_ny;
 

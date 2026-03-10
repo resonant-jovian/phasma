@@ -133,5 +133,53 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
+    // Appearance checks
+    let valid_themes = ["dark", "light", "solarized", "gruvbox"];
+    if !valid_themes.contains(&cfg.appearance.theme.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "appearance.theme".into(),
+            message: format!(
+                "unknown theme '{}'; valid: {}",
+                cfg.appearance.theme,
+                valid_themes.join(", ")
+            ),
+        });
+    }
+
+    if cfg.appearance.cell_aspect_ratio <= 0.0 || cfg.appearance.cell_aspect_ratio > 2.0 {
+        warnings.push(ValidationWarning {
+            field: "appearance.cell_aspect_ratio".into(),
+            message: "should be in (0, 2]; typical values: 0.5 (default), 0.45-0.55".into(),
+        });
+    }
+
+    let valid_aspect_modes = ["letterbox", "stretch", "crop"];
+    if !valid_aspect_modes.contains(&cfg.appearance.aspect_ratio_mode.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "appearance.aspect_ratio_mode".into(),
+            message: format!(
+                "unknown mode '{}'; valid: {}",
+                cfg.appearance.aspect_ratio_mode,
+                valid_aspect_modes.join(", ")
+            ),
+        });
+    }
+
+    // Playback checks
+    if cfg.playback.fps <= 0.0 {
+        warnings.push(ValidationWarning {
+            field: "playback.fps".into(),
+            message: "must be > 0".into(),
+        });
+    }
+    if let (Some(start), Some(end)) = (cfg.playback.start_time, cfg.playback.end_time)
+        && start >= end
+    {
+        warnings.push(ValidationWarning {
+            field: "playback".into(),
+            message: format!("start_time ({start}) must be < end_time ({end})"),
+        });
+    }
+
     warnings
 }

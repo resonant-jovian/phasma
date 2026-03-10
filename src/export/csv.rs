@@ -3,8 +3,12 @@ use std::path::Path;
 
 use crate::data::live::DiagnosticsStore;
 
-pub fn export_csv(dir: &Path, diagnostics: &DiagnosticsStore) -> Result<String, String> {
-    let path = dir.join("diagnostics.csv");
+pub fn export_csv(
+    dir: &Path,
+    diagnostics: &DiagnosticsStore,
+    stem: &str,
+) -> Result<String, String> {
+    let path = dir.join(format!("{stem}.csv"));
     let mut f = std::fs::File::create(&path).map_err(|e| format!("create file: {e}"))?;
 
     writeln!(f, "time,total_energy,kinetic_energy,potential_energy,total_mass,casimir_c2,entropy,virial_ratio")

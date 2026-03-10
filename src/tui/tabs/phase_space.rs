@@ -11,7 +11,11 @@ use crate::{
     colormaps::Colormap,
     data::DataProvider,
     themes::ThemeColors,
-    tui::{action::Action, aspect::AspectCorrection, widgets::heatmap::HeatmapWidget},
+    tui::{
+        action::Action,
+        aspect::AspectCorrection,
+        widgets::{data_cursor::DataCursor, heatmap::HeatmapWidget},
+    },
 };
 
 pub struct PhaseSpaceTab {
@@ -23,6 +27,15 @@ pub struct PhaseSpaceTab {
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
+    /// Slice position offset in normalised coordinates (-1.0 to 1.0)
+    slice_offset: f64,
+    /// When true, use physical extents for aspect ratio; when false, fill available area
+    physical_aspect: bool,
+    data_cursor: DataCursor,
+    last_heatmap_area: Rect,
+    last_data: Vec<f64>,
+    last_nx: usize,
+    last_ny: usize,
 }
 
 impl Default for PhaseSpaceTab {
@@ -34,6 +47,13 @@ impl Default for PhaseSpaceTab {
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
+            slice_offset: 0.0,
+            physical_aspect: false,
+            data_cursor: Default::default(),
+            last_heatmap_area: Rect::default(),
+            last_data: Vec::new(),
+            last_nx: 0,
+            last_ny: 0,
         }
     }
 }
@@ -102,6 +122,18 @@ impl PhaseSpaceTab {
                 self.zoom = 1.0;
                 None
             }
+            KeyCode::Char('{') => {
+                self.slice_offset = (self.slice_offset - 0.1).max(-1.0);
+                None
+            }
+            KeyCode::Char('}') => {
+                self.slice_offset = (self.slice_offset + 0.1).min(1.0);
+                None
+            }
+            KeyCode::Char('p') => {
+                self.physical_aspect = !self.physical_aspect;
+                None
+            }
             _ => None,
         }
     }
@@ -150,11 +182,17 @@ impl PhaseSpaceTab {
 
         let dim_labels = ["x", "y", "z"];
         let vel_labels = ["vx", "vy", "vz"];
+        let slice_info = if self.slice_offset.abs() > 0.01 {
+            format!(" slice={:+.1}", self.slice_offset)
+        } else {
+            String::new()
+        };
         let title = format!(
-            " f({}, {}) {}",
+            " f({}, {}) {}{}",
             dim_labels[self.dim_x],
             vel_labels[self.dim_v],
             if self.log_scale { "[log]" } else { "" },
+            slice_info,
         );
 
         let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
@@ -165,16 +203,32 @@ impl PhaseSpaceTab {
 
         let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
 
-        let asp = AspectCorrection::default();
-        frame.render_widget(
-            HeatmapWidget::new(&view_data, vnx, vnv, &title)
-                .colormap(effective_cmap)
-                .log_scale(self.log_scale)
-                .aspect(asp)
-                .x_range(vnx as f64)
-                .y_range(vnv as f64),
-            heatmap_area,
-        );
+        // Use physical extents for aspect ratio when enabled
+        let state = data_provider.current_state();
+        let cfg = data_provider.config();
+        let cell_ar = cfg.map(|c| c.appearance.cell_aspect_ratio).unwrap_or(0.5);
+        let asp = AspectCorrection::new(cell_ar);
+
+        let mut widget = HeatmapWidget::new(&view_data, vnx, vnv, &title)
+            .colormap(effective_cmap)
+            .log_scale(self.log_scale)
+            .aspect(asp);
+
+        if self.physical_aspect {
+            let x_extent = state.map(|s| s.spatial_extent * 2.0).unwrap_or(vnx as f64);
+            let v_extent = cfg
+                .map(|c| c.domain.velocity_extent * 2.0)
+                .unwrap_or(vnv as f64);
+            widget = widget.x_range(x_extent).y_range(v_extent);
+        }
+
+        frame.render_widget(widget, heatmap_area);
+
+        // Cache data for mouse cursor lookups
+        self.last_heatmap_area = heatmap_area;
+        self.last_data = view_data;
+        self.last_nx = vnx;
+        self.last_ny = vnv;
 
         if self.show_info && info_area.width > 0 {
             let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
@@ -183,13 +237,47 @@ impl PhaseSpaceTab {
                 String::new()
             };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [i] hide{scrub_hint}",
+                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [{{/}}] slice  [p] aspect  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(
                 Paragraph::new(hint).style(Style::default().fg(theme.dim)),
                 info_area,
             );
+        }
+
+        // Data cursor tooltip (always drawn last, on top)
+        self.data_cursor.draw(frame);
+    }
+
+    pub fn handle_mouse_move(&mut self, col: u16, row: u16) {
+        let area = self.last_heatmap_area;
+        if area.width == 0 || area.height == 0 || self.last_data.is_empty() {
+            self.data_cursor.hide();
+            return;
+        }
+        // Check if mouse is within the heatmap area (with 1-cell border for block)
+        let inner_x = area.x + 1;
+        let inner_y = area.y + 1;
+        let inner_w = area.width.saturating_sub(2);
+        let inner_h = area.height.saturating_sub(2);
+        if col < inner_x || col >= inner_x + inner_w || row < inner_y || row >= inner_y + inner_h {
+            self.data_cursor.hide();
+            return;
+        }
+        let frac_x = (col - inner_x) as f64 / inner_w as f64;
+        let frac_y = (row - inner_y) as f64 / inner_h as f64;
+        let ix = ((frac_x * self.last_nx as f64) as usize).min(self.last_nx.saturating_sub(1));
+        let iy = ((frac_y * self.last_ny as f64) as usize).min(self.last_ny.saturating_sub(1));
+        let flat = iy * self.last_nx + ix;
+        if let Some(&val) = self.last_data.get(flat) {
+            self.data_cursor.show(
+                col,
+                row.saturating_sub(3),
+                format!("[{ix},{iy}] = {val:.4e}"),
+            );
+        } else {
+            self.data_cursor.hide();
         }
     }
 }

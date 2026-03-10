@@ -23,6 +23,10 @@ pub struct StatusBar {
     last_step: u64,
     max_density: f64,
     sim_start_time: Option<Instant>,
+    /// Accumulated wall-clock seconds spent paused (excluded from ETA calculation).
+    paused_duration: f64,
+    /// When the current pause began (None if not paused).
+    pause_start: Option<Instant>,
     rss_mb: f64,
     /// Scrub position: None = live, Some((index, total))
     scrub_position: Option<(usize, usize)>,
@@ -41,6 +45,8 @@ impl Default for StatusBar {
             last_step: 0,
             max_density: 0.0,
             sim_start_time: None,
+            paused_duration: 0.0,
+            pause_start: None,
             rss_mb: 0.0,
             scrub_position: None,
         }
@@ -62,13 +68,19 @@ impl StatusBar {
         self.sim_done = false;
         self.step_times.clear();
         self.sim_start_time = Some(Instant::now());
+        self.paused_duration = 0.0;
+        self.pause_start = None;
     }
 
     pub fn on_sim_pause(&mut self) {
         self.sim_paused = true;
+        self.pause_start = Some(Instant::now());
     }
     pub fn on_sim_resume(&mut self) {
         self.sim_paused = false;
+        if let Some(ps) = self.pause_start.take() {
+            self.paused_duration += ps.elapsed().as_secs_f64();
+        }
     }
 
     pub fn on_sim_stop(&mut self) {
@@ -119,6 +131,7 @@ impl StatusBar {
     }
 
     /// Estimate time remaining based on elapsed wall time and simulation progress.
+    /// Excludes time spent paused so the ETA doesn't inflate while idle.
     pub fn eta_seconds(&self) -> Option<f64> {
         let start = self.sim_start_time?;
         if self.t_final <= 0.0 || self.last_t <= 0.0 {
@@ -128,8 +141,17 @@ impl StatusBar {
         if progress <= 0.01 || progress >= 1.0 {
             return None;
         }
-        let elapsed = start.elapsed().as_secs_f64();
-        Some(elapsed * (1.0 - progress) / progress)
+        let total_elapsed = start.elapsed().as_secs_f64();
+        // Subtract accumulated pause time + current ongoing pause
+        let current_pause = self
+            .pause_start
+            .map(|ps| ps.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+        let active_elapsed = total_elapsed - self.paused_duration - current_pause;
+        if active_elapsed <= 0.0 {
+            return None;
+        }
+        Some(active_elapsed * (1.0 - progress) / progress)
     }
 
     pub fn is_sim_active(&self) -> bool {

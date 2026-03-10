@@ -45,6 +45,25 @@ pub struct SimState {
     /// Current adaptive timestep.
     pub dt: f64,
     pub exit_reason: Option<ExitReason>,
+    // ── HT rank diagnostics (None when representation != "ht") ──
+    #[serde(default)]
+    pub rank_per_node: Option<Vec<usize>>,
+    #[serde(default)]
+    pub rank_total: Option<usize>,
+    #[serde(default)]
+    pub rank_memory_bytes: Option<usize>,
+    #[serde(default)]
+    pub compression_ratio: Option<f64>,
+    // ── Solver type metadata ──
+    #[serde(default)]
+    pub repr_type: String,
+    #[serde(default)]
+    pub poisson_type: String,
+    // ── Poisson diagnostics ──
+    #[serde(default)]
+    pub poisson_residual_l2: Option<f64>,
+    #[serde(default)]
+    pub potential_power_spectrum: Option<Vec<(f64, f64)>>,
 }
 
 impl SimState {
@@ -168,6 +187,10 @@ fn run_caustic_sim(
         sim.domain.spatial.x1.to_f64().unwrap_or(10.0)
     };
     let grav_const = sim.g;
+    // Detect Poisson solver type from config for diagnostics display
+    let poisson_type = crate::config::load(&config_path)
+        .map(|c| c.solver.poisson.clone())
+        .unwrap_or_else(|_| "fft_periodic".to_string());
     let mut paused = false;
 
     loop {
@@ -195,6 +218,7 @@ fn run_caustic_sim(
                     wall_ms,
                     spatial_extent,
                     grav_const,
+                    &poisson_type,
                 );
                 if state_tx.send(state).is_err() {
                     return;
@@ -211,6 +235,7 @@ fn run_caustic_sim(
                     wall_ms,
                     spatial_extent,
                     grav_const,
+                    &poisson_type,
                 ));
                 return;
             }
@@ -452,6 +477,7 @@ fn parse_boundary(s: &str) -> (caustic::SpatialBoundType, caustic::VelocityBound
     (spatial, velocity)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_sim_state(
     sim: &caustic::Simulation,
     initial_energy: f64,
@@ -460,6 +486,7 @@ fn extract_sim_state(
     wall_ms: f64,
     spatial_extent: f64,
     grav_const: f64,
+    poisson_type: &str,
 ) -> SimState {
     let diag = sim
         .diagnostics
@@ -491,12 +518,55 @@ fn extract_sim_state(
         }
     }
 
+    // Poisson diagnostics: residual and power spectrum
+    let potential = sim.poisson.solve(&density, sim.g);
+    let dx = sim.domain.dx();
+    let residual = compute_poisson_residual_l2(
+        &density.data,
+        &potential.data,
+        density.shape,
+        sim.g,
+        [dx[0], dx[1], dx[2]],
+    );
+    let spectrum = if density.shape.iter().all(|&n| n <= 32) {
+        Some(compute_potential_power_spectrum(
+            &potential.data,
+            potential.shape,
+            [dx[0], dx[1], dx[2]],
+        ))
+    } else {
+        None
+    };
+
     // Phase-space projections f(x_i, v_j) for all 9 (dim_x, dim_v) combinations.
     let snap = sim.repr.to_snapshot(sim.time);
     let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
     let s = [sx1, sx2, sx3, sv1, sv2, sv3];
     let phase_slices = compute_all_phase_slices(&snap.data, s);
     let phase_slice = phase_slices[0].clone(); // x1-v1 for backward compat
+
+    // HT rank diagnostics (attempt downcast)
+    let (rank_per_node, rank_total, rank_memory_bytes, compression_ratio, repr_type) =
+        if let Some(ht) = sim.repr.as_any().downcast_ref::<caustic::HtTensor>() {
+            let per_node: Vec<usize> = (0..11).map(|i| ht.rank_at(i)).collect();
+            let total = ht.total_rank();
+            let mem = ht.memory_bytes();
+            let full_size: usize = ht.shape.iter().product::<usize>() * 8;
+            let cr = if mem > 0 {
+                full_size as f64 / mem as f64
+            } else {
+                0.0
+            };
+            (
+                Some(per_node),
+                Some(total),
+                Some(mem),
+                Some(cr),
+                "ht".to_string(),
+            )
+        } else {
+            (None, None, None, None, "uniform".to_string())
+        };
 
     SimState {
         t: sim.time,
@@ -528,6 +598,14 @@ fn extract_sim_state(
         gravitational_constant: grav_const,
         dt: 0.0, // computed by consumer from time differences
         exit_reason,
+        rank_per_node,
+        rank_total,
+        rank_memory_bytes,
+        compression_ratio,
+        repr_type,
+        poisson_type: poisson_type.to_string(),
+        poisson_residual_l2: Some(residual),
+        potential_power_spectrum: spectrum,
     }
 }
 
@@ -635,5 +713,196 @@ fn error_state(_msg: String) -> SimState {
         gravitational_constant: 0.0,
         dt: 0.0,
         exit_reason: Some(ExitReason::UserStop),
+        rank_per_node: None,
+        rank_total: None,
+        rank_memory_bytes: None,
+        compression_ratio: None,
+        repr_type: String::new(),
+        poisson_type: String::new(),
+        poisson_residual_l2: None,
+        potential_power_spectrum: None,
     }
+}
+
+/// Compute L2 norm of the Poisson residual: ||nabla^2 Phi - 4piG rho||_2.
+/// Uses a 7-point finite-difference stencil on interior cells.
+fn compute_poisson_residual_l2(
+    density: &[f64],
+    potential: &[f64],
+    shape: [usize; 3],
+    g: f64,
+    dx: [f64; 3],
+) -> f64 {
+    let [nx, ny, nz] = shape;
+    let four_pi_g = 4.0 * std::f64::consts::PI * g;
+    let inv_dx2 = [
+        1.0 / (dx[0] * dx[0]),
+        1.0 / (dx[1] * dx[1]),
+        1.0 / (dx[2] * dx[2]),
+    ];
+    let mut sum_sq = 0.0;
+    let mut count = 0usize;
+
+    for ix in 1..nx.saturating_sub(1) {
+        for iy in 1..ny.saturating_sub(1) {
+            for iz in 1..nz.saturating_sub(1) {
+                let idx = ix * ny * nz + iy * nz + iz;
+                let phi = potential[idx];
+
+                let lap_x = (potential[(ix + 1) * ny * nz + iy * nz + iz]
+                    + potential[(ix - 1) * ny * nz + iy * nz + iz]
+                    - 2.0 * phi)
+                    * inv_dx2[0];
+                let lap_y = (potential[ix * ny * nz + (iy + 1) * nz + iz]
+                    + potential[ix * ny * nz + (iy - 1) * nz + iz]
+                    - 2.0 * phi)
+                    * inv_dx2[1];
+                let lap_z = (potential[ix * ny * nz + iy * nz + (iz + 1)]
+                    + potential[ix * ny * nz + iy * nz + (iz - 1)]
+                    - 2.0 * phi)
+                    * inv_dx2[2];
+                let laplacian = lap_x + lap_y + lap_z;
+
+                let rhs = four_pi_g * density[idx];
+                let residual = laplacian - rhs;
+                sum_sq += residual * residual;
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        (sum_sq / count as f64).sqrt()
+    } else {
+        0.0
+    }
+}
+
+/// Compute spherically-averaged power spectrum P(k) = <|Phi_hat(k)|^2> of the potential field.
+/// Uses a full 3D FFT via rustfft, then bins |Phi_hat|^2 by wavenumber magnitude.
+fn compute_potential_power_spectrum(
+    potential: &[f64],
+    shape: [usize; 3],
+    dx: [f64; 3],
+) -> Vec<(f64, f64)> {
+    use rustfft::{FftPlanner, num_complex::Complex};
+
+    let [nx, ny, nz] = shape;
+    let n = nx * ny * nz;
+    if n == 0 {
+        return vec![];
+    }
+
+    // Convert to complex
+    let mut buffer: Vec<Complex<f64>> = potential.iter().map(|&v| Complex::new(v, 0.0)).collect();
+
+    let mut planner = FftPlanner::new();
+
+    // FFT along z (contiguous, last axis)
+    let fft_z = planner.plan_fft_forward(nz);
+    for ix in 0..nx {
+        for iy in 0..ny {
+            let start = ix * ny * nz + iy * nz;
+            fft_z.process(&mut buffer[start..start + nz]);
+        }
+    }
+
+    // FFT along y (strided)
+    let fft_y = planner.plan_fft_forward(ny);
+    let mut temp_y = vec![Complex::new(0.0, 0.0); ny];
+    for ix in 0..nx {
+        for iz in 0..nz {
+            for iy in 0..ny {
+                temp_y[iy] = buffer[ix * ny * nz + iy * nz + iz];
+            }
+            fft_y.process(&mut temp_y);
+            for iy in 0..ny {
+                buffer[ix * ny * nz + iy * nz + iz] = temp_y[iy];
+            }
+        }
+    }
+
+    // FFT along x (strided)
+    let fft_x = planner.plan_fft_forward(nx);
+    let mut temp_x = vec![Complex::new(0.0, 0.0); nx];
+    for iy in 0..ny {
+        for iz in 0..nz {
+            for ix in 0..nx {
+                temp_x[ix] = buffer[ix * ny * nz + iy * nz + iz];
+            }
+            fft_x.process(&mut temp_x);
+            for ix in 0..nx {
+                buffer[ix * ny * nz + iy * nz + iz] = temp_x[ix];
+            }
+        }
+    }
+
+    // Wavenumber spacing
+    let dk = [
+        2.0 * std::f64::consts::PI / (nx as f64 * dx[0]),
+        2.0 * std::f64::consts::PI / (ny as f64 * dx[1]),
+        2.0 * std::f64::consts::PI / (nz as f64 * dx[2]),
+    ];
+
+    let k_nyquist = [
+        (nx / 2) as f64 * dk[0],
+        (ny / 2) as f64 * dk[1],
+        (nz / 2) as f64 * dk[2],
+    ];
+    let k_max = (k_nyquist[0].powi(2) + k_nyquist[1].powi(2) + k_nyquist[2].powi(2)).sqrt();
+    let dk_bin = dk.iter().copied().fold(f64::INFINITY, f64::min);
+    let n_bins = ((k_max / dk_bin) as usize + 1).max(1);
+
+    let mut power_bins = vec![0.0f64; n_bins];
+    let mut count_bins = vec![0usize; n_bins];
+
+    let norm = 1.0 / (n as f64 * n as f64);
+
+    for ikx in 0..nx {
+        let kx = if ikx <= nx / 2 {
+            ikx as f64
+        } else {
+            ikx as f64 - nx as f64
+        } * dk[0];
+        for iky in 0..ny {
+            let ky = if iky <= ny / 2 {
+                iky as f64
+            } else {
+                iky as f64 - ny as f64
+            } * dk[1];
+            for ikz in 0..nz {
+                let kz = if ikz <= nz / 2 {
+                    ikz as f64
+                } else {
+                    ikz as f64 - nz as f64
+                } * dk[2];
+
+                let k_mag = (kx * kx + ky * ky + kz * kz).sqrt();
+                if k_mag < 1e-14 {
+                    continue; // skip DC mode
+                }
+
+                let c = buffer[ikx * ny * nz + iky * nz + ikz];
+                let power = (c.re * c.re + c.im * c.im) * norm;
+
+                let bin = (k_mag / dk_bin).round() as usize;
+                if bin < n_bins {
+                    power_bins[bin] += power;
+                    count_bins[bin] += 1;
+                }
+            }
+        }
+    }
+
+    // Return (k, P(k)) for non-empty bins
+    power_bins
+        .iter()
+        .zip(count_bins.iter())
+        .enumerate()
+        .filter(|&(_, (_, &c))| c > 0)
+        .map(|(i, (&p, &c))| {
+            let k = (i as f64 + 0.5) * dk_bin;
+            (k, p / c as f64)
+        })
+        .collect()
 }

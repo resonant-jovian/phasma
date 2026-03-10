@@ -34,7 +34,7 @@ impl HelpOverlay {
 
         // Center overlay
         let w = area.width.min(62);
-        let h = area.height.min(56);
+        let h = area.height.min(68);
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
         let overlay = Rect::new(x, y, w, h);
@@ -89,6 +89,12 @@ impl HelpOverlay {
                 desc("Scrub backward/forward in time"),
             ]),
             Line::from(vec![key("  Backspace "), desc("Jump to live (exit scrub)")]),
+            Line::from(vec![key("  :         "), desc("Command palette")]),
+            Line::from(vec![
+                key("  a         "),
+                desc("Add bookmark at current time"),
+            ]),
+            Line::from(vec![key("  Ctrl+B    "), desc("Navigate to next bookmark")]),
             Line::from(""),
             section("Setup (F1)"),
             Line::from(vec![key("  j/k ▲/▼   "), desc("Navigate config list")]),
@@ -111,6 +117,7 @@ impl HelpOverlay {
             Line::from(vec![key("  l         "), desc("Toggle log scale")]),
             Line::from(vec![key("  c         "), desc("Cycle colormap")]),
             Line::from(vec![key("  i         "), desc("Toggle info bar")]),
+            Line::from(vec![key("  n         "), desc("Toggle contour overlay")]),
             Line::from(""),
             section("Phase Space (F4)"),
             Line::from(vec![key("  1/2/3     "), desc("Spatial dim (x₁/x₂/x₃)")]),
@@ -120,6 +127,11 @@ impl HelpOverlay {
             Line::from(vec![key("  l         "), desc("Toggle log scale")]),
             Line::from(vec![key("  c         "), desc("Cycle colormap")]),
             Line::from(vec![key("  i         "), desc("Toggle info bar")]),
+            Line::from(vec![key("  {/}       "), desc("Adjust slice position")]),
+            Line::from(vec![
+                key("  p         "),
+                desc("Toggle physical aspect ratio"),
+            ]),
             Line::from(""),
             section("Energy (F5)"),
             Line::from(vec![
@@ -129,8 +141,18 @@ impl HelpOverlay {
             Line::from(vec![key("  d         "), desc("Toggle drift view")]),
             Line::from(vec![
                 key("  1/2/3/4   "),
-                desc("Panel: Energy/Mass/Casimir/Entropy"),
+                desc("Panel: Energy/Mass/Virial/Entropy"),
             ]),
+            Line::from(vec![key("  h/l       "), desc("Scroll time left/right")]),
+            Line::from(vec![
+                key("  H/L       "),
+                desc("Expand/contract time window"),
+            ]),
+            Line::from(vec![
+                key("  f         "),
+                desc("Fit all (reset time window)"),
+            ]),
+            Line::from(vec![key("  g         "), desc("Toggle grid lines")]),
             Line::from(""),
             section("Rank (F6) / Perf (F8) / Poisson (F9)"),
             Line::from(vec![desc("  Display-only — no tab-specific keys")]),
@@ -142,6 +164,10 @@ impl HelpOverlay {
             ]),
             Line::from(vec![key("  l         "), desc("Toggle log scale")]),
             Line::from(vec![key("  a         "), desc("Toggle analytic overlay")]),
+            Line::from(vec![
+                key("  s         "),
+                desc("Toggle stacked/single layout"),
+            ]),
             Line::from(""),
             section("Settings (F10)"),
             Line::from(vec![key("  j/k ▲/▼   "), desc("Navigate settings")]),

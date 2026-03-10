@@ -13,8 +13,9 @@ pub fn export_parquet(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     _state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
-    let path = dir.join("diagnostics.parquet");
+    let path = dir.join(format!("{stem}.parquet"));
 
     let energy = diagnostics.total_energy.iter_chart_data();
     let kinetic = diagnostics.kinetic_energy.iter_chart_data();

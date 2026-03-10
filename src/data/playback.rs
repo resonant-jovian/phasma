@@ -23,14 +23,43 @@ impl PlaybackDataProvider {
             diagnostics.push_state(s);
         }
 
+        // Apply playback config settings
+        let (fps, looping, start_idx) = if let Some(ref cfg) = config {
+            let pb = &cfg.playback;
+            let fps = if pb.fps > 0.0 { pb.fps } else { 10.0 };
+            let looping = pb.loop_playback;
+            // Find start index from start_time
+            let start_idx = if let Some(start_t) = pb.start_time {
+                snapshots.iter().position(|s| s.t >= start_t).unwrap_or(0)
+            } else {
+                0
+            };
+            (fps, looping, start_idx)
+        } else {
+            (10.0, false, 0)
+        };
+
+        // Filter snapshots to [start_time, end_time] range if specified
+        let filtered: Vec<SimState> = if let Some(ref cfg) = config {
+            let pb = &cfg.playback;
+            let start = pb.start_time.unwrap_or(f64::NEG_INFINITY);
+            let end = pb.end_time.unwrap_or(f64::INFINITY);
+            snapshots
+                .into_iter()
+                .filter(|s| s.t >= start && s.t <= end)
+                .collect()
+        } else {
+            snapshots
+        };
+
         Self {
-            snapshots,
-            current_index: 0,
+            snapshots: filtered,
+            current_index: start_idx,
             diagnostics,
             config,
             playing: false,
-            fps: 10.0,
-            looping: false,
+            fps,
+            looping,
             last_advance: std::time::Instant::now(),
         }
     }

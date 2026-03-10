@@ -2,8 +2,11 @@ use ratatui::layout::{Constraint, Layout, Rect, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
+    /// < 80 cols: minimal chrome, no footer
     Compact,
+    /// 80-159 cols: standard layout
     Standard,
+    /// 160+ cols: wide layout (same as standard for now)
     Wide,
 }
 
@@ -28,21 +31,42 @@ impl ResponsiveLayout {
 
         let full = Rect::new(0, 0, size.width, size.height);
 
-        let [status_area, rest] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(full);
+        match mode {
+            LayoutMode::Compact => {
+                // Compact: status bar, tab bar, content — no footer
+                let [status_area, rest] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(full);
 
-        let [tab_bar_area, content_and_footer] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(rest);
+                let [tab_bar_area, content_area] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(rest);
 
-        let [content_area, footer_area] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(content_and_footer);
+                ScreenLayout {
+                    mode,
+                    status_area,
+                    tab_bar_area,
+                    content_area,
+                    footer_area: Rect::new(0, 0, 0, 0), // hidden
+                }
+            }
+            LayoutMode::Standard | LayoutMode::Wide => {
+                let [status_area, rest] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(full);
 
-        ScreenLayout {
-            mode,
-            status_area,
-            tab_bar_area,
-            content_area,
-            footer_area,
+                let [tab_bar_area, content_and_footer] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(rest);
+
+                let [content_area, footer_area] =
+                    Layout::vertical([Constraint::Min(0), Constraint::Length(1)])
+                        .areas(content_and_footer);
+
+                ScreenLayout {
+                    mode,
+                    status_area,
+                    tab_bar_area,
+                    content_area,
+                    footer_area,
+                }
+            }
         }
     }
 }

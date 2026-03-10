@@ -8,8 +8,9 @@ pub fn export_markdown(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
-    let path = dir.join("report.md");
+    let path = dir.join(format!("{stem}.md"));
     let mut f = std::fs::File::create(&path).map_err(|e| format!("create: {e}"))?;
 
     writeln!(f, "# Phasma Simulation Report\n").map_err(|e| e.to_string())?;

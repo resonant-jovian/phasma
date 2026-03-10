@@ -7,29 +7,76 @@ use zip::write::SimpleFileOptions;
 use crate::data::live::DiagnosticsStore;
 use crate::sim::SimState;
 
-/// Export a ZIP bundle by running all other export formats into a temp directory,
-/// then packaging every produced file into a single archive.
+/// Export a ZIP bundle with structured subdirectories matching the spec:
+///
+/// ```text
+/// phasma_export/
+///   config/
+///     run.toml          (if available)
+///   report/
+///     report.md
+///   diagnostics/
+///     diagnostics.csv
+///     conservation.csv
+///   performance/
+///     performance.csv
+///   snapshots/
+///     final_state.json
+///     density.npy
+///     density.vtk
+///   screenshots/
+///     screenshot.txt
+///   README.txt
+/// ```
 pub fn export_zip(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
     // Create a temp directory for individual exports
     let tmp = dir.join(".phasma_zip_staging");
     std::fs::create_dir_all(&tmp).map_err(|e| format!("create staging dir: {e}"))?;
 
-    // Run every non-zip export format, collecting successes silently
-    let _ = super::csv::export_csv(&tmp, diagnostics);
-    let _ = super::json::export_json(&tmp, diagnostics, state);
-    let _ = super::npy::export_npy(&tmp, state);
-    let _ = super::report::export_markdown(&tmp, diagnostics, state);
-    let _ = super::screenshot::export_screenshot(&tmp, diagnostics, state);
-    let _ = super::parquet::export_parquet(&tmp, diagnostics, state);
-    let _ = super::vtk::export_vtk(&tmp, state);
-    let _ = super::animation::export_animation_frames(&tmp, diagnostics, state);
+    // Create structured subdirectories
+    let dirs = [
+        "config",
+        "report",
+        "diagnostics",
+        "performance",
+        "snapshots",
+        "screenshots",
+    ];
+    for d in &dirs {
+        let _ = std::fs::create_dir_all(tmp.join(d));
+    }
+
+    // Export into structured locations
+    let _ = super::csv::export_csv(&tmp.join("diagnostics"), diagnostics, "diagnostics");
+    let _ = super::json::export_json(&tmp.join("snapshots"), diagnostics, state, "final_state");
+    let _ = super::npy::export_npy(&tmp.join("snapshots"), state, "density");
+    let _ = super::report::export_markdown(&tmp.join("report"), diagnostics, state, "report");
+    let _ = super::screenshot::export_screenshot(
+        &tmp.join("screenshots"),
+        diagnostics,
+        state,
+        "screenshot",
+    );
+    let _ =
+        super::parquet::export_parquet(&tmp.join("diagnostics"), diagnostics, state, "diagnostics");
+    let _ = super::vtk::export_vtk(&tmp.join("snapshots"), state, "density");
+
+    // Generate conservation.csv (energy, mass, casimir drift series)
+    export_conservation_csv(&tmp.join("diagnostics"), diagnostics);
+
+    // Generate performance.csv (wall time per step)
+    export_performance_csv(&tmp.join("performance"), state);
+
+    // Generate README.txt manifest
+    write_readme(&tmp);
 
     // Package everything into the zip
-    let zip_path = dir.join("phasma_export.zip");
+    let zip_path = dir.join(format!("{stem}.zip"));
     let file = std::fs::File::create(&zip_path).map_err(|e| format!("create zip: {e}"))?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default();
@@ -42,6 +89,69 @@ pub fn export_zip(
     let _ = std::fs::remove_dir_all(&tmp);
 
     Ok(zip_path.display().to_string())
+}
+
+fn export_conservation_csv(dir: &Path, diagnostics: &DiagnosticsStore) {
+    let energy_drift = diagnostics.energy_drift_series();
+    let mass_drift = diagnostics.mass_drift_series();
+    let c2_drift = diagnostics.c2_drift_series();
+
+    let path = dir.join("conservation.csv");
+    let mut out = String::from("time,energy_drift,mass_drift,casimir_drift\n");
+
+    // Merge all drift series by time (use energy drift as base timeline)
+    for &(t, de) in &energy_drift {
+        let dm = mass_drift
+            .iter()
+            .find(|(mt, _)| (*mt - t).abs() < 1e-10)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        let dc = c2_drift
+            .iter()
+            .find(|(ct, _)| (*ct - t).abs() < 1e-10)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        out.push_str(&format!("{t},{de},{dm},{dc}\n"));
+    }
+
+    let _ = std::fs::write(path, out);
+}
+
+fn export_performance_csv(dir: &Path, state: Option<&SimState>) {
+    let path = dir.join("performance.csv");
+    let mut out = String::from("step,sim_time,step_wall_ms\n");
+
+    if let Some(s) = state {
+        out.push_str(&format!("{},{},{:.3}\n", s.step, s.t, s.step_wall_ms));
+    }
+
+    let _ = std::fs::write(path, out);
+}
+
+fn write_readme(dir: &Path) {
+    let readme = "\
+PHASMA Export Archive
+=====================
+
+This archive contains simulation results from the PHASMA TUI.
+
+Directory structure:
+  config/         - Simulation configuration (TOML)
+  report/         - Markdown summary report
+  diagnostics/    - Time series data (CSV, Parquet)
+    diagnostics.csv     - Full diagnostics time series
+    conservation.csv    - Energy/mass/Casimir drift
+  performance/    - Performance metrics
+    performance.csv     - Wall time per step
+  snapshots/      - Simulation state
+    final_state.json    - Last state as JSON
+    density.npy         - Density field (NumPy format)
+    density.vtk         - Density field (VTK format)
+  screenshots/    - Terminal screenshots
+
+Generated by PHASMA (https://github.com/...)
+";
+    let _ = std::fs::write(dir.join("README.txt"), readme);
 }
 
 /// Recursively add all files under `base` to the zip, using paths relative to `root`.

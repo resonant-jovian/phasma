@@ -7,8 +7,9 @@ pub fn export_json(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
-    let path = dir.join("diagnostics.json");
+    let path = dir.join(format!("{stem}.json"));
 
     let energy = diagnostics.total_energy.iter_chart_data();
     let mass = diagnostics.total_mass.iter_chart_data();

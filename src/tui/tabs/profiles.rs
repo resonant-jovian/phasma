@@ -20,13 +20,24 @@ enum ProfileKind {
     Anisotropy,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum LayoutMode {
+    /// Show one profile at a time (original)
+    Single,
+    /// Show 4 stacked profiles sharing log-r axis
+    #[default]
+    Stacked,
+}
+
 /// F7 Radial Profiles tab — ρ(r), M(r), Φ(r), σ(r), β(r).
 ///
 /// Computes spherically averaged profiles from the 3D density grid.
+/// In stacked mode, shows ρ, M, Φ, σ simultaneously sharing the r axis.
 pub struct ProfilesTab {
     kind: ProfileKind,
     log_scale: bool,
     show_analytic: bool,
+    layout_mode: LayoutMode,
 }
 
 impl Default for ProfilesTab {
@@ -35,6 +46,7 @@ impl Default for ProfilesTab {
             kind: ProfileKind::Density,
             log_scale: true,
             show_analytic: true,
+            layout_mode: LayoutMode::Stacked,
         }
     }
 }
@@ -68,6 +80,13 @@ impl ProfilesTab {
             }
             KeyCode::Char('a') => {
                 self.show_analytic = !self.show_analytic;
+                None
+            }
+            KeyCode::Char('s') => {
+                self.layout_mode = match self.layout_mode {
+                    LayoutMode::Single => LayoutMode::Stacked,
+                    LayoutMode::Stacked => LayoutMode::Single,
+                };
                 None
             }
             _ => None,
@@ -119,116 +138,38 @@ impl ProfilesTab {
         let potential_profile = compute_potential_profile(&mass_profile, g);
         let sigma_profile = compute_sigma_profile(&density_profile, &mass_profile, g);
 
-        // Select the appropriate data
-        let (title, color, profile_data) = match self.kind {
-            ProfileKind::Density => (" ρ(r) ", theme.chart[0], &density_profile),
-            ProfileKind::Mass => (" M(<r) ", theme.chart[1], &mass_profile),
-            ProfileKind::Potential => (" Φ(r) ", theme.chart[2], &potential_profile),
-            ProfileKind::Velocity => (" σ(r) ", theme.chart[4], &sigma_profile),
-            ProfileKind::Anisotropy => (" β(r) ", theme.chart[3], &density_profile), // placeholder
-        };
-
-        // For anisotropy, show β=0 (isotropic) placeholder
-        let aniso_data: Vec<(f64, f64)>;
-        let chart_source = if self.kind == ProfileKind::Anisotropy {
-            aniso_data = density_profile.iter().map(|&(r, _)| (r, 0.0)).collect();
-            &aniso_data
-        } else {
-            profile_data
-        };
-
-        let log_tag = if self.log_scale { " [log]" } else { "" };
-        let analytic_tag = if self.show_analytic { " +analytic" } else { "" };
-        let full_title = format!("{title}{log_tag}{analytic_tag}");
-
-        let [chart_area, info_area] =
+        // Footer area
+        let [main_area, info_area] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
 
-        // Apply log scaling
-        let chart_data: Vec<(f64, f64)> = if self.log_scale && self.kind == ProfileKind::Potential {
-            // Potential is negative, use log(|Φ|)
-            chart_source
-                .iter()
-                .filter(|&&(r, v)| r > 0.0 && v < 0.0)
-                .map(|&(r, v)| (r.ln(), (-v).ln()))
-                .collect()
-        } else if self.log_scale && self.kind != ProfileKind::Anisotropy {
-            chart_source
-                .iter()
-                .filter(|&&(r, v)| r > 0.0 && v > 0.0)
-                .map(|&(r, v)| (r.ln(), v.ln()))
-                .collect()
-        } else {
-            chart_source.clone()
-        };
-
-        // Analytic overlay
-        let analytic_data: Vec<(f64, f64)> = if self.show_analytic {
-            let cfg = data_provider.config();
-            compute_analytic_profile(cfg, self.kind, self.log_scale, &density_profile)
-        } else {
-            Vec::new()
-        };
-
-        if chart_data.is_empty() {
-            frame.render_widget(
-                Block::bordered()
-                    .title(full_title.as_str())
-                    .border_style(Style::default().fg(theme.border)),
-                chart_area,
-            );
-        } else {
-            let (x_min, x_max, y_min, y_max) = combined_bounds(&chart_data, &analytic_data);
-            let x_label = if self.log_scale { "ln(r)" } else { "r" };
-
-            let chart_width = chart_area.width.saturating_sub(2) as usize;
-            let target = chart_width * 2;
-            let dense_chart = densify(&chart_data, target);
-            let dense_analytic = densify(&analytic_data, target);
-
-            let mut datasets = vec![
-                Dataset::default()
-                    .name("sim")
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(color))
-                    .data(&dense_chart),
-            ];
-
-            if !dense_analytic.is_empty() {
-                datasets.push(
-                    Dataset::default()
-                        .name("analytic")
-                        .marker(symbols::Marker::Braille)
-                        .graph_type(GraphType::Line)
-                        .style(Style::default().fg(theme.dim))
-                        .data(&dense_analytic),
+        match self.layout_mode {
+            LayoutMode::Stacked => {
+                self.draw_stacked(
+                    frame,
+                    main_area,
+                    theme,
+                    data_provider,
+                    &density_profile,
+                    &mass_profile,
+                    &potential_profile,
+                    &sigma_profile,
                 );
             }
-
-            let chart = Chart::new(datasets)
-                .block(
-                    Block::bordered()
-                        .title(full_title.as_str())
-                        .border_style(Style::default().fg(theme.border)),
-                )
-                .x_axis(
-                    Axis::default()
-                        .title(x_label)
-                        .bounds([x_min, x_max])
-                        .labels(vec![format!("{x_min:.1}"), format!("{x_max:.1}")])
-                        .style(Style::default().fg(theme.dim)),
-                )
-                .y_axis(
-                    Axis::default()
-                        .bounds([y_min, y_max])
-                        .labels(vec![format!("{y_min:.1e}"), format!("{y_max:.1e}")])
-                        .style(Style::default().fg(theme.dim)),
+            LayoutMode::Single => {
+                self.draw_single(
+                    frame,
+                    main_area,
+                    theme,
+                    data_provider,
+                    &density_profile,
+                    &mass_profile,
+                    &potential_profile,
+                    &sigma_profile,
                 );
-
-            frame.render_widget(chart, chart_area);
+            }
         }
 
+        // Footer hint
         let kind_labels = ["[1]ρ", "[2]M", "[3]Φ", "[4]σ", "[5]β"];
         let active = match self.kind {
             ProfileKind::Density => 0,
@@ -248,16 +189,229 @@ impl ProfilesTab {
                 }
             })
             .collect();
+        let mode_tag = match self.layout_mode {
+            LayoutMode::Single => "single",
+            LayoutMode::Stacked => "stacked",
+        };
         hint_parts.push(format!(
-            "  [l] log{}  [a] analytic{}",
+            "  [l] log{}  [a] analytic{}  [s] {}",
             if self.log_scale { "*" } else { "" },
             if self.show_analytic { "*" } else { "" },
+            mode_tag,
         ));
         let hint = hint_parts.join("  ");
         frame.render_widget(
             Paragraph::new(hint).style(Style::default().fg(theme.dim)),
             info_area,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_stacked(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+        density_profile: &[(f64, f64)],
+        mass_profile: &[(f64, f64)],
+        potential_profile: &[(f64, f64)],
+        sigma_profile: &[(f64, f64)],
+    ) {
+        // 4 vertically stacked panels sharing the r axis
+        let panels = Layout::vertical([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+        #[allow(clippy::type_complexity)]
+        let profiles: [(ProfileKind, &str, &[(f64, f64)], usize); 4] = [
+            (ProfileKind::Density, " ρ(r) ", density_profile, 0),
+            (ProfileKind::Mass, " M(<r) ", mass_profile, 1),
+            (ProfileKind::Potential, " Φ(r) ", potential_profile, 2),
+            (ProfileKind::Velocity, " σ(r) ", sigma_profile, 4),
+        ];
+
+        for (i, &(kind, title, profile_data, color_idx)) in profiles.iter().enumerate() {
+            self.draw_profile_panel(
+                frame,
+                panels[i],
+                theme,
+                data_provider,
+                kind,
+                title,
+                profile_data,
+                theme.chart[color_idx],
+                density_profile,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_single(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+        density_profile: &[(f64, f64)],
+        mass_profile: &[(f64, f64)],
+        potential_profile: &[(f64, f64)],
+        sigma_profile: &[(f64, f64)],
+    ) {
+        let (kind, title, color, profile_data) = match self.kind {
+            ProfileKind::Density => (
+                ProfileKind::Density,
+                " ρ(r) ",
+                theme.chart[0],
+                density_profile,
+            ),
+            ProfileKind::Mass => (ProfileKind::Mass, " M(<r) ", theme.chart[1], mass_profile),
+            ProfileKind::Potential => (
+                ProfileKind::Potential,
+                " Φ(r) ",
+                theme.chart[2],
+                potential_profile,
+            ),
+            ProfileKind::Velocity => (
+                ProfileKind::Velocity,
+                " σ(r) ",
+                theme.chart[4],
+                sigma_profile,
+            ),
+            ProfileKind::Anisotropy => (
+                ProfileKind::Anisotropy,
+                " β(r) ",
+                theme.chart[3],
+                density_profile,
+            ),
+        };
+
+        // For anisotropy, show β=0 (isotropic) placeholder
+        let aniso_data: Vec<(f64, f64)>;
+        let chart_source = if self.kind == ProfileKind::Anisotropy {
+            aniso_data = density_profile.iter().map(|&(r, _)| (r, 0.0)).collect();
+            &aniso_data
+        } else {
+            profile_data
+        };
+
+        self.draw_profile_panel(
+            frame,
+            area,
+            theme,
+            data_provider,
+            kind,
+            title,
+            chart_source,
+            color,
+            density_profile,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_profile_panel(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+        kind: ProfileKind,
+        title: &str,
+        profile_data: &[(f64, f64)],
+        color: ratatui::style::Color,
+        density_profile: &[(f64, f64)],
+    ) {
+        let log_tag = if self.log_scale { " [log]" } else { "" };
+        let full_title = format!("{title}{log_tag}");
+
+        // Apply log scaling
+        let chart_data: Vec<(f64, f64)> = if self.log_scale && kind == ProfileKind::Potential {
+            profile_data
+                .iter()
+                .filter(|&&(r, v)| r > 0.0 && v < 0.0)
+                .map(|&(r, v)| (r.ln(), (-v).ln()))
+                .collect()
+        } else if self.log_scale && kind != ProfileKind::Anisotropy {
+            profile_data
+                .iter()
+                .filter(|&&(r, v)| r > 0.0 && v > 0.0)
+                .map(|&(r, v)| (r.ln(), v.ln()))
+                .collect()
+        } else {
+            profile_data.to_vec()
+        };
+
+        // Analytic overlay
+        let analytic_data: Vec<(f64, f64)> = if self.show_analytic {
+            let cfg = data_provider.config();
+            compute_analytic_profile(cfg, kind, self.log_scale, density_profile)
+        } else {
+            Vec::new()
+        };
+
+        if chart_data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(full_title.as_str())
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let (x_min, x_max, y_min, y_max) = combined_bounds(&chart_data, &analytic_data);
+        let x_label = if self.log_scale { "ln(r)" } else { "r" };
+
+        let chart_width = area.width.saturating_sub(2) as usize;
+        let target = chart_width * 2;
+        let dense_chart = densify(&chart_data, target);
+        let dense_analytic = densify(&analytic_data, target);
+
+        let mut datasets = vec![
+            Dataset::default()
+                .name("sim")
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(color))
+                .data(&dense_chart),
+        ];
+
+        if !dense_analytic.is_empty() {
+            datasets.push(
+                Dataset::default()
+                    .name("analytic")
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(theme.dim))
+                    .data(&dense_analytic),
+            );
+        }
+
+        let chart = Chart::new(datasets)
+            .block(
+                Block::bordered()
+                    .title(full_title.as_str())
+                    .border_style(Style::default().fg(theme.border)),
+            )
+            .x_axis(
+                Axis::default()
+                    .title(x_label)
+                    .bounds([x_min, x_max])
+                    .labels(vec![format!("{x_min:.1}"), format!("{x_max:.1}")])
+                    .style(Style::default().fg(theme.dim)),
+            )
+            .y_axis(
+                Axis::default()
+                    .bounds([y_min, y_max])
+                    .labels(vec![format!("{y_min:.1e}"), format!("{y_max:.1e}")])
+                    .style(Style::default().fg(theme.dim)),
+            );
+
+        frame.render_widget(chart, area);
     }
 }
 
@@ -297,12 +451,12 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
 }
 
 /// Compute cumulative enclosed mass M(<r) from radial density profile.
-/// Integrates ρ(r) × 4πr² dr using simple trapezoidal summation.
+/// Integrates ρ(r) * 4πr² dr using simple trapezoidal summation.
 fn compute_mass_profile(density: &[(f64, f64)], dx: f64) -> Vec<(f64, f64)> {
     let mut mass = Vec::with_capacity(density.len());
     let mut cumulative = 0.0;
     for &(r, rho) in density {
-        // Shell volume ≈ 4πr² × dr (using bin width = dx)
+        // Shell volume ~ 4πr² * dr (using bin width = dx)
         let shell_vol = 4.0 * std::f64::consts::PI * r * r * dx;
         cumulative += rho * shell_vol;
         mass.push((r, cumulative));
@@ -310,7 +464,7 @@ fn compute_mass_profile(density: &[(f64, f64)], dx: f64) -> Vec<(f64, f64)> {
     mass
 }
 
-/// Compute gravitational potential Φ(r) = -G × M(<r) / r.
+/// Compute gravitational potential Φ(r) = -G * M(<r) / r.
 fn compute_potential_profile(mass: &[(f64, f64)], g: f64) -> Vec<(f64, f64)> {
     mass.iter()
         .filter(|&&(r, _)| r > 0.0)
@@ -331,7 +485,7 @@ fn compute_sigma_profile(density: &[(f64, f64)], mass: &[(f64, f64)], g: f64) ->
         1.0
     };
 
-    // Integrate from outside in: σ²(r) = (1/ρ(r)) × Σ_{r'=r}^{r_max} ρ(r') × G × M(r') / r'² × dr
+    // Integrate from outside in: σ²(r) = (1/ρ(r)) * Σ_{r'=r}^{r_max} ρ(r') * G * M(r') / r'² * dr
     let mut integral = vec![0.0f64; n];
     let mut running = 0.0;
     for i in (0..n).rev() {
@@ -393,7 +547,7 @@ fn compute_analytic_profile(
                             (r, phi)
                         }
                         ProfileKind::Velocity => {
-                            // Isotropic Plummer: σ²(r) = GM/(6a) × (1 + r²/a²)^(-1/2)
+                            // Isotropic Plummer: σ²(r) = GM/(6a) * (1 + r²/a²)^(-1/2)
                             let sigma = (g * m / (6.0 * a) / (1.0 + r * r / (a * a)).sqrt()).sqrt();
                             (r, sigma)
                         }

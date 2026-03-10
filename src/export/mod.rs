@@ -28,6 +28,21 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
+    pub fn from_name(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "csv" => Self::Csv,
+            "json" => Self::Json,
+            "npy" | "numpy" => Self::Npy,
+            "md" | "markdown" => Self::Markdown,
+            "zip" => Self::Zip,
+            "screenshot" | "txt" => Self::Screenshot,
+            "parquet" => Self::Parquet,
+            "vtk" => Self::Vtk,
+            "animation" | "anim" => Self::Animation,
+            _ => Self::Csv,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::Csv => "CSV",
@@ -49,18 +64,21 @@ pub fn export_diagnostics(
     format: ExportFormat,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
 
     match format {
-        ExportFormat::Csv => csv::export_csv(dir, diagnostics),
-        ExportFormat::Json => json::export_json(dir, diagnostics, state),
-        ExportFormat::Npy => npy::export_npy(dir, state),
-        ExportFormat::Markdown => report::export_markdown(dir, diagnostics, state),
-        ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state),
-        ExportFormat::Screenshot => screenshot::export_screenshot(dir, diagnostics, state),
-        ExportFormat::Parquet => parquet::export_parquet(dir, diagnostics, state),
-        ExportFormat::Vtk => vtk::export_vtk(dir, state),
-        ExportFormat::Animation => animation::export_animation_frames(dir, diagnostics, state),
+        ExportFormat::Csv => csv::export_csv(dir, diagnostics, stem),
+        ExportFormat::Json => json::export_json(dir, diagnostics, state, stem),
+        ExportFormat::Npy => npy::export_npy(dir, state, stem),
+        ExportFormat::Markdown => report::export_markdown(dir, diagnostics, state, stem),
+        ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
+        ExportFormat::Screenshot => screenshot::export_screenshot(dir, diagnostics, state, stem),
+        ExportFormat::Parquet => parquet::export_parquet(dir, diagnostics, state, stem),
+        ExportFormat::Vtk => vtk::export_vtk(dir, state, stem),
+        ExportFormat::Animation => {
+            animation::export_animation_frames(dir, diagnostics, state, stem)
+        }
     }
 }

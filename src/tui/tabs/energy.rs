@@ -20,10 +20,75 @@ struct TraceVisibility {
     potential_energy: bool,
 }
 
+/// Time window for scrolling/zooming the x-axis
+#[derive(Default)]
+struct TimeWindow {
+    /// Right edge override (None = auto/latest)
+    t_end: Option<f64>,
+    /// Window width in sim time units (None = fit all)
+    width: Option<f64>,
+}
+
+impl TimeWindow {
+    /// Apply window to data bounds, returning (x_min, x_max)
+    fn apply(&self, data_x_min: f64, data_x_max: f64) -> (f64, f64) {
+        let x_max = self.t_end.unwrap_or(data_x_max);
+        match self.width {
+            Some(w) => ((x_max - w).max(data_x_min), x_max),
+            None => (data_x_min, x_max),
+        }
+    }
+
+    /// Scroll left by 10% of current window width
+    fn scroll_left(&mut self, data_x_min: f64, data_x_max: f64) {
+        let w = self.width.unwrap_or(data_x_max - data_x_min);
+        let step = w * 0.1;
+        let current_end = self.t_end.unwrap_or(data_x_max);
+        let new_end = (current_end - step).max(data_x_min + w * 0.1);
+        self.t_end = Some(new_end);
+    }
+
+    /// Scroll right by 10% of current window width
+    fn scroll_right(&mut self, data_x_min: f64, data_x_max: f64) {
+        let w = self.width.unwrap_or(data_x_max - data_x_min);
+        let step = w * 0.1;
+        let current_end = self.t_end.unwrap_or(data_x_max);
+        let new_end = (current_end + step).min(data_x_max);
+        self.t_end = Some(new_end);
+    }
+
+    /// Expand window (zoom out time axis)
+    fn expand(&mut self, data_x_min: f64, data_x_max: f64) {
+        let full = data_x_max - data_x_min;
+        let current = self.width.unwrap_or(full);
+        self.width = Some((current * 1.5).min(full));
+        if self.width.unwrap_or(0.0) >= full * 0.99 {
+            self.width = None; // snap to fit-all
+            self.t_end = None;
+        }
+    }
+
+    /// Contract window (zoom in time axis)
+    fn contract(&mut self, data_x_min: f64, data_x_max: f64) {
+        let full = data_x_max - data_x_min;
+        let current = self.width.unwrap_or(full);
+        let new_w = (current / 1.5).max(full * 0.01);
+        self.width = Some(new_w);
+    }
+
+    /// Fit all data
+    fn fit_all(&mut self) {
+        self.t_end = None;
+        self.width = None;
+    }
+}
+
 pub struct EnergyTab {
     traces: TraceVisibility,
     show_drift: bool,      // show fractional drift or absolute values
-    selected_panel: usize, // 0=energy, 1=mass, 2=casimir, 3=entropy
+    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy
+    show_grid: bool,
+    time_window: TimeWindow,
 }
 
 impl Default for EnergyTab {
@@ -36,6 +101,8 @@ impl Default for EnergyTab {
             },
             show_drift: false,
             selected_panel: 0,
+            show_grid: false,
+            time_window: TimeWindow::default(),
         }
     }
 }
@@ -59,6 +126,10 @@ impl EnergyTab {
                 self.show_drift = !self.show_drift;
                 None
             }
+            KeyCode::Char('g') => {
+                self.show_grid = !self.show_grid;
+                None
+            }
             KeyCode::Char('1') => {
                 self.selected_panel = 0;
                 None
@@ -73,6 +144,27 @@ impl EnergyTab {
             }
             KeyCode::Char('4') => {
                 self.selected_panel = 3;
+                None
+            }
+            // Time window controls
+            KeyCode::Char('h') => {
+                self.time_window.scroll_left(0.0, f64::MAX);
+                None
+            }
+            KeyCode::Char('l') => {
+                self.time_window.scroll_right(0.0, f64::MAX);
+                None
+            }
+            KeyCode::Char('H') => {
+                self.time_window.expand(0.0, f64::MAX);
+                None
+            }
+            KeyCode::Char('L') => {
+                self.time_window.contract(0.0, f64::MAX);
+                None
+            }
+            KeyCode::Char('f') => {
+                self.time_window.fit_all();
                 None
             }
             _ => None,
@@ -122,7 +214,7 @@ impl EnergyTab {
 
         self.draw_energy_chart(frame, top_left, theme, data_provider);
         self.draw_mass_chart(frame, top_right, theme, data_provider);
-        self.draw_casimir_chart(frame, bottom_left, theme, data_provider);
+        self.draw_virial_chart(frame, bottom_left, theme, data_provider);
         self.draw_entropy_chart(frame, bottom_right, theme, data_provider);
     }
 
@@ -137,7 +229,22 @@ impl EnergyTab {
 
         if self.show_drift {
             let drift_data = diag.energy_drift_series();
-            draw_single_series(frame, area, " ΔE/E₀ ", &drift_data, theme.chart[3], theme);
+            // Add threshold line from exit config
+            let threshold = data_provider
+                .config()
+                .map(|c| c.exit.energy_drift_tolerance)
+                .unwrap_or(0.5);
+            draw_single_series_with_threshold(
+                frame,
+                area,
+                " ΔE/E₀ ",
+                &drift_data,
+                theme.chart[3],
+                theme,
+                Some(threshold),
+                &self.time_window,
+                self.show_grid,
+            );
         } else {
             let mut datasets = Vec::new();
             let e_data = diag.total_energy.iter_chart_data();
@@ -154,7 +261,15 @@ impl EnergyTab {
                 datasets.push(("W", w_data, theme.chart[2]));
             }
 
-            draw_multi_series(frame, area, " Energy ", &datasets, theme);
+            draw_multi_series_windowed(
+                frame,
+                area,
+                " Energy ",
+                &datasets,
+                theme,
+                &self.time_window,
+                self.show_grid,
+            );
         }
     }
 
@@ -166,18 +281,43 @@ impl EnergyTab {
         data_provider: &dyn DataProvider,
     ) {
         let drift = data_provider.diagnostics().mass_drift_series();
-        draw_single_series(frame, area, " ΔM/M₀ ", &drift, theme.chart[4], theme);
+        let threshold = data_provider
+            .config()
+            .map(|c| c.exit.mass_drift_tolerance)
+            .unwrap_or(0.1);
+        draw_single_series_with_threshold(
+            frame,
+            area,
+            " ΔM/M₀ ",
+            &drift,
+            theme.chart[4],
+            theme,
+            Some(threshold),
+            &self.time_window,
+            self.show_grid,
+        );
     }
 
-    fn draw_casimir_chart(
+    fn draw_virial_chart(
         &self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        let drift = data_provider.diagnostics().c2_drift_series();
-        draw_single_series(frame, area, " ΔC₂/C₂₀ ", &drift, theme.chart[5], theme);
+        let data = data_provider.diagnostics().virial_ratio.iter_chart_data();
+        // Reference line at virial=1.0 (virial equilibrium) shown as threshold
+        draw_single_series_with_threshold(
+            frame,
+            area,
+            " 2T/|W| (virial) ",
+            &data,
+            theme.chart[5],
+            theme,
+            Some(1.0),
+            &self.time_window,
+            self.show_grid,
+        );
     }
 
     fn draw_entropy_chart(
@@ -188,17 +328,55 @@ impl EnergyTab {
         data_provider: &dyn DataProvider,
     ) {
         let data = data_provider.diagnostics().entropy.iter_chart_data();
-        draw_single_series(frame, area, " S(t) ", &data, theme.chart[6], theme);
+        draw_single_series_with_threshold(
+            frame,
+            area,
+            " S(t) ",
+            &data,
+            theme.chart[6],
+            theme,
+            None,
+            &self.time_window,
+            self.show_grid,
+        );
     }
 }
 
-fn draw_single_series(
+/// Generate evenly-spaced label strings between `lo` and `hi`.
+/// `n` is the total number of labels (including endpoints).
+fn grid_labels(lo: f64, hi: f64, n: usize, scientific: bool) -> Vec<String> {
+    if n <= 1 {
+        let val = (lo + hi) * 0.5;
+        return vec![if scientific {
+            format!("{val:.2e}")
+        } else {
+            format!("{val:.2}")
+        }];
+    }
+    (0..n)
+        .map(|i| {
+            let frac = i as f64 / (n - 1) as f64;
+            let val = lo + frac * (hi - lo);
+            if scientific {
+                format!("{val:.2e}")
+            } else {
+                format!("{val:.2}")
+            }
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_single_series_with_threshold(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     data: &[(f64, f64)],
     color: Color,
     theme: &ThemeColors,
+    threshold: Option<f64>,
+    time_window: &TimeWindow,
+    show_grid: bool,
 ) {
     if data.is_empty() {
         frame.render_widget(
@@ -210,18 +388,68 @@ fn draw_single_series(
         return;
     }
 
-    let (x_min, x_max, y_min, y_max) = data_bounds(data);
-    // Braille cells are 2 dots wide, so chart_width * 2 is the horizontal pixel count
-    let chart_width = area.width.saturating_sub(2) as usize; // minus borders
-    let dense = densify(data, chart_width * 2);
+    let (raw_x_min, raw_x_max, y_min_raw, y_max_raw) = data_bounds(data);
+    let (x_min, x_max) = time_window.apply(raw_x_min, raw_x_max);
 
-    let ds = Dataset::default()
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&dense);
+    // Filter data to window
+    let windowed: Vec<(f64, f64)> = data
+        .iter()
+        .copied()
+        .filter(|(x, _)| *x >= x_min && *x <= x_max)
+        .collect();
+    let (_, _, y_min, y_max) = if windowed.is_empty() {
+        (x_min, x_max, y_min_raw, y_max_raw)
+    } else {
+        data_bounds(&windowed)
+    };
 
-    let chart = Chart::new(vec![ds])
+    // Expand y bounds to include threshold if present
+    let (y_min, y_max) = if let Some(thr) = threshold {
+        (
+            y_min.min(thr - (y_max - y_min).abs() * 0.05),
+            y_max.max(thr + (y_max - y_min).abs() * 0.05),
+        )
+    } else {
+        (y_min, y_max)
+    };
+
+    let chart_width = area.width.saturating_sub(2) as usize;
+    let dense = densify(&windowed, chart_width * 2);
+
+    let mut datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(color))
+            .data(&dense),
+    ];
+
+    // Add dashed threshold line
+    let threshold_data: Vec<(f64, f64)>;
+    if let Some(thr) = threshold {
+        threshold_data = vec![(x_min, thr), (x_max, thr)];
+        datasets.push(
+            Dataset::default()
+                .name(format!("thr={thr:.2e}"))
+                .marker(symbols::Marker::Dot)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(theme.warn))
+                .data(&threshold_data),
+        );
+    }
+
+    let x_labels = if show_grid {
+        grid_labels(x_min, x_max, 5, false)
+    } else {
+        vec![format!("{x_min:.2}"), format!("{x_max:.2}")]
+    };
+    let y_labels = if show_grid {
+        grid_labels(y_min, y_max, 5, true)
+    } else {
+        vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")]
+    };
+
+    let chart = Chart::new(datasets)
         .block(
             Block::bordered()
                 .title(title)
@@ -230,25 +458,27 @@ fn draw_single_series(
         .x_axis(
             Axis::default()
                 .bounds([x_min, x_max])
-                .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
+                .labels(x_labels)
                 .style(Style::default().fg(theme.dim)),
         )
         .y_axis(
             Axis::default()
                 .bounds([y_min, y_max])
-                .labels(vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")])
+                .labels(y_labels)
                 .style(Style::default().fg(theme.dim)),
         );
 
     frame.render_widget(chart, area);
 }
 
-fn draw_multi_series(
+fn draw_multi_series_windowed(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     series: &[SeriesData<'_>],
     theme: &ThemeColors,
+    time_window: &TimeWindow,
+    show_grid: bool,
 ) {
     if series.is_empty() {
         frame.render_widget(
@@ -273,17 +503,47 @@ fn draw_multi_series(
         y_max = y_max.max(d);
     }
 
+    let (x_min, x_max) = time_window.apply(x_min, x_max);
+
+    // Recompute y bounds within window
+    let mut wy_min = f64::INFINITY;
+    let mut wy_max = f64::NEG_INFINITY;
+    for (_, data, _) in series {
+        for &(x, y) in data {
+            if x >= x_min && x <= x_max {
+                if y < wy_min {
+                    wy_min = y;
+                }
+                if y > wy_max {
+                    wy_max = y;
+                }
+            }
+        }
+    }
+    if wy_min < f64::INFINITY {
+        let pad = (wy_max - wy_min) * 0.05;
+        y_min = wy_min - pad;
+        y_max = wy_max + pad;
+    }
+
     let chart_width = area.width.saturating_sub(2) as usize;
     let target_points = chart_width * 2;
 
-    let dense_series: Vec<Vec<(f64, f64)>> = series
+    let windowed_series: Vec<Vec<(f64, f64)>> = series
         .iter()
-        .map(|(_, data, _)| densify(data, target_points))
+        .map(|(_, data, _)| {
+            let filtered: Vec<(f64, f64)> = data
+                .iter()
+                .copied()
+                .filter(|(x, _)| *x >= x_min && *x <= x_max)
+                .collect();
+            densify(&filtered, target_points)
+        })
         .collect();
 
     let datasets: Vec<Dataset> = series
         .iter()
-        .zip(dense_series.iter())
+        .zip(windowed_series.iter())
         .map(|((name, _, color), dense)| {
             Dataset::default()
                 .name(*name)
@@ -294,6 +554,17 @@ fn draw_multi_series(
         })
         .collect();
 
+    let x_labels = if show_grid {
+        grid_labels(x_min, x_max, 5, false)
+    } else {
+        vec![format!("{x_min:.2}"), format!("{x_max:.2}")]
+    };
+    let y_labels = if show_grid {
+        grid_labels(y_min, y_max, 5, true)
+    } else {
+        vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")]
+    };
+
     let chart = Chart::new(datasets)
         .block(
             Block::bordered()
@@ -303,13 +574,13 @@ fn draw_multi_series(
         .x_axis(
             Axis::default()
                 .bounds([x_min, x_max])
-                .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
+                .labels(x_labels)
                 .style(Style::default().fg(theme.dim)),
         )
         .y_axis(
             Axis::default()
                 .bounds([y_min, y_max])
-                .labels(vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")])
+                .labels(y_labels)
                 .style(Style::default().fg(theme.dim)),
         );
 

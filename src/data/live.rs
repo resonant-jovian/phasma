@@ -272,6 +272,23 @@ impl LiveDataProvider {
         self.scrub_index = None;
     }
 
+    /// Scrub to the snapshot nearest to the given time.
+    pub fn scrub_to_time(&mut self, time: f64) {
+        if self.snapshot_history.is_empty() {
+            return;
+        }
+        let mut best_idx = 0;
+        let mut best_dist = f64::INFINITY;
+        for (i, snap) in self.snapshot_history.iter().enumerate() {
+            let dist = (snap.t - time).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+        self.scrub_index = Some(best_idx);
+    }
+
     /// Get the effective state (scrubbed or live).
     fn effective_state(&self) -> Option<&SimState> {
         if let Some(idx) = self.scrub_index {

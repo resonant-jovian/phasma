@@ -5,7 +5,7 @@ use crate::sim::SimState;
 
 /// Export 3D density field to VTK structured-points legacy format.
 /// Readable by ParaView, VisIt, and other VTK-compatible tools.
-pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String> {
+pub fn export_vtk(dir: &Path, state: Option<&SimState>, stem: &str) -> Result<String, String> {
     let Some(state) = state else {
         return Err("no simulation state to export".to_string());
     };
@@ -22,7 +22,7 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String
     // export the three projected 2D slices as separate VTK files.
     export_vtk_2d(
         dir,
-        "density_xy.vtk",
+        &format!("{stem}_density_xy.vtk"),
         &state.density_xy,
         nx,
         ny,
@@ -30,7 +30,7 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String
     )?;
     export_vtk_2d(
         dir,
-        "density_xz.vtk",
+        &format!("{stem}_density_xz.vtk"),
         &state.density_xz,
         nx,
         nz,
@@ -38,7 +38,7 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String
     )?;
     export_vtk_2d(
         dir,
-        "density_yz.vtk",
+        &format!("{stem}_density_yz.vtk"),
         &state.density_yz,
         ny,
         nz,
@@ -49,7 +49,7 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String
     if !state.phase_slice.is_empty() {
         export_vtk_2d(
             dir,
-            "phase_xvx.vtk",
+            &format!("{stem}_phase_xvx.vtk"),
             &state.phase_slice,
             state.phase_nx,
             state.phase_nv,
@@ -57,7 +57,10 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>) -> Result<String, String
         )?;
     }
 
-    Ok(dir.join("density_xy.vtk").display().to_string())
+    Ok(dir
+        .join(format!("{stem}_density_xy.vtk"))
+        .display()
+        .to_string())
 }
 
 fn export_vtk_2d(

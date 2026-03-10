@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use crate::{
+    annotations::AnnotationStore,
     colormaps::Colormap,
     data::DataProvider,
     data::comparison::ComparisonDataProvider,
@@ -17,6 +18,7 @@ use crate::{
     themes::Theme,
     tui::{
         action::Action,
+        command_palette::{Command, CommandPalette},
         config::Config,
         export_menu::ExportMenu,
         guard::TerminalGuard,
@@ -54,6 +56,8 @@ pub struct App {
     export_menu: ExportMenu,
     quit_confirm: bool,
     sim_paused: bool,
+    command_palette: CommandPalette,
+    annotations: AnnotationStore,
 }
 
 /// Alternative data provider modes.
@@ -78,10 +82,34 @@ impl App {
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
 
-        // Restore session state
+        // Load TOML config to extract appearance settings
+        let phasma_config = config_path
+            .as_deref()
+            .and_then(|p| crate::config::load(p).ok());
+
+        // Restore session state (session overrides defaults but TOML appearance overrides session)
         let saved = session::load();
-        let theme = Theme::from_name(&saved.theme);
-        let colormap = Colormap::from_name(&saved.colormap);
+        let (theme, colormap, guard) = if let Some(ref cfg) = phasma_config {
+            let app = &cfg.appearance;
+            let t = if app.theme != "dark" {
+                Theme::from_name(&app.theme)
+            } else {
+                Theme::from_name(&saved.theme)
+            };
+            let c = if app.colormap_default != "viridis" {
+                Colormap::from_name(&app.colormap_default)
+            } else {
+                Colormap::from_name(&saved.colormap)
+            };
+            let g = TerminalGuard::new(app.min_columns, app.min_rows);
+            (t, c, g)
+        } else {
+            (
+                Theme::from_name(&saved.theme),
+                Colormap::from_name(&saved.colormap),
+                TerminalGuard::default(),
+            )
+        };
 
         let mut tab_view = TabView::new(config_path.clone());
         tab_view.restore_tab(0); // Always start on F1 Setup
@@ -94,6 +122,11 @@ impl App {
 
         let mut status_bar = StatusBar::default();
         status_bar.set_config_name(config_name);
+
+        let mut data_provider = LiveDataProvider::default();
+        if let Some(cfg) = phasma_config {
+            data_provider.set_config(cfg);
+        }
 
         Ok(Self {
             tick_rate,
@@ -110,16 +143,18 @@ impl App {
             config_path,
             auto_run,
             tab_view,
-            data_provider: LiveDataProvider::default(),
+            data_provider,
             alt_provider: AltProvider::None,
             status_bar,
-            guard: TerminalGuard::default(),
+            guard,
             theme,
             colormap,
             help: HelpOverlay::default(),
             export_menu: ExportMenu::default(),
             quit_confirm: false,
             sim_paused: false,
+            command_palette: CommandPalette::default(),
+            annotations: AnnotationStore::new(),
         })
     }
 
@@ -190,8 +225,9 @@ impl App {
                 if let Some(ref handle) = self.sim_handle {
                     let _ = handle.control_tx.send(SimControl::Stop);
                 }
-                // Save session state
+                // Save session state and annotations
                 self.save_session();
+                let _ = self.annotations.save();
                 tui.stop()?;
                 break;
             }
@@ -277,10 +313,12 @@ impl App {
             {
                 // Perform the export
                 let fmt = self.export_menu.selected_format();
-                let dir = std::path::PathBuf::from("./phasma_export");
+                let stem = self.export_stem();
+                let dir = std::path::PathBuf::from(format!("./{stem}"));
                 let provider = self.active_provider();
                 let state = provider.current_state();
-                let result = export::export_diagnostics(&dir, fmt, provider.diagnostics(), state);
+                let result =
+                    export::export_diagnostics(&dir, fmt, provider.diagnostics(), state, &stem);
                 match &result {
                     Ok(path) => {
                         notifications::notify(
@@ -298,6 +336,18 @@ impl App {
                 self.export_menu.last_result = Some(result);
             }
             return Ok(());
+        }
+
+        // Command palette intercepts all keys when visible
+        if self.command_palette.visible {
+            match self.command_palette.handle_key(key) {
+                Ok(Some(cmd)) => {
+                    self.execute_command(cmd)?;
+                    return Ok(());
+                }
+                Ok(None) => return Ok(()),
+                Err(()) => return Ok(()), // Closed without executing
+            }
         }
 
         // Global keys
@@ -347,7 +397,38 @@ impl App {
                 action_tx.send(Action::VizCycleColormap)?;
                 return Ok(());
             }
+            KeyCode::Char(':') => {
+                self.command_palette.open();
+                return Ok(());
+            }
+            KeyCode::Char('a') => {
+                // Add bookmark at current simulation time
+                if let Some(state) = self.active_provider().current_state() {
+                    let label = format!("t={:.4}", state.t);
+                    self.annotations.add(state.t, label);
+                }
+                return Ok(());
+            }
             _ => {}
+        }
+
+        // Ctrl+B: navigate to next bookmark
+        if let crossterm::event::KeyCode::Char('b') = key.code
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if let Some(state) = self.active_provider().current_state() {
+                let current_t = state.t;
+                if let Some(ann) = self.annotations.next_after(current_t) {
+                    let target_t = ann.time;
+                    // Scrub to the annotation time
+                    self.data_provider.scrub_to_time(target_t);
+                    self.status_bar
+                        .set_scrub_position(self.data_provider.scrub_position());
+                }
+            }
+            return Ok(());
         }
 
         // Let the tab view handle keys (F1-F9, Tab, BackTab, tab-specific)
@@ -401,6 +482,9 @@ impl App {
             }
             MouseEventKind::ScrollDown => {
                 self.tab_view.handle_scroll(1);
+            }
+            MouseEventKind::Moved => {
+                self.tab_view.handle_mouse_move(mouse.column, mouse.row);
             }
             _ => {}
         }
@@ -549,6 +633,46 @@ impl App {
         Ok(())
     }
 
+    fn export_stem(&self) -> String {
+        let config_name = self
+            .config_path
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .and_then(|f| f.strip_suffix(".toml"))
+            .unwrap_or("phasma");
+        let now = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+        format!("{config_name}_{now}")
+    }
+
+    fn execute_command(&mut self, cmd: Command) -> color_eyre::Result<()> {
+        let action_tx = self.action_tx.clone();
+        match cmd {
+            Command::Quit => {
+                action_tx.send(Action::Quit)?;
+            }
+            Command::JumpToTime(_t) => {
+                // Scrub-to-time: find nearest snapshot in history
+                // For now, this is a placeholder — real implementation needs DataProvider support
+            }
+            Command::Export(fmt) => {
+                let stem = self.export_stem();
+                let dir = std::path::PathBuf::from(format!("./{stem}"));
+                let provider = self.active_provider();
+                let state = provider.current_state();
+                let format = crate::export::ExportFormat::from_name(&fmt);
+                let _ =
+                    export::export_diagnostics(&dir, format, provider.diagnostics(), state, &stem);
+            }
+            Command::SetColormap(name) => {
+                self.colormap = Colormap::from_name(&name);
+            }
+            Command::SetTheme(name) => {
+                self.theme = Theme::from_name(&name);
+            }
+        }
+        Ok(())
+    }
+
     fn save_session(&self) {
         let s = session::Session {
             config_path: self.config_path.clone(),
@@ -605,6 +729,9 @@ impl App {
                 // Overlays (rendered on top)
                 self.help.draw(frame, size, &theme);
                 self.export_menu.draw(frame, size, &theme);
+
+                // Command palette (rendered on top of everything)
+                self.command_palette.draw(frame, size, &theme);
 
                 // Quit confirmation dialog (topmost overlay)
                 if quit_confirm {

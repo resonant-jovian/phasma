@@ -9,8 +9,9 @@ pub fn export_screenshot(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    stem: &str,
 ) -> Result<String, String> {
-    let path = dir.join("screenshot.txt");
+    let path = dir.join(format!("{stem}.txt"));
     let mut f = std::fs::File::create(&path).map_err(|e| format!("create: {e}"))?;
 
     writeln!(

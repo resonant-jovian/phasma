@@ -358,7 +358,7 @@ impl RunControlTab {
         data_provider: &dyn DataProvider,
     ) {
         let [left_area, right_area] =
-            Layout::horizontal([Constraint::Min(40), Constraint::Length(36)]).areas(area);
+            Layout::horizontal([Constraint::Min(40), Constraint::Length(42)]).areas(area);
 
         let [chart_area, log_area] =
             Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])

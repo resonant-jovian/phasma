@@ -13,7 +13,7 @@ use crate::{data::DataProvider, themes::ThemeColors, tui::action::Action};
 const RECENT_CAP: usize = 500;
 const PERF_SUBSAMPLE: usize = 10;
 
-/// F8 Performance Dashboard — step timing, adaptive dt, cumulative cost.
+/// F8 Performance Dashboard — step timing, adaptive dt, cumulative cost, timing breakdown.
 pub struct PerformanceTab {
     /// (step, wall_ms) per step — recent high-resolution window
     wall_times: VecDeque<(f64, f64)>,
@@ -31,6 +31,8 @@ pub struct PerformanceTab {
     prev_t: f64,
     /// Running total wall seconds
     total_wall_sec: f64,
+    /// Rolling steps/second (last 100 steps)
+    steps_per_sec_history: VecDeque<(f64, f64)>,
 }
 
 impl Default for PerformanceTab {
@@ -45,6 +47,7 @@ impl Default for PerformanceTab {
             subsample_count: 0,
             prev_t: 0.0,
             total_wall_sec: 0.0,
+            steps_per_sec_history: VecDeque::with_capacity(RECENT_CAP),
         }
     }
 }
@@ -78,6 +81,20 @@ impl PerformanceTab {
         }
         self.cumulative_wall.push_back((t, self.total_wall_sec));
 
+        // Steps/second (rolling average over last 10 steps)
+        let avg_ms = if self.wall_times.len() >= 2 {
+            let n = self.wall_times.len().min(10);
+            let sum: f64 = self.wall_times.iter().rev().take(n).map(|(_, ms)| ms).sum();
+            sum / n as f64
+        } else {
+            wall_ms
+        };
+        let sps = if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 };
+        if self.steps_per_sec_history.len() >= RECENT_CAP {
+            self.steps_per_sec_history.pop_front();
+        }
+        self.steps_per_sec_history.push_back((t, sps));
+
         // Downsample into full history
         self.subsample_count += 1;
         if self.subsample_count >= PERF_SUBSAMPLE {
@@ -98,6 +115,7 @@ impl PerformanceTab {
         self.wall_times_full.clear();
         self.dt_history_full.clear();
         self.cumulative_wall_full.clear();
+        self.steps_per_sec_history.clear();
         self.subsample_count = 0;
         self.prev_t = 0.0;
         self.total_wall_sec = 0.0;
@@ -134,7 +152,7 @@ impl PerformanceTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        // 2×2 layout
+        // 2×2 + timing breakdown layout
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
@@ -208,6 +226,33 @@ impl PerformanceTab {
             ])
         };
 
+        // Efficiency metric: throughput trend
+        let throughput_trend = if self.steps_per_sec_history.len() >= 2 {
+            let recent = self
+                .steps_per_sec_history
+                .back()
+                .map(|(_, s)| *s)
+                .unwrap_or(0.0);
+            let old_idx = self.steps_per_sec_history.len().saturating_sub(20);
+            let old = self
+                .steps_per_sec_history
+                .get(old_idx)
+                .map(|(_, s)| *s)
+                .unwrap_or(recent);
+            if old > 0.0 {
+                let pct = ((recent - old) / old * 100.0) as i64;
+                if pct > 0 {
+                    format!("+{pct}%")
+                } else {
+                    format!("{pct}%")
+                }
+            } else {
+                "—".to_string()
+            }
+        } else {
+            "—".to_string()
+        };
+
         let lines = vec![
             Line::from(Span::styled(
                 " Performance",
@@ -222,7 +267,10 @@ impl PerformanceTab {
             val("Wall/step", format!("{last_ms:.1} ms")),
             val("Avg wall", format!("{avg_ms:.1} ms")),
             val("Min/max", format!("{min_ms:.1} / {max_ms:.1} ms")),
-            val("Steps/s", format!("{steps_per_sec:.1}")),
+            val(
+                "Steps/s",
+                format!("{steps_per_sec:.1} ({throughput_trend})"),
+            ),
             val("Total wall", format_duration(self.total_wall_sec)),
             Line::from(""),
             val("Grid", grid_str),
