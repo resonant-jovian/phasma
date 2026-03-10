@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
 };
 
-use crate::{data::live::LiveDataProvider, themes::ThemeColors, tui::action::Action};
+use crate::{data::DataProvider, themes::ThemeColors, tui::action::Action};
 
 type SeriesData<'a> = (&'a str, Vec<(f64, f64)>, Color);
 
@@ -88,9 +88,9 @@ impl EnergyTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
-        if data_provider.diagnostics.is_empty() {
+        if data_provider.diagnostics().is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(
@@ -131,9 +131,9 @@ impl EnergyTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
-        let diag = &data_provider.diagnostics;
+        let diag = data_provider.diagnostics();
 
         if self.show_drift {
             let drift_data = diag.energy_drift_series();
@@ -163,9 +163,9 @@ impl EnergyTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
-        let drift = data_provider.diagnostics.mass_drift_series();
+        let drift = data_provider.diagnostics().mass_drift_series();
         draw_single_series(frame, area, " ΔM/M₀ ", &drift, theme.chart[4], theme);
     }
 
@@ -174,9 +174,9 @@ impl EnergyTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
-        let drift = data_provider.diagnostics.c2_drift_series();
+        let drift = data_provider.diagnostics().c2_drift_series();
         draw_single_series(frame, area, " ΔC₂/C₂₀ ", &drift, theme.chart[5], theme);
     }
 
@@ -185,9 +185,9 @@ impl EnergyTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
-        let data = data_provider.diagnostics.entropy.iter_chart_data();
+        let data = data_provider.diagnostics().entropy.iter_chart_data();
         draw_single_series(frame, area, " S(t) ", &data, theme.chart[6], theme);
     }
 }
@@ -211,12 +211,15 @@ fn draw_single_series(
     }
 
     let (x_min, x_max, y_min, y_max) = data_bounds(data);
+    // Braille cells are 2 dots wide, so chart_width * 2 is the horizontal pixel count
+    let chart_width = area.width.saturating_sub(2) as usize; // minus borders
+    let dense = densify(data, chart_width * 2);
 
     let ds = Dataset::default()
         .marker(symbols::Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color))
-        .data(data);
+        .data(&dense);
 
     let chart = Chart::new(vec![ds])
         .block(
@@ -270,15 +273,24 @@ fn draw_multi_series(
         y_max = y_max.max(d);
     }
 
+    let chart_width = area.width.saturating_sub(2) as usize;
+    let target_points = chart_width * 2;
+
+    let dense_series: Vec<Vec<(f64, f64)>> = series
+        .iter()
+        .map(|(_, data, _)| densify(data, target_points))
+        .collect();
+
     let datasets: Vec<Dataset> = series
         .iter()
-        .map(|(name, data, color)| {
+        .zip(dense_series.iter())
+        .map(|((name, _, color), dense)| {
             Dataset::default()
                 .name(*name)
                 .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::default().fg(*color))
-                .data(data)
+                .data(dense)
         })
         .collect();
 
@@ -332,4 +344,35 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     // Add 5% padding
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, y_min - ypad, y_max + ypad)
+}
+
+/// Linearly interpolate sparse data so there are at least `target` points.
+/// This ensures braille line charts look solid even when the source data
+/// is heavily downsampled. Returns the input unchanged if already dense enough.
+fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
+    if data.len() >= target || data.len() < 2 {
+        return data.to_vec();
+    }
+    let mut out = Vec::with_capacity(target);
+    let n_segments = data.len() - 1;
+    let points_per_seg = (target / n_segments).max(2);
+    for i in 0..n_segments {
+        let (x0, y0) = data[i];
+        let (x1, y1) = data[i + 1];
+        let steps = if i < n_segments - 1 {
+            points_per_seg
+        } else {
+            // Last segment: emit enough to reach target
+            target.saturating_sub(out.len()).max(2)
+        };
+        for j in 0..steps {
+            let frac = j as f64 / steps as f64;
+            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
+        }
+    }
+    // Always include the final point
+    if let Some(&last) = data.last() {
+        out.push(last);
+    }
+    out
 }

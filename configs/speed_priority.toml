@@ -24,7 +24,7 @@ integrator = "strang"
 [time]
 t_final = 1000.0
 dt_mode = "adaptive"
-cfl_factor = 0.5
+cfl_factor = 0.01
 
 [output]
 directory = "output/speed_priority"

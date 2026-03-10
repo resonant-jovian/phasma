@@ -10,7 +10,6 @@ use ratatui::{
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
-    data::live::LiveDataProvider,
     themes::ThemeColors,
     tui::{action::Action, aspect::AspectCorrection, widgets::heatmap::HeatmapWidget},
 };
@@ -108,7 +107,7 @@ impl DensityTab {
         area: Rect,
         theme: &ThemeColors,
         colormap: Colormap,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let effective_cmap = colormap;
 

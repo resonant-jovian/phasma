@@ -8,9 +8,7 @@ use ratatui::{
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
 };
 
-use crate::{
-    data::DataProvider, data::live::LiveDataProvider, themes::ThemeColors, tui::action::Action,
-};
+use crate::{data::DataProvider, themes::ThemeColors, tui::action::Action};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ProfileKind {
@@ -85,7 +83,7 @@ impl ProfilesTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
         if state.is_none() {
@@ -183,23 +181,28 @@ impl ProfilesTab {
             let (x_min, x_max, y_min, y_max) = combined_bounds(&chart_data, &analytic_data);
             let x_label = if self.log_scale { "ln(r)" } else { "r" };
 
+            let chart_width = chart_area.width.saturating_sub(2) as usize;
+            let target = chart_width * 2;
+            let dense_chart = densify(&chart_data, target);
+            let dense_analytic = densify(&analytic_data, target);
+
             let mut datasets = vec![
                 Dataset::default()
                     .name("sim")
                     .marker(symbols::Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(color))
-                    .data(&chart_data),
+                    .data(&dense_chart),
             ];
 
-            if !analytic_data.is_empty() {
+            if !dense_analytic.is_empty() {
                 datasets.push(
                     Dataset::default()
                         .name("analytic")
                         .marker(symbols::Marker::Braille)
                         .graph_type(GraphType::Line)
                         .style(Style::default().fg(theme.dim))
-                        .data(&analytic_data),
+                        .data(&dense_analytic),
                 );
             }
 
@@ -530,4 +533,31 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     }
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, y_min - ypad, y_max + ypad)
+}
+
+/// Linearly interpolate sparse data so there are at least `target` points.
+fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
+    if data.len() >= target || data.len() < 2 {
+        return data.to_vec();
+    }
+    let mut out = Vec::with_capacity(target);
+    let n_segments = data.len() - 1;
+    let points_per_seg = (target / n_segments).max(2);
+    for i in 0..n_segments {
+        let (x0, y0) = data[i];
+        let (x1, y1) = data[i + 1];
+        let steps = if i < n_segments - 1 {
+            points_per_seg
+        } else {
+            target.saturating_sub(out.len()).max(2)
+        };
+        for j in 0..steps {
+            let frac = j as f64 / steps as f64;
+            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
+        }
+    }
+    if let Some(&last) = data.last() {
+        out.push(last);
+    }
+    out
 }

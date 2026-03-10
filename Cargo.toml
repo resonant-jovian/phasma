@@ -21,7 +21,7 @@ include = [
 
 [dependencies]
 caustic = { path = "../caustic" }
-toml = "1.0.4"
+toml = "1.0.6"
 better-panic = "0.3.0"
 clap = { version = "4.5.60", features = [
     "derive",
@@ -31,7 +31,7 @@ clap = { version = "4.5.60", features = [
     "string",
     "unstable-styles",
 ] }
-clap_mangen = "0.2"
+clap_mangen = "0.2.31"
 color-eyre = "0.6.5"
 config = "0.15.19"
 crossterm = { version = "0.29.0", features = ["serde", "event-stream"] }
@@ -58,7 +58,6 @@ zip = "8.2.0"
 ndarray = "0.17.2"
 ndarray-npy = "0.10.0"
 chrono = { version = "0.4.44", features = ["serde"] }
-arboard = "3.6.1"
 notify-rust = { version = "4.12.0", optional = true }
 arrow = "58.0.0"
 parquet = "58.0.0"

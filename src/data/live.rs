@@ -6,14 +6,15 @@ use crate::{config::PhasmaConfig, sim::SimState};
 // ── TimeSeriesStore ───────────────────────────────────────────────────────────
 
 const MAX_RECENT: usize = 10_000;
-const HISTORY_CAP: usize = 100;
 const SUBSAMPLE: usize = 100;
 
 pub struct TimeSeriesStore {
     /// High-resolution recent window: (time, value) pairs
     recent: VecDeque<(f64, f64)>,
-    /// Down-sampled long-term history
-    history: VecDeque<(f64, f64)>,
+    /// Down-sampled long-term history (unbounded — ~16 bytes per entry, grows slowly)
+    history: Vec<(f64, f64)>,
+    /// The very first value ever pushed (for drift calculations)
+    initial: Option<(f64, f64)>,
     subsample_count: usize,
 }
 
@@ -21,7 +22,8 @@ impl Default for TimeSeriesStore {
     fn default() -> Self {
         Self {
             recent: VecDeque::with_capacity(MAX_RECENT),
-            history: VecDeque::with_capacity(HISTORY_CAP),
+            history: Vec::new(),
+            initial: None,
             subsample_count: 0,
         }
     }
@@ -29,6 +31,10 @@ impl Default for TimeSeriesStore {
 
 impl TimeSeriesStore {
     pub fn push(&mut self, t: f64, v: f64) {
+        if self.initial.is_none() {
+            self.initial = Some((t, v));
+        }
+
         if self.recent.len() >= MAX_RECENT {
             self.recent.pop_front();
         }
@@ -36,25 +42,40 @@ impl TimeSeriesStore {
 
         self.subsample_count += 1;
         if self.subsample_count >= SUBSAMPLE {
-            if self.history.len() >= HISTORY_CAP {
-                self.history.pop_front();
-            }
-            self.history.push_back((t, v));
+            self.history.push((t, v));
             self.subsample_count = 0;
         }
     }
 
-    /// Chart data as (time, value) pairs from the recent window.
+    /// Chart data covering the full simulation from t=0 to now.
+    /// Returns downsampled history for the older part, then high-resolution recent data.
     pub fn iter_chart_data(&self) -> Vec<(f64, f64)> {
-        self.recent.iter().copied().collect()
+        let recent_start_t = self
+            .recent
+            .front()
+            .map(|(t, _)| *t)
+            .unwrap_or(f64::INFINITY);
+
+        // History points that are older than the recent window
+        let mut data: Vec<(f64, f64)> = self
+            .history
+            .iter()
+            .copied()
+            .filter(|(t, _)| *t < recent_start_t)
+            .collect();
+
+        // Then append the full recent window
+        data.extend(self.recent.iter().copied());
+        data
     }
 
     pub fn last_value(&self) -> Option<f64> {
         self.recent.back().map(|(_, v)| *v)
     }
 
+    /// The very first value ever recorded (t=0).
     pub fn first_value(&self) -> Option<f64> {
-        self.recent.front().map(|(_, v)| *v)
+        self.initial.map(|(_, v)| v)
     }
 
     pub fn len(&self) -> usize {
@@ -62,7 +83,7 @@ impl TimeSeriesStore {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.recent.is_empty()
+        self.recent.is_empty() && self.history.is_empty()
     }
 }
 
@@ -113,9 +134,9 @@ impl DiagnosticsStore {
             return Vec::new();
         }
         self.total_energy
-            .recent
-            .iter()
-            .map(|&(t, e)| (t, (e - e0) / e0.abs()))
+            .iter_chart_data()
+            .into_iter()
+            .map(|(t, e)| (t, (e - e0) / e0.abs()))
             .collect()
     }
 
@@ -127,9 +148,9 @@ impl DiagnosticsStore {
             return Vec::new();
         }
         self.total_mass
-            .recent
-            .iter()
-            .map(|&(t, m)| (t, (m - m0) / m0.abs()))
+            .iter_chart_data()
+            .into_iter()
+            .map(|(t, m)| (t, (m - m0) / m0.abs()))
             .collect()
     }
 
@@ -141,9 +162,9 @@ impl DiagnosticsStore {
             return Vec::new();
         }
         self.casimir_c2
-            .recent
-            .iter()
-            .map(|&(t, c)| (t, (c - c0) / c0.abs()))
+            .iter_chart_data()
+            .into_iter()
+            .map(|(t, c)| (t, (c - c0) / c0.abs()))
             .collect()
     }
 }
@@ -251,12 +272,6 @@ impl LiveDataProvider {
         self.scrub_index = None;
     }
 
-    /// Returns (current_index, total_snapshots) for scrub position display.
-    pub fn scrub_position(&self) -> Option<(usize, usize)> {
-        self.scrub_index
-            .map(|idx| (idx, self.snapshot_history.len()))
-    }
-
     /// Get the effective state (scrubbed or live).
     fn effective_state(&self) -> Option<&SimState> {
         if let Some(idx) = self.scrub_index {
@@ -305,5 +320,26 @@ impl DataProvider for LiveDataProvider {
 
     fn config(&self) -> Option<&PhasmaConfig> {
         self.config.as_ref()
+    }
+
+    fn diagnostics(&self) -> &DiagnosticsStore {
+        &self.diagnostics
+    }
+
+    fn scrub_position(&self) -> Option<(usize, usize)> {
+        self.scrub_index
+            .map(|idx| (idx, self.snapshot_history.len()))
+    }
+
+    fn scrub_backward(&mut self) {
+        LiveDataProvider::scrub_backward(self);
+    }
+
+    fn scrub_forward(&mut self) {
+        LiveDataProvider::scrub_forward(self);
+    }
+
+    fn scrub_to_live(&mut self) {
+        LiveDataProvider::scrub_to_live(self);
     }
 }

@@ -7,8 +7,12 @@ use tracing::{debug, info};
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
+    data::comparison::ComparisonDataProvider,
     data::live::LiveDataProvider,
-    export, notifications, session,
+    data::playback::PlaybackDataProvider,
+    export, notifications,
+    runner::monitor::MonitorHandle,
+    session,
     sim::{SimControl, SimHandle},
     themes::Theme,
     tui::{
@@ -35,11 +39,13 @@ pub struct App {
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
     sim_handle: Option<SimHandle>,
+    monitor_handle: Option<MonitorHandle>,
     config_path: Option<String>,
     auto_run: bool,
-    // New 9-tab system
     tab_view: TabView,
     data_provider: LiveDataProvider,
+    /// Alternative data provider for playback/comparison modes (overrides data_provider for rendering).
+    alt_provider: AltProvider,
     status_bar: StatusBar,
     guard: TerminalGuard,
     theme: Theme,
@@ -48,6 +54,13 @@ pub struct App {
     export_menu: ExportMenu,
     quit_confirm: bool,
     sim_paused: bool,
+}
+
+/// Alternative data provider modes.
+pub enum AltProvider {
+    None,
+    Playback(Box<PlaybackDataProvider>),
+    Comparison(Box<ComparisonDataProvider>),
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -93,10 +106,12 @@ impl App {
             action_tx,
             action_rx,
             sim_handle: None,
+            monitor_handle: None,
             config_path,
             auto_run,
             tab_view,
             data_provider: LiveDataProvider::default(),
+            alt_provider: AltProvider::None,
             status_bar,
             guard: TerminalGuard::default(),
             theme,
@@ -106,6 +121,44 @@ impl App {
             quit_confirm: false,
             sim_paused: false,
         })
+    }
+
+    /// Create an App in playback mode.
+    pub fn new_with_playback(
+        tick_rate: f64,
+        frame_rate: f64,
+        provider: PlaybackDataProvider,
+    ) -> color_eyre::Result<Self> {
+        let mut app = Self::new(tick_rate, frame_rate, None, false)?;
+        app.alt_provider = AltProvider::Playback(Box::new(provider));
+        app.tab_view.restore_tab(2); // Start on Density tab
+        Ok(app)
+    }
+
+    /// Create an App in comparison mode.
+    pub fn new_with_comparison(
+        tick_rate: f64,
+        frame_rate: f64,
+        provider: ComparisonDataProvider,
+    ) -> color_eyre::Result<Self> {
+        let mut app = Self::new(tick_rate, frame_rate, None, false)?;
+        app.alt_provider = AltProvider::Comparison(Box::new(provider));
+        app.tab_view.restore_tab(2); // Start on Density tab
+        Ok(app)
+    }
+
+    /// Set a monitor handle for --monitor / --tail modes.
+    pub fn set_monitor_handle(&mut self, handle: MonitorHandle) {
+        self.monitor_handle = Some(handle);
+    }
+
+    /// Get the active data provider (alt if set, otherwise live).
+    fn active_provider(&self) -> &dyn DataProvider {
+        match &self.alt_provider {
+            AltProvider::Playback(p) => &**p,
+            AltProvider::Comparison(p) => &**p,
+            AltProvider::None => &self.data_provider,
+        }
     }
 
     pub async fn run(&mut self) -> color_eyre::Result<()> {
@@ -169,6 +222,21 @@ impl App {
             }
         }
 
+        // Drain monitor handle updates (non-blocking)
+        if let Some(ref mut handle) = self.monitor_handle {
+            while let Ok(state) = handle.state_rx.try_recv() {
+                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
+            }
+        }
+
+        // Tick playback provider
+        if let AltProvider::Playback(ref mut p) = self.alt_provider {
+            p.tick();
+        }
+        if let AltProvider::Comparison(ref mut p) = self.alt_provider {
+            p.tick();
+        }
+
         Ok(())
     }
 
@@ -210,9 +278,9 @@ impl App {
                 // Perform the export
                 let fmt = self.export_menu.selected_format();
                 let dir = std::path::PathBuf::from("./phasma_export");
-                let state = self.data_provider.current_state();
-                let result =
-                    export::export_diagnostics(&dir, fmt, &self.data_provider.diagnostics, state);
+                let provider = self.active_provider();
+                let state = provider.current_state();
+                let result = export::export_diagnostics(&dir, fmt, provider.diagnostics(), state);
                 match &result {
                     Ok(path) => {
                         notifications::notify(
@@ -244,8 +312,10 @@ impl App {
                 return Ok(());
             }
             KeyCode::Char(' ') => {
-                // Global pause/resume
-                if self.sim_handle.is_some() {
+                // Global pause/resume — works for sim and playback
+                if let AltProvider::Playback(ref mut p) = self.alt_provider {
+                    p.toggle_play();
+                } else if self.sim_handle.is_some() {
                     if self.sim_paused {
                         action_tx.send(Action::SimResume)?;
                     } else {
@@ -253,6 +323,13 @@ impl App {
                     }
                 }
                 return Ok(());
+            }
+            KeyCode::Char('c') => {
+                // Comparison view cycle
+                if let AltProvider::Comparison(ref mut p) = self.alt_provider {
+                    p.cycle_view();
+                    return Ok(());
+                }
             }
             KeyCode::Char('?') => {
                 self.help.toggle();
@@ -424,17 +501,29 @@ impl App {
                     }
                 }
                 Action::ScrubBackward => {
-                    self.data_provider.scrub_backward();
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_backward(),
+                        AltProvider::Comparison(p) => p.scrub_backward(),
+                        AltProvider::None => self.data_provider.scrub_backward(),
+                    }
                     self.status_bar
-                        .set_scrub_position(self.data_provider.scrub_position());
+                        .set_scrub_position(self.active_provider().scrub_position());
                 }
                 Action::ScrubForward => {
-                    self.data_provider.scrub_forward();
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_forward(),
+                        AltProvider::Comparison(p) => p.scrub_forward(),
+                        AltProvider::None => self.data_provider.scrub_forward(),
+                    }
                     self.status_bar
-                        .set_scrub_position(self.data_provider.scrub_position());
+                        .set_scrub_position(self.active_provider().scrub_position());
                 }
                 Action::ScrubToLive => {
-                    self.data_provider.scrub_to_live();
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_to_live(),
+                        AltProvider::Comparison(p) => p.scrub_to_live(),
+                        AltProvider::None => self.data_provider.scrub_to_live(),
+                    }
                     self.status_bar.set_scrub_position(None);
                 }
                 Action::VizCycleColormap => {
@@ -495,6 +584,12 @@ impl App {
                 self.status_bar.draw(frame, layout.status_area, &theme);
 
                 // Tab bar + content + footer
+                // Split borrows to satisfy the borrow checker
+                let provider: &dyn DataProvider = match &self.alt_provider {
+                    AltProvider::Playback(p) => &**p,
+                    AltProvider::Comparison(p) => &**p,
+                    AltProvider::None => &self.data_provider,
+                };
                 self.tab_view.draw(
                     frame,
                     crate::tui::tabs::TabAreas {
@@ -504,7 +599,7 @@ impl App {
                     },
                     &theme,
                     colormap,
-                    &self.data_provider,
+                    provider,
                 );
 
                 // Overlays (rendered on top)

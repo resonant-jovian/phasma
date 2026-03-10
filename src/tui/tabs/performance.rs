@@ -8,20 +8,25 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 
-use crate::{
-    data::DataProvider, data::live::LiveDataProvider, themes::ThemeColors, tui::action::Action,
-};
+use crate::{data::DataProvider, themes::ThemeColors, tui::action::Action};
 
-const HISTORY_CAP: usize = 500;
+const RECENT_CAP: usize = 500;
+const PERF_SUBSAMPLE: usize = 10;
 
 /// F8 Performance Dashboard — step timing, adaptive dt, cumulative cost.
 pub struct PerformanceTab {
-    /// (step, wall_ms) per step
+    /// (step, wall_ms) per step — recent high-resolution window
     wall_times: VecDeque<(f64, f64)>,
-    /// (sim_time, dt) — adaptive timestep evolution
+    /// (sim_time, dt) — adaptive timestep evolution (recent)
     dt_history: VecDeque<(f64, f64)>,
-    /// (step, cumulative_wall_sec) — total wall time spent
+    /// (sim_time, cumulative_wall_sec) — total wall time spent (recent)
     cumulative_wall: VecDeque<(f64, f64)>,
+    /// Downsampled full history for each series (never dropped)
+    wall_times_full: Vec<(f64, f64)>,
+    dt_history_full: Vec<(f64, f64)>,
+    cumulative_wall_full: Vec<(f64, f64)>,
+    /// Subsample counter for full history
+    subsample_count: usize,
     /// Previous sim time for computing dt
     prev_t: f64,
     /// Running total wall seconds
@@ -31,9 +36,13 @@ pub struct PerformanceTab {
 impl Default for PerformanceTab {
     fn default() -> Self {
         Self {
-            wall_times: VecDeque::with_capacity(HISTORY_CAP),
-            dt_history: VecDeque::with_capacity(HISTORY_CAP),
-            cumulative_wall: VecDeque::with_capacity(HISTORY_CAP),
+            wall_times: VecDeque::with_capacity(RECENT_CAP),
+            dt_history: VecDeque::with_capacity(RECENT_CAP),
+            cumulative_wall: VecDeque::with_capacity(RECENT_CAP),
+            wall_times_full: Vec::new(),
+            dt_history_full: Vec::new(),
+            cumulative_wall_full: Vec::new(),
+            subsample_count: 0,
             prev_t: 0.0,
             total_wall_sec: 0.0,
         }
@@ -43,28 +52,42 @@ impl Default for PerformanceTab {
 impl PerformanceTab {
     /// Ingest performance data from the latest SimState.
     pub fn ingest(&mut self, step: u64, t: f64, wall_ms: f64) {
-        // Wall time per step
-        if self.wall_times.len() >= HISTORY_CAP {
+        // Wall time per step (recent)
+        if self.wall_times.len() >= RECENT_CAP {
             self.wall_times.pop_front();
         }
         self.wall_times.push_back((step as f64, wall_ms));
 
         // Adaptive dt
-        if t > self.prev_t && self.prev_t > 0.0 {
+        let dt_val = if t > self.prev_t && self.prev_t > 0.0 {
             let dt = t - self.prev_t;
-            if self.dt_history.len() >= HISTORY_CAP {
+            if self.dt_history.len() >= RECENT_CAP {
                 self.dt_history.pop_front();
             }
             self.dt_history.push_back((t, dt));
-        }
+            Some((t, dt))
+        } else {
+            None
+        };
         self.prev_t = t;
 
         // Cumulative wall time
         self.total_wall_sec += wall_ms / 1000.0;
-        if self.cumulative_wall.len() >= HISTORY_CAP {
+        if self.cumulative_wall.len() >= RECENT_CAP {
             self.cumulative_wall.pop_front();
         }
         self.cumulative_wall.push_back((t, self.total_wall_sec));
+
+        // Downsample into full history
+        self.subsample_count += 1;
+        if self.subsample_count >= PERF_SUBSAMPLE {
+            self.wall_times_full.push((step as f64, wall_ms));
+            if let Some(dt_point) = dt_val {
+                self.dt_history_full.push(dt_point);
+            }
+            self.cumulative_wall_full.push((t, self.total_wall_sec));
+            self.subsample_count = 0;
+        }
     }
 
     /// Reset for a new run.
@@ -72,8 +95,24 @@ impl PerformanceTab {
         self.wall_times.clear();
         self.dt_history.clear();
         self.cumulative_wall.clear();
+        self.wall_times_full.clear();
+        self.dt_history_full.clear();
+        self.cumulative_wall_full.clear();
+        self.subsample_count = 0;
         self.prev_t = 0.0;
         self.total_wall_sec = 0.0;
+    }
+
+    /// Merge full history + recent window for a complete chart from t=0.
+    fn merge_series(full: &[(f64, f64)], recent: &VecDeque<(f64, f64)>) -> Vec<(f64, f64)> {
+        let recent_start = recent.front().map(|(x, _)| *x).unwrap_or(f64::INFINITY);
+        let mut data: Vec<(f64, f64)> = full
+            .iter()
+            .copied()
+            .filter(|(x, _)| *x < recent_start)
+            .collect();
+        data.extend(recent.iter().copied());
+        data
     }
 
     /// Called on every SimUpdate to record performance data regardless of active tab.
@@ -93,7 +132,7 @@ impl PerformanceTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         // 2×2 layout
         let [top, bottom] =
@@ -117,7 +156,7 @@ impl PerformanceTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
         let step = state.map(|s| s.step).unwrap_or(0);
@@ -206,7 +245,7 @@ impl PerformanceTab {
     }
 
     fn draw_dt_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let data: Vec<(f64, f64)> = self.dt_history.iter().copied().collect();
+        let data = Self::merge_series(&self.dt_history_full, &self.dt_history);
 
         if data.is_empty() {
             frame.render_widget(
@@ -223,12 +262,13 @@ impl PerformanceTab {
         }
 
         let (x_min, x_max, y_min, y_max) = data_bounds(&data);
+        let dense = densify(&data, area.width.saturating_sub(2) as usize * 2);
 
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(theme.chart[4]))
-            .data(&data);
+            .data(&dense);
 
         let chart = Chart::new(vec![ds])
             .block(
@@ -254,7 +294,7 @@ impl PerformanceTab {
     }
 
     fn draw_wall_time_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let data: Vec<(f64, f64)> = self.wall_times.iter().copied().collect();
+        let data = Self::merge_series(&self.wall_times_full, &self.wall_times);
 
         if data.is_empty() {
             frame.render_widget(
@@ -267,12 +307,13 @@ impl PerformanceTab {
         }
 
         let (x_min, x_max, y_min, y_max) = data_bounds(&data);
+        let dense = densify(&data, area.width.saturating_sub(2) as usize * 2);
 
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(theme.chart[3]))
-            .data(&data);
+            .data(&dense);
 
         let chart = Chart::new(vec![ds])
             .block(
@@ -298,7 +339,7 @@ impl PerformanceTab {
     }
 
     fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let data: Vec<(f64, f64)> = self.cumulative_wall.iter().copied().collect();
+        let data = Self::merge_series(&self.cumulative_wall_full, &self.cumulative_wall);
 
         if data.is_empty() {
             frame.render_widget(
@@ -311,12 +352,13 @@ impl PerformanceTab {
         }
 
         let (x_min, x_max, y_min, y_max) = data_bounds(&data);
+        let dense = densify(&data, area.width.saturating_sub(2) as usize * 2);
 
         let ds = Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(theme.chart[1]))
-            .data(&data);
+            .data(&dense);
 
         let chart = Chart::new(vec![ds])
             .block(
@@ -380,4 +422,31 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     }
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, (y_min - ypad).max(0.0), y_max + ypad)
+}
+
+/// Linearly interpolate sparse data so there are at least `target` points.
+fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
+    if data.len() >= target || data.len() < 2 {
+        return data.to_vec();
+    }
+    let mut out = Vec::with_capacity(target);
+    let n_segments = data.len() - 1;
+    let points_per_seg = (target / n_segments).max(2);
+    for i in 0..n_segments {
+        let (x0, y0) = data[i];
+        let (x1, y1) = data[i + 1];
+        let steps = if i < n_segments - 1 {
+            points_per_seg
+        } else {
+            target.saturating_sub(out.len()).max(2)
+        };
+        for j in 0..steps {
+            let frac = j as f64 / steps as f64;
+            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
+        }
+    }
+    if let Some(&last) = data.last() {
+        out.push(last);
+    }
+    out
 }

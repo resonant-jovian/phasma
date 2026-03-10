@@ -5,6 +5,8 @@ pub mod playback;
 
 use crate::{config::PhasmaConfig, sim::SimState};
 
+use live::DiagnosticsStore;
+
 /// Uniform interface for both live and playback data sources.
 pub trait DataProvider: Send {
     fn current_state(&self) -> Option<&SimState>;
@@ -18,4 +20,11 @@ pub trait DataProvider: Send {
         fixed: &[(usize, f64)],
     ) -> Option<(Vec<f64>, usize, usize)>;
     fn config(&self) -> Option<&PhasmaConfig>;
+    fn diagnostics(&self) -> &DiagnosticsStore;
+    fn scrub_position(&self) -> Option<(usize, usize)> {
+        None
+    }
+    fn scrub_backward(&mut self) {}
+    fn scrub_forward(&mut self) {}
+    fn scrub_to_live(&mut self) {}
 }

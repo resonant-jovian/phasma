@@ -22,7 +22,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     colormaps::Colormap,
-    data::live::LiveDataProvider,
+    data::DataProvider,
     themes::{Theme, ThemeColors},
     tui::{action::Action, config::Config},
 };
@@ -221,7 +221,7 @@ impl TabView {
         areas: TabAreas,
         theme: &ThemeColors,
         colormap: Colormap,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         // Tab bar
         let titles: Vec<String> = Tab::iter().map(|t| t.to_string()).collect();
@@ -313,10 +313,12 @@ fn help_line(selected: Tab) -> Line<'static> {
     match selected {
         Tab::Setup => {
             spans.extend([
-                key("  [r]"),
-                desc(" run  "),
+                key("  [j/k]"),
+                desc(" nav  "),
                 key("[Enter]"),
-                desc(" load config"),
+                desc(" load  "),
+                key("[r]"),
+                desc(" run"),
             ]);
         }
         Tab::RunControl => {
@@ -325,6 +327,8 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" pause  "),
                 key("[s]"),
                 desc(" stop  "),
+                key("[r]"),
+                desc(" restart  "),
                 key("[1-3]"),
                 desc(" log filter"),
             ]);
@@ -336,11 +340,30 @@ fn help_line(selected: Tab) -> Line<'static> {
                 key("[+/-]"),
                 desc(" zoom  "),
                 key("[r]"),
-                desc(" reset"),
+                desc(" reset  "),
+                key("[l]"),
+                desc(" log  "),
+                key("[c]"),
+                desc(" cmap  "),
+                key("[i]"),
+                desc(" info"),
             ]);
         }
         Tab::PhaseSpace => {
-            spans.extend([key("  [1-6]"), desc(" dims  "), key("[+/-]"), desc(" zoom")]);
+            spans.extend([
+                key("  [1-6]"),
+                desc(" dims  "),
+                key("[+/-]"),
+                desc(" zoom  "),
+                key("[r]"),
+                desc(" reset  "),
+                key("[l]"),
+                desc(" log  "),
+                key("[c]"),
+                desc(" cmap  "),
+                key("[i]"),
+                desc(" info"),
+            ]);
         }
         Tab::Energy => {
             spans.extend([
@@ -364,13 +387,13 @@ fn help_line(selected: Tab) -> Line<'static> {
         }
         Tab::Settings => {
             spans.extend([
-                key("  [◄/►]"),
-                desc(" change  "),
-                key("[▲/▼]"),
-                desc(" navigate"),
+                key("  [j/k]"),
+                desc(" nav  "),
+                key("[h/l ◄/►]"),
+                desc(" change"),
             ]);
         }
-        _ => {}
+        _ => {} // Rank, Performance, Poisson: display-only
     }
 
     Line::from(spans)

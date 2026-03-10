@@ -13,7 +13,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
-    data::live::LiveDataProvider,
     sim::SimState,
     themes::ThemeColors,
     tui::{
@@ -26,14 +25,19 @@ use crate::{
     },
 };
 
-const MAX_ENERGY_HISTORY: usize = 500;
+const MAX_ENERGY_RECENT: usize = 500;
+const RC_SUBSAMPLE: usize = 10;
 
 pub struct RunControlTab {
     sim_state: Option<SimState>,
     initial_energy: f64,
     initial_mass: f64,
     initial_c2: f64,
-    energy_history: Vec<(f64, f64)>,
+    /// Recent high-resolution energy ratio history
+    energy_recent: VecDeque<(f64, f64)>,
+    /// Downsampled full history (never dropped)
+    energy_full: Vec<(f64, f64)>,
+    rc_subsample_count: usize,
     log_stream: VecDeque<(Level, String)>,
     log_filter: LogFilter,
     paused: bool,
@@ -62,7 +66,9 @@ impl Default for RunControlTab {
             initial_energy: 0.0,
             initial_mass: 0.0,
             initial_c2: 0.0,
-            energy_history: Vec::new(),
+            energy_recent: VecDeque::with_capacity(MAX_ENERGY_RECENT),
+            energy_full: Vec::new(),
+            rc_subsample_count: 0,
             log_stream: VecDeque::with_capacity(200),
             log_filter: LogFilter::All,
             paused: false,
@@ -131,10 +137,16 @@ impl RunControlTab {
                 // Energy history
                 if self.initial_energy != 0.0 {
                     let e_ratio = state.total_energy / self.initial_energy;
-                    if self.energy_history.len() >= MAX_ENERGY_HISTORY {
-                        self.energy_history.remove(0);
+                    if self.energy_recent.len() >= MAX_ENERGY_RECENT {
+                        self.energy_recent.pop_front();
                     }
-                    self.energy_history.push((state.t, e_ratio));
+                    self.energy_recent.push_back((state.t, e_ratio));
+
+                    self.rc_subsample_count += 1;
+                    if self.rc_subsample_count >= RC_SUBSAMPLE {
+                        self.energy_full.push((state.t, e_ratio));
+                        self.rc_subsample_count = 0;
+                    }
                 }
 
                 if let Some(reason) = state.exit_reason {
@@ -158,7 +170,9 @@ impl RunControlTab {
                 self.push_log(Level::Warn, "Simulation stopped by user".to_string());
             }
             Action::SimStart | Action::SimRestart => {
-                self.energy_history.clear();
+                self.energy_recent.clear();
+                self.energy_full.clear();
+                self.rc_subsample_count = 0;
                 self.initial_energy = 0.0;
                 self.initial_mass = 0.0;
                 self.initial_c2 = 0.0;
@@ -185,7 +199,7 @@ impl RunControlTab {
         area: Rect,
         theme: &ThemeColors,
         colormap: Colormap,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let ideal_map_h = (area.width / 4).clamp(8, area.height.saturating_sub(16));
 
@@ -294,7 +308,7 @@ impl RunControlTab {
         area: Rect,
         theme: &ThemeColors,
         colormap: Colormap,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let [density_area, phase_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -341,7 +355,7 @@ impl RunControlTab {
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
-        data_provider: &LiveDataProvider,
+        data_provider: &dyn DataProvider,
     ) {
         let [left_area, right_area] =
             Layout::horizontal([Constraint::Min(40), Constraint::Length(36)]).areas(area);
@@ -350,8 +364,23 @@ impl RunControlTab {
             Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
                 .areas(left_area);
 
-        // Energy chart
-        if self.energy_history.is_empty() {
+        // Energy chart — merge full history + recent for complete view from t=0
+        let energy_data = {
+            let recent_start = self
+                .energy_recent
+                .front()
+                .map(|(t, _)| *t)
+                .unwrap_or(f64::INFINITY);
+            let mut data: Vec<(f64, f64)> = self
+                .energy_full
+                .iter()
+                .copied()
+                .filter(|(t, _)| *t < recent_start)
+                .collect();
+            data.extend(self.energy_recent.iter().copied());
+            data
+        };
+        if energy_data.is_empty() {
             frame.render_widget(
                 Paragraph::new("Energy history will appear once the sim starts.")
                     .block(Block::bordered().title(" E(t)/E₀ "))
@@ -359,15 +388,13 @@ impl RunControlTab {
                 chart_area,
             );
         } else {
-            let t_min = self.energy_history.first().map(|(t, _)| *t).unwrap_or(0.0);
-            let t_max = self
-                .energy_history
+            let t_min = energy_data.first().map(|(t, _)| *t).unwrap_or(0.0);
+            let t_max = energy_data
                 .last()
                 .map(|(t, _)| *t)
                 .unwrap_or(1.0)
                 .max(t_min + 0.001);
-            let (e_min, e_max) = self
-                .energy_history
+            let (e_min, e_max) = energy_data
                 .iter()
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, e)| {
                     (lo.min(*e), hi.max(*e))
@@ -375,13 +402,16 @@ impl RunControlTab {
             let e_lo = (e_min - 0.001).min(0.99);
             let e_hi = (e_max + 0.001).max(1.01);
 
+            let chart_width = chart_area.width.saturating_sub(2) as usize;
+            let dense = densify(&energy_data, chart_width * 2);
+
             let chart = Chart::new(vec![
                 Dataset::default()
                     .name("E/E₀")
-                    .marker(symbols::Marker::Dot)
+                    .marker(symbols::Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(theme.chart[0]))
-                    .data(&self.energy_history),
+                    .data(&dense),
             ])
             .block(Block::bordered().title(" E(t)/E₀ "))
             .x_axis(
@@ -516,4 +546,31 @@ fn format_eta(secs: f64) -> String {
     } else {
         format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
     }
+}
+
+/// Linearly interpolate sparse data so there are at least `target` points.
+fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
+    if data.len() >= target || data.len() < 2 {
+        return data.to_vec();
+    }
+    let mut out = Vec::with_capacity(target);
+    let n_segments = data.len() - 1;
+    let points_per_seg = (target / n_segments).max(2);
+    for i in 0..n_segments {
+        let (x0, y0) = data[i];
+        let (x1, y1) = data[i + 1];
+        let steps = if i < n_segments - 1 {
+            points_per_seg
+        } else {
+            target.saturating_sub(out.len()).max(2)
+        };
+        for j in 0..steps {
+            let frac = j as f64 / steps as f64;
+            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
+        }
+    }
+    if let Some(&last) = data.last() {
+        out.push(last);
+    }
+    out
 }

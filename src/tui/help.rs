@@ -34,7 +34,7 @@ impl HelpOverlay {
 
         // Center overlay
         let w = area.width.min(62);
-        let h = area.height.min(48);
+        let h = area.height.min(56);
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
         let overlay = Rect::new(x, y, w, h);
@@ -51,6 +51,15 @@ impl HelpOverlay {
         };
         let desc = |s: &'static str| Span::styled(s, Style::default().fg(theme.fg));
 
+        let section = |s: &'static str| {
+            Line::from(vec![Span::styled(
+                s,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )])
+        };
+
         let lines = vec![
             Line::from(vec![Span::styled(
                 " Keybindings ",
@@ -59,12 +68,7 @@ impl HelpOverlay {
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Global",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
+            section("Global"),
             Line::from(vec![key("  F1-F10    "), desc("Switch tabs")]),
             Line::from(vec![key("  Tab       "), desc("Next tab")]),
             Line::from(vec![key("  Shift+Tab "), desc("Previous tab")]),
@@ -73,81 +77,78 @@ impl HelpOverlay {
                 desc("Quit (confirms if sim running)"),
             ]),
             Line::from(vec![key("  Space     "), desc("Pause/resume simulation")]),
-            Line::from(vec![key("  ?         "), desc("Toggle help")]),
+            Line::from(vec![key("  ?         "), desc("Toggle this help")]),
             Line::from(vec![
                 key("  e         "),
-                desc("Export menu (1-9 for quick select)"),
+                desc("Export menu (1-9 quick select)"),
             ]),
-            Line::from(vec![key("  Shift+t   "), desc("Cycle theme")]),
-            Line::from(vec![key("  Shift+c   "), desc("Cycle colormap (global)")]),
+            Line::from(vec![key("  T         "), desc("Cycle theme")]),
+            Line::from(vec![key("  C         "), desc("Cycle colormap (global)")]),
             Line::from(vec![
                 key("  ◄/►       "),
                 desc("Scrub backward/forward in time"),
             ]),
             Line::from(vec![key("  Backspace "), desc("Jump to live (exit scrub)")]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Setup (F1)",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![key("  j/k       "), desc("Navigate configs")]),
+            section("Setup (F1)"),
+            Line::from(vec![key("  j/k ▲/▼   "), desc("Navigate config list")]),
             Line::from(vec![key("  Enter     "), desc("Load selected config")]),
             Line::from(vec![key("  r         "), desc("Start simulation")]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Run Control (F2)",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
+            section("Run Control (F2)"),
             Line::from(vec![key("  p/Space   "), desc("Pause/resume")]),
-            Line::from(vec![key("  s         "), desc("Stop")]),
+            Line::from(vec![key("  s         "), desc("Stop simulation")]),
+            Line::from(vec![key("  r         "), desc("Restart simulation")]),
             Line::from(vec![
                 key("  1/2/3     "),
-                desc("Log filter: All/Warn+/Error"),
+                desc("Log filter: All / Warn+ / Error"),
             ]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Density (F3) / Phase (F4)",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![
-                key("  x/y/z     "),
-                desc("Select projection axis (F3)"),
-            ]),
-            Line::from(vec![key("  1-6       "), desc("Select dims (F4 Phase)")]),
+            section("Density (F3)"),
+            Line::from(vec![key("  x/y/z     "), desc("Projection axis")]),
             Line::from(vec![key("  +/- scroll"), desc("Zoom in/out")]),
             Line::from(vec![key("  r/0       "), desc("Reset zoom")]),
             Line::from(vec![key("  l         "), desc("Toggle log scale")]),
             Line::from(vec![key("  c         "), desc("Cycle colormap")]),
-            Line::from(vec![key("  i         "), desc("Toggle info overlay")]),
+            Line::from(vec![key("  i         "), desc("Toggle info bar")]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Energy (F5)",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![key("  t/k/w     "), desc("Toggle traces: E/T/W")]),
+            section("Phase Space (F4)"),
+            Line::from(vec![key("  1/2/3     "), desc("Spatial dim (x₁/x₂/x₃)")]),
+            Line::from(vec![key("  4/5/6     "), desc("Velocity dim (v₁/v₂/v₃)")]),
+            Line::from(vec![key("  +/- scroll"), desc("Zoom in/out")]),
+            Line::from(vec![key("  r/0       "), desc("Reset zoom")]),
+            Line::from(vec![key("  l         "), desc("Toggle log scale")]),
+            Line::from(vec![key("  c         "), desc("Cycle colormap")]),
+            Line::from(vec![key("  i         "), desc("Toggle info bar")]),
+            Line::from(""),
+            section("Energy (F5)"),
+            Line::from(vec![
+                key("  t/k/w     "),
+                desc("Toggle traces: total/kinetic/potential"),
+            ]),
             Line::from(vec![key("  d         "), desc("Toggle drift view")]),
-            Line::from(vec![key("  1-4       "), desc("Select panel")]),
+            Line::from(vec![
+                key("  1/2/3/4   "),
+                desc("Panel: Energy/Mass/Casimir/Entropy"),
+            ]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Profiles (F7)",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![key("  1-5       "), desc("ρ(r) M(r) Φ(r) σ(r) β(r)")]),
+            section("Rank (F6) / Perf (F8) / Poisson (F9)"),
+            Line::from(vec![desc("  Display-only — no tab-specific keys")]),
+            Line::from(""),
+            section("Profiles (F7)"),
+            Line::from(vec![
+                key("  1/2/3/4/5 "),
+                desc("ρ(r) / M(r) / Φ(r) / σ(r) / β(r)"),
+            ]),
             Line::from(vec![key("  l         "), desc("Toggle log scale")]),
             Line::from(vec![key("  a         "), desc("Toggle analytic overlay")]),
             Line::from(""),
+            section("Settings (F10)"),
+            Line::from(vec![key("  j/k ▲/▼   "), desc("Navigate settings")]),
+            Line::from(vec![key("  h/l ◄/►   "), desc("Change value")]),
+            Line::from(""),
             Line::from(vec![Span::styled(
-                "Press ? or Esc to close",
+                " ? or Esc to close  ▲/▼ to scroll",
                 Style::default().fg(theme.dim),
             )]),
         ];
