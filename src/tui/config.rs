@@ -11,7 +11,7 @@ use tracing::error;
 
 use crate::tui::{action::Action, app::Mode};
 
-const CONFIG: &str = include_str!("../../.config/config.json5");
+const CONFIG: &str = include_str!("../../../../../.config/config.json5");
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct AppConfig {
