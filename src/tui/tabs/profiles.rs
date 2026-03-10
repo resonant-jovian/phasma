@@ -425,7 +425,8 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
     let cx = nx as f64 / 2.0;
     let cy = ny as f64 / 2.0;
     let max_r = cx.min(cy);
-    let n_bins = (max_r as usize).max(1);
+    let n_bins = ((max_r * 4.0) as usize).clamp(16, 128);
+    let bin_width = max_r / n_bins as f64;
 
     let mut bin_sum = vec![0.0f64; n_bins];
     let mut bin_count = vec![0u32; n_bins];
@@ -435,7 +436,7 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
             let ddx = ix as f64 + 0.5 - cx;
             let ddy = iy as f64 + 0.5 - cy;
             let r = (ddx * ddx + ddy * ddy).sqrt();
-            let bin = (r as usize).min(n_bins - 1);
+            let bin = ((r / bin_width) as usize).min(n_bins - 1);
             bin_sum[bin] += data[iy * nx + ix];
             bin_count[bin] += 1;
         }
@@ -446,7 +447,7 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
         .zip(bin_count.iter())
         .enumerate()
         .filter(|&(_, (&_, &c))| c > 0)
-        .map(|(i, (&s, &c))| ((i as f64 + 0.5) * dx, s / c as f64))
+        .map(|(i, (&s, &c))| ((i as f64 + 0.5) * bin_width * dx, s / c as f64))
         .collect()
 }
 

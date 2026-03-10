@@ -56,7 +56,7 @@ impl ResponsiveLayout {
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(rest);
 
                 let [content_area, footer_area] =
-                    Layout::vertical([Constraint::Min(0), Constraint::Length(1)])
+                    Layout::vertical([Constraint::Min(0), Constraint::Length(2)])
                         .areas(content_and_footer);
 
                 ScreenLayout {

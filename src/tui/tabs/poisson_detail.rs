@@ -121,14 +121,23 @@ impl PoissonDetailTab {
             Some(ref data) if data.len() >= 2 => {
                 let (x_min, x_max, y_min, y_max) = data_bounds(data);
 
-                let dataset = Dataset::default()
+                let chart_width = area.width.saturating_sub(2) as usize;
+                let dense = densify(data, chart_width * 2);
+
+                let line_ds = Dataset::default()
                     .name("|\u{03a6}\u{0302}(k)|\u{00b2}")
                     .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(theme.chart[0]))
+                    .data(&dense);
+
+                let dots_ds = Dataset::default()
+                    .marker(symbols::Marker::Dot)
                     .graph_type(GraphType::Scatter)
                     .style(Style::default().fg(theme.chart[0]))
                     .data(data);
 
-                let chart = Chart::new(vec![dataset])
+                let chart = Chart::new(vec![line_ds, dots_ds])
                     .block(block)
                     .x_axis(
                         Axis::default()

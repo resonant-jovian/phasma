@@ -1,39 +1,50 @@
-# Speed Priority — 8^3 x 8^3 Plummer, fast iteration
-# Use for quick smoke tests and parameter exploration
+# Speed Priority — 8^3 × 8^3 Plummer, fast iteration
+#
+# Smallest production grid.  Phase-space array: 8^6 × 8 B ≈ 2 MB.
+# Starts and iterates almost instantly — ideal for smoke tests,
+# UI development, and quick parameter exploration.
+#
+# Physical accuracy is poor at this resolution (only 8 cells across
+# the Plummer core), but the solver pipeline runs identically to
+# higher-resolution runs.
+#
+# The very small cfl_factor (0.01) generates many timesteps per
+# dynamical time, giving plenty of F5 Energy data points.
 
 [model]
+# Plummer sphere — simplest analytic equilibrium
 type = "plummer"
-total_mass = 1.0
-scale_radius = 1.0
+total_mass = 1.0          # total mass in code units
+scale_radius = 1.0        # Plummer softening length a
 
 [domain]
-spatial_extent = 8.0
-velocity_extent = 2.5
-spatial_resolution = 8
-velocity_resolution = 8
-boundary = "periodic|truncated"
+spatial_extent = 8.0       # box spans [-8, +8]^3
+velocity_extent = 2.5      # velocity box [-2.5, +2.5]^3
+spatial_resolution = 8     # 8 cells per spatial dimension
+velocity_resolution = 8    # 8 cells per velocity dimension
+boundary = "periodic|truncated"   # periodic spatial BC, truncated velocity
 coordinates = "cartesian"
 gravitational_constant = 1.0
 
 [solver]
-representation = "uniform"
-poisson = "fft_periodic"
-advection = "semi_lagrangian"
-integrator = "strang"
+representation = "uniform"       # full 6D grid (UniformGrid6D)
+poisson = "fft_periodic"         # spectral Poisson solver
+advection = "semi_lagrangian"    # Catmull-Rom semi-Lagrangian
+integrator = "strang"            # 2nd-order Strang splitting
 
 [time]
-t_final = 1000.0
-dt_mode = "adaptive"
-cfl_factor = 0.01
+t_final = 1000.0          # long run to accumulate diagnostics
+dt_mode = "adaptive"       # automatic timestep selection
+cfl_factor = 0.01          # very conservative → many small steps
 
 [output]
 directory = "output/speed_priority"
 prefix = "run"
-snapshot_interval = 1.0
+snapshot_interval = 1.0    # save snapshot every Δt = 1
 
 [exit]
-energy_drift_tolerance = 100.0
+energy_drift_tolerance = 100.0   # effectively disabled
 mass_drift_tolerance = 0.5
 
 [performance]
-memory_budget_gb = 4.0
+memory_budget_gb = 4.0     # generous for a tiny grid

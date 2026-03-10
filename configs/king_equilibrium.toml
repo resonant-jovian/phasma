@@ -1,5 +1,14 @@
-# King Equilibrium — W0=6 tidally truncated model
-# Tests preservation of a King-model equilibrium
+# King Equilibrium — W₀ = 6 tidally truncated model
+#
+# Phase-space: 16^6 × 8 B ≈ 134 MB.  Peak ~300 MB.
+# King models have a finite escape energy, so the DF is zero beyond
+# the tidal radius.  W₀ = 6 gives a moderately concentrated globular-
+# cluster-like profile.
+#
+# The DF is computed via Poisson-Boltzmann ODE + RK4 integration.
+# velocity_extent = 1.5 is smaller than other presets because the
+# King model has low escape speed.  If particles are kicked beyond
+# the velocity box the mass will leak (watch ΔM/M₀ on F5).
 
 [model]
 type = "king"
@@ -7,11 +16,11 @@ total_mass = 1.0
 scale_radius = 1.0
 
 [model.king]
-w0 = 6.0
+w0 = 6.0                  # dimensionless central potential depth
 
 [domain]
 spatial_extent = 10.0
-velocity_extent = 1.5
+velocity_extent = 1.5      # low escape speed → narrow velocity box
 spatial_resolution = 16
 velocity_resolution = 16
 boundary = "periodic|truncated"

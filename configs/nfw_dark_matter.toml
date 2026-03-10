@@ -1,5 +1,14 @@
-# NFW Dark Matter — concentration c=10 halo
-# Cuspy dark matter halo with Yoshida 4th-order integrator
+# NFW Dark Matter — Concentration c = 10 dark matter halo
+#
+# Phase-space: 16^6 × 8 B ≈ 134 MB.  Peak ~300 MB.
+# NFW (Navarro, Frenk & White 1996) is the standard profile for
+# cosmological dark matter halos.  It has a 1/r central cusp and
+# a 1/r³ outer envelope, with a scale radius r_s marking the
+# transition.  Concentration c = r_vir/r_s = 10 is typical of
+# Milky-Way mass halos.
+#
+# DF is computed via numerical Eddington inversion.  Yoshida 4th-order
+# integrator is recommended for the cuspy profile.
 
 [model]
 type = "nfw"
@@ -7,7 +16,7 @@ total_mass = 1.0
 scale_radius = 1.0
 
 [model.nfw]
-concentration = 10.0
+concentration = 10.0       # c = r_vir / r_s
 
 [domain]
 spatial_extent = 12.0

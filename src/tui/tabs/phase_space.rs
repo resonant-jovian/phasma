@@ -102,10 +102,6 @@ impl PhaseSpaceTab {
                 self.log_scale = !self.log_scale;
                 None
             }
-            KeyCode::Char('c') => {
-                self.colormap = self.colormap.next();
-                None
-            }
             KeyCode::Char('i') => {
                 self.show_info = !self.show_info;
                 None
@@ -122,11 +118,11 @@ impl PhaseSpaceTab {
                 self.zoom = 1.0;
                 None
             }
-            KeyCode::Char('{') => {
+            KeyCode::Char(',') => {
                 self.slice_offset = (self.slice_offset - 0.1).max(-1.0);
                 None
             }
-            KeyCode::Char('}') => {
+            KeyCode::Char('.') => {
                 self.slice_offset = (self.slice_offset + 0.1).min(1.0);
                 None
             }
@@ -237,7 +233,7 @@ impl PhaseSpaceTab {
                 String::new()
             };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [{{/}}] slice  [p] aspect  [i] hide{scrub_hint}",
+                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [,/.] slice  [p] aspect  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(

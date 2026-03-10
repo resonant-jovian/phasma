@@ -477,12 +477,17 @@ impl RunControlTab {
             log_area,
         );
 
-        // Diagnostics sidebar (right) — uses scrub-aware state
+        // Right panel — split into diagnostics + config summary
+        let [diag_area, summary_area] =
+            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .areas(right_area);
+
+        // Diagnostics sidebar (top-right) — uses scrub-aware state
         match data_provider.current_state() {
             None => {
                 frame.render_widget(
                     Paragraph::new("—").block(Block::bordered().title(" Diagnostics ")),
-                    right_area,
+                    diag_area,
                 );
             }
             Some(state) => {
@@ -532,9 +537,79 @@ impl RunControlTab {
                     SparklineRow::new("Entropy S", state.entropy, 0.0),
                 ];
 
-                SparklineTable::new(&rows, " Diagnostics ").draw(frame, right_area, theme);
+                SparklineTable::new(&rows, " Diagnostics ").draw(frame, diag_area, theme);
             }
         }
+
+        // Config summary panel (bottom-right)
+        self.draw_config_summary(frame, summary_area, theme, data_provider);
+    }
+
+    fn draw_config_summary(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let block = Block::bordered()
+            .title(" Config ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let label_style = Style::default().fg(theme.dim);
+        let value_style = Style::default().fg(theme.fg).add_modifier(Modifier::BOLD);
+
+        let lines = if let Some(cfg) = data_provider.config() {
+            let n = cfg.domain.spatial_resolution;
+            let nv = cfg.domain.velocity_resolution;
+            let dt_str = if let Some(state) = &self.sim_state {
+                format!("{:.3e}", state.dt)
+            } else {
+                cfg.time.dt_mode.clone()
+            };
+            let steps_s = self
+                .sim_state
+                .as_ref()
+                .filter(|s| s.step_wall_ms > 0.0)
+                .map(|s| format!("{:.1}", 1000.0 / s.step_wall_ms))
+                .unwrap_or_else(|| "—".to_string());
+
+            vec![
+                Line::from(vec![
+                    Span::styled(" Model:  ", label_style),
+                    Span::styled(&cfg.model.model_type, value_style),
+                ]),
+                Line::from(vec![
+                    Span::styled(" Grid:   ", label_style),
+                    Span::styled(format!("{n}^3 x {nv}^3"), value_style),
+                ]),
+                Line::from(vec![
+                    Span::styled(" Solver: ", label_style),
+                    Span::styled(&cfg.solver.poisson, value_style),
+                ]),
+                Line::from(vec![
+                    Span::styled(" Split:  ", label_style),
+                    Span::styled(&cfg.solver.integrator, value_style),
+                ]),
+                Line::from(vec![
+                    Span::styled(" dt:     ", label_style),
+                    Span::styled(dt_str, value_style),
+                ]),
+                Line::from(vec![
+                    Span::styled(" step/s: ", label_style),
+                    Span::styled(steps_s, value_style),
+                ]),
+            ]
+        } else {
+            vec![Line::from(vec![Span::styled(
+                " No config loaded",
+                label_style,
+            )])]
+        };
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 }
 

@@ -1,0 +1,47 @@
+# Test — Unequal-mass merger stress test
+#
+# Phase-space: 32^6 × 8 B ≈ 8.6 GB.  **Requires ≥16 GB RAM.**
+# An asymmetric (1:4 mass ratio) merger with large total mass and
+# wide domain — designed to stress-test the solver pipeline.
+#
+# Uses Lie splitting (cheapest) with small cfl_factor to generate
+# many timesteps.  The large separation (10) and wide spatial box
+# (32) exercise the full periodic FFT range.
+
+[model]
+type = "merger"
+total_mass = 10000.0       # large mass → strong gravity
+scale_radius = 1.0
+
+[model.merger]
+separation = 10.0          # wide initial separation
+mass_ratio = 0.25          # 1:4 asymmetric merger
+
+[domain]
+spatial_extent = 32
+velocity_extent = 16
+spatial_resolution = 32
+velocity_resolution = 32
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "lie"                # 1st-order — fastest per step
+
+[time]
+t_final = 100.0
+dt_mode = "adaptive"
+cfl_factor = 0.1
+
+[output]
+directory = "output/test"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 0.5

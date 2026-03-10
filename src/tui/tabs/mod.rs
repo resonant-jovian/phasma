@@ -306,13 +306,41 @@ impl TabView {
             Tab::Settings => self.settings.draw(frame, inner, theme),
         }
 
-        // Footer hint
+        // Footer hint — wrap across available lines
         let hint = help_line(self.selected);
+        let lines = wrap_hint_line(hint, areas.footer.width as usize);
         frame.render_widget(
-            ratatui::widgets::Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+            ratatui::widgets::Paragraph::new(lines).style(Style::default().fg(theme.dim)),
             areas.footer,
         );
     }
+}
+
+/// Wrap a hint `Line` into multiple lines when it exceeds `max_width`.
+fn wrap_hint_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return vec![line];
+    }
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_width: usize = 0;
+
+    for span in line.spans {
+        let span_width = span.content.len();
+        if current_width + span_width > max_width && !current_spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
+        }
+        current_width += span_width;
+        current_spans.push(span);
+    }
+    if !current_spans.is_empty() {
+        lines.push(Line::from(current_spans));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    lines
 }
 
 fn help_line(selected: Tab) -> Line<'static> {
@@ -366,7 +394,7 @@ fn help_line(selected: Tab) -> Line<'static> {
         }
         Tab::Density => {
             spans.extend([
-                key("  [x/y/z]"),
+                key("  [1/2/3]"),
                 desc(" axis  "),
                 key("[+/-]"),
                 desc(" zoom  "),
@@ -374,7 +402,7 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" reset  "),
                 key("[l]"),
                 desc(" log  "),
-                key("[c]"),
+                key("[Shift+c]"),
                 desc(" cmap  "),
                 key("[n]"),
                 desc(" contour  "),
@@ -392,8 +420,10 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" reset  "),
                 key("[l]"),
                 desc(" log  "),
-                key("[c]"),
+                key("[Shift+c]"),
                 desc(" cmap  "),
+                key("[,/.]"),
+                desc(" slice  "),
                 key("[i]"),
                 desc(" info"),
             ]);
@@ -408,7 +438,7 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" panel  "),
                 key("[h/l]"),
                 desc(" scroll  "),
-                key("[H/L]"),
+                key("[Shift+h/l]"),
                 desc(" zoom  "),
                 key("[f]"),
                 desc(" fit  "),

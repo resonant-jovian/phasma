@@ -1,5 +1,15 @@
-# Hernquist Galaxy — analytic DF galaxy model
-# Tests equilibrium preservation with Yoshida integrator
+# Hernquist Galaxy — Analytic DF galaxy model
+#
+# Phase-space: 16^6 × 8 B ≈ 134 MB.  Peak ~300 MB.
+# Hernquist profile ρ(r) = M a / (2π r (r+a)³) is cuspy (ρ ∝ 1/r),
+# which makes it harder to maintain equilibrium than Plummer.
+#
+# Uses Yoshida 4th-order integrator for best conservation through
+# the steep central gradient.  The closed-form DF (Hernquist 1990
+# eq. 17) ensures exact initialisation.
+#
+# Watch F7 Profiles to compare simulated ρ(r) against the analytic
+# overlay — any artificial relaxation shows up as core expansion.
 
 [model]
 type = "hernquist"
@@ -22,7 +32,7 @@ advection = "semi_lagrangian"
 integrator = "yoshida"
 
 [time]
-t_final = 25.0
+t_final = 25.0            # ~10 dynamical times
 dt_mode = "adaptive"
 cfl_factor = 0.4
 

@@ -704,7 +704,8 @@ impl App {
 
                 let layout = ResponsiveLayout::compute(Size::new(size.width, size.height));
 
-                // Status bar
+                // Status bar — refresh RSS periodically
+                self.status_bar.tick_rss();
                 self.status_bar.draw(frame, layout.status_area, &theme);
 
                 // Tab bar + content + footer

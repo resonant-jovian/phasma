@@ -61,24 +61,20 @@ impl DensityTab {
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Char('x') => {
+            KeyCode::Char('1') => {
                 self.axis = 0;
                 None
             }
-            KeyCode::Char('y') => {
+            KeyCode::Char('2') => {
                 self.axis = 1;
                 None
             }
-            KeyCode::Char('z') => {
+            KeyCode::Char('3') => {
                 self.axis = 2;
                 None
             }
             KeyCode::Char('l') => {
                 self.log_scale = !self.log_scale;
-                None
-            }
-            KeyCode::Char('c') => {
-                self.colormap = self.colormap.next();
                 None
             }
             KeyCode::Char('i') => {
@@ -248,7 +244,7 @@ impl DensityTab {
                 String::new()
             };
             let axis_hint = format!(
-                "[x/y/z] axis  [l] log  [c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
+                "[1/2/3] axis  [l] log  [Shift+c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
             );
             frame.render_widget(
                 Paragraph::new(axis_hint).style(Style::default().fg(theme.dim)),

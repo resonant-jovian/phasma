@@ -403,11 +403,16 @@ fn draw_single_series_with_threshold(
         data_bounds(&windowed)
     };
 
-    // Expand y bounds to include threshold if present
-    let (y_min, y_max) = if let Some(thr) = threshold {
+    // Expand y bounds to include threshold if it's close to the data range.
+    // If threshold is more than 5x the data range away from data center, suppress
+    // it from Y-bounds so it doesn't squash the actual data to a thin line.
+    let data_range = (y_max - y_min).abs().max(1e-15);
+    let data_center = (y_max + y_min) / 2.0;
+    let effective_threshold = threshold.filter(|&thr| (thr - data_center).abs() < data_range * 5.0);
+    let (y_min, y_max) = if let Some(thr) = effective_threshold {
         (
-            y_min.min(thr - (y_max - y_min).abs() * 0.05),
-            y_max.max(thr + (y_max - y_min).abs() * 0.05),
+            y_min.min(thr - data_range * 0.05),
+            y_max.max(thr + data_range * 0.05),
         )
     } else {
         (y_min, y_max)
