@@ -29,8 +29,7 @@ cargo build --release
 ### Man page
 
 ```bash
-phasma --generate-man | sudo tee /usr/local/share/man/man1/phasma.1 > /dev/null
-sudo mandb
+phasma --generate-man > phasma.1 | sudo mv phasma.1 /usr/share/man/man1
 ```
 
 ### Dependencies
