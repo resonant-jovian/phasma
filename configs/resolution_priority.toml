@@ -1,5 +1,15 @@
-# Resolution Priority — 32^3 x 32^3 Plummer with Yoshida 4th-order
-# High accuracy run, requires ~32 GB RAM
+# Resolution Priority — 32^3 × 32^3 Plummer with Yoshida 4th-order
+#
+# Phase-space: 32^6 × 8 B ≈ 8.6 GB.  Peak memory ~17 GB with
+# FFT scratch, snapshot, and diagnostics buffers.
+# **Requires ≥32 GB RAM.**
+#
+# This is the highest-resolution Plummer preset.  With Yoshida 4th-order
+# and tight exit tolerances, it produces the most accurate dynamics
+# and serves as a reference for convergence studies.
+#
+# Wall-clock: each timestep is ~100× slower than speed_priority due
+# to the 64× larger grid and 3.5× more sub-steps per dt.
 
 [model]
 type = "plummer"
@@ -32,7 +42,7 @@ prefix = "run"
 snapshot_interval = 1.0
 
 [exit]
-energy_drift_tolerance = 0.1
+energy_drift_tolerance = 0.1     # tight — stop early if drift is bad
 mass_drift_tolerance = 0.05
 
 [performance]

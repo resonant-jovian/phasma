@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -33,11 +35,24 @@ enum LayoutMode {
 ///
 /// Computes spherically averaged profiles from the 3D density grid.
 /// In stacked mode, shows ρ, M, Φ, σ simultaneously sharing the r axis.
+/// Bin count presets for radial profiles.
+const BIN_PRESETS: &[usize] = &[16, 32, 64, 128];
+
+/// Lagrangian radii percentiles we track.
+const LAGRANGIAN_PCTS: [f64; 5] = [0.10, 0.25, 0.50, 0.75, 0.90];
+const LAGRANGIAN_CAP: usize = 500;
+
 pub struct ProfilesTab {
     kind: ProfileKind,
     log_scale: bool,
     show_analytic: bool,
     layout_mode: LayoutMode,
+    /// Index into BIN_PRESETS.
+    bin_preset_idx: usize,
+    /// Lagrangian radii history: 5 series (L10, L25, L50, L75, L90), each (t, r).
+    lagrangian_history: [VecDeque<(f64, f64)>; 5],
+    /// Last step we recorded Lagrangian radii for (to avoid duplicates).
+    lagrangian_last_step: u64,
 }
 
 impl Default for ProfilesTab {
@@ -47,6 +62,9 @@ impl Default for ProfilesTab {
             log_scale: true,
             show_analytic: true,
             layout_mode: LayoutMode::Stacked,
+            bin_preset_idx: 2, // default 64 bins
+            lagrangian_history: std::array::from_fn(|_| VecDeque::with_capacity(LAGRANGIAN_CAP)),
+            lagrangian_last_step: u64::MAX,
         }
     }
 }
@@ -89,11 +107,45 @@ impl ProfilesTab {
                 };
                 None
             }
+            KeyCode::Char('b') => {
+                // Cycle bin count preset
+                self.bin_preset_idx = (self.bin_preset_idx + 1) % BIN_PRESETS.len();
+                None
+            }
             _ => None,
         }
     }
 
-    pub fn update(&mut self, _action: &Action) -> Option<Action> {
+    pub fn update(&mut self, action: &Action) -> Option<Action> {
+        if let Action::SimUpdate(state) = action
+            && state.step != self.lagrangian_last_step
+            && !state.density_xy.is_empty()
+        {
+            self.lagrangian_last_step = state.step;
+            let l_box = state.spatial_extent * 2.0;
+            let nx = state.density_nx;
+            let ny = state.density_ny;
+            let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
+            let profile = compute_radial_profile(&state.density_xy, nx, ny, dx, 64);
+            let mass = compute_mass_profile(&profile, dx);
+            if let Some(&(_, m_total)) = mass.last()
+                && m_total > 0.0
+            {
+                for (k, &pct) in LAGRANGIAN_PCTS.iter().enumerate() {
+                    let target = pct * m_total;
+                    // Find first bin where cumulative mass >= target
+                    let r = mass
+                        .iter()
+                        .find(|&&(_, m)| m >= target)
+                        .map(|&(r, _)| r)
+                        .unwrap_or(0.0);
+                    if self.lagrangian_history[k].len() >= LAGRANGIAN_CAP {
+                        self.lagrangian_history[k].pop_front();
+                    }
+                    self.lagrangian_history[k].push_back((state.t, r));
+                }
+            }
+        }
         None
     }
 
@@ -130,7 +182,8 @@ impl ProfilesTab {
         let nx = state.density_nx;
         let ny = state.density_ny;
         let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
-        let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx);
+        let n_bins = BIN_PRESETS[self.bin_preset_idx];
+        let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
 
         // Derive other quantities from the density profile
         let g = state.gravitational_constant;
@@ -142,7 +195,14 @@ impl ProfilesTab {
         let [main_area, info_area] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
 
-        match self.layout_mode {
+        // Compact mode: auto-switch to single panel when area is too narrow/short
+        let effective_mode = if area.width < 76 || area.height < 20 {
+            LayoutMode::Single
+        } else {
+            self.layout_mode
+        };
+
+        match effective_mode {
             LayoutMode::Stacked => {
                 self.draw_stacked(
                     frame,
@@ -193,11 +253,26 @@ impl ProfilesTab {
             LayoutMode::Single => "single",
             LayoutMode::Stacked => "stacked",
         };
+        let bins = BIN_PRESETS[self.bin_preset_idx];
+        // Check if analytic is available for the current model
+        let model_type = data_provider
+            .config()
+            .map(|c| c.model.model_type.as_str())
+            .unwrap_or("");
+        let analytic_supported = matches!(model_type, "plummer" | "hernquist" | "nfw");
+        let analytic_tag = if self.show_analytic && analytic_supported {
+            "*"
+        } else if self.show_analytic {
+            " (n/a)"
+        } else {
+            ""
+        };
         hint_parts.push(format!(
-            "  [l] log{}  [a] analytic{}  [s] {}",
+            "  [l] log{}  [a] analytic{}  [s] {}  [b] bins:{}",
             if self.log_scale { "*" } else { "" },
-            if self.show_analytic { "*" } else { "" },
+            analytic_tag,
             mode_tag,
+            bins,
         ));
         let hint = hint_parts.join("  ");
         frame.render_widget(
@@ -218,12 +293,13 @@ impl ProfilesTab {
         potential_profile: &[(f64, f64)],
         sigma_profile: &[(f64, f64)],
     ) {
-        // 4 vertically stacked panels sharing the r axis
+        // 4 profile panels + Lagrangian radii stub, sharing the r axis
         let panels = Layout::vertical([
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
+            Constraint::Percentage(22),
+            Constraint::Percentage(22),
+            Constraint::Percentage(22),
+            Constraint::Percentage(22),
+            Constraint::Percentage(12),
         ])
         .split(area);
 
@@ -248,6 +324,9 @@ impl ProfilesTab {
                 density_profile,
             );
         }
+
+        // Lagrangian radii panel — L10/L25/L50/L75/L90 vs time
+        self.draw_lagrangian_panel(frame, panels[4], theme);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -345,13 +424,14 @@ impl ProfilesTab {
             profile_data.to_vec()
         };
 
-        // Analytic overlay
+        // Analytic overlay (only for plummer/hernquist/nfw models)
         let analytic_data: Vec<(f64, f64)> = if self.show_analytic {
             let cfg = data_provider.config();
             compute_analytic_profile(cfg, kind, self.log_scale, density_profile)
         } else {
             Vec::new()
         };
+        let analytic_available = self.show_analytic && !analytic_data.is_empty();
 
         if chart_data.is_empty() {
             frame.render_widget(
@@ -380,13 +460,17 @@ impl ProfilesTab {
                 .data(&dense_chart),
         ];
 
-        if !dense_analytic.is_empty() {
+        if analytic_available && !dense_analytic.is_empty() {
             datasets.push(
                 Dataset::default()
                     .name("analytic")
-                    .marker(symbols::Marker::Braille)
+                    .marker(symbols::Marker::Dot)
                     .graph_type(GraphType::Line)
-                    .style(Style::default().fg(theme.dim))
+                    .style(
+                        Style::default()
+                            .fg(theme.chart[5 % theme.chart.len()])
+                            .add_modifier(Modifier::DIM),
+                    )
                     .data(&dense_analytic),
             );
         }
@@ -413,11 +497,104 @@ impl ProfilesTab {
 
         frame.render_widget(chart, area);
     }
+
+    fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let block = Block::bordered()
+            .title(" Lagrangian Radii ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Check if we have any data
+        let has_data = self.lagrangian_history[0].len() >= 2;
+        if !has_data {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "  Lagrangian radii appear once simulation runs",
+                    Style::default().fg(theme.dim),
+                )),
+                inner,
+            );
+            return;
+        }
+
+        const LABELS: [&str; 5] = ["L10", "L25", "L50", "L75", "L90"];
+
+        // Build datasets from history
+        let series_data: Vec<Vec<(f64, f64)>> = self
+            .lagrangian_history
+            .iter()
+            .map(|h| h.iter().copied().collect::<Vec<_>>())
+            .collect();
+
+        // Find global bounds
+        let (mut t_min, mut t_max, mut r_min, mut r_max) = (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for series in &series_data {
+            for &(t, r) in series {
+                t_min = t_min.min(t);
+                t_max = t_max.max(t);
+                r_min = r_min.min(r);
+                r_max = r_max.max(r);
+            }
+        }
+        if t_min >= t_max {
+            t_max = t_min + 1.0;
+        }
+        if r_min >= r_max {
+            r_max = r_min + 1.0;
+        }
+        let rpad = (r_max - r_min) * 0.05;
+
+        let target = inner.width.saturating_sub(2) as usize * 2;
+        let dense: Vec<Vec<(f64, f64)>> = series_data.iter().map(|s| densify(s, target)).collect();
+
+        let datasets: Vec<Dataset> = dense
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                Dataset::default()
+                    .name(LABELS[i])
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(theme.chart[i % theme.chart.len()]))
+                    .data(d)
+            })
+            .collect();
+
+        let chart = Chart::new(datasets)
+            .x_axis(
+                Axis::default()
+                    .title("t")
+                    .bounds([t_min, t_max])
+                    .labels(vec![format!("{t_min:.2}"), format!("{t_max:.2}")])
+                    .style(Style::default().fg(theme.dim)),
+            )
+            .y_axis(
+                Axis::default()
+                    .title("r")
+                    .bounds([r_min - rpad, r_max + rpad])
+                    .labels(vec![format!("{r_min:.2}"), format!("{r_max:.2}")])
+                    .style(Style::default().fg(theme.dim)),
+            );
+
+        frame.render_widget(chart, inner);
+    }
 }
 
 /// Compute azimuthally averaged radial density profile from a 2D density projection.
 /// Returns (physical_radius, density_value) pairs.
-fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f64, f64)> {
+fn compute_radial_profile(
+    data: &[f64],
+    nx: usize,
+    ny: usize,
+    dx: f64,
+    requested_bins: usize,
+) -> Vec<(f64, f64)> {
     if data.is_empty() || nx == 0 || ny == 0 {
         return Vec::new();
     }
@@ -425,7 +602,8 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
     let cx = nx as f64 / 2.0;
     let cy = ny as f64 / 2.0;
     let max_r = cx.min(cy);
-    let n_bins = (max_r as usize).max(1);
+    let n_bins = requested_bins.clamp(16, 256);
+    let bin_width = max_r / n_bins as f64;
 
     let mut bin_sum = vec![0.0f64; n_bins];
     let mut bin_count = vec![0u32; n_bins];
@@ -435,7 +613,7 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
             let ddx = ix as f64 + 0.5 - cx;
             let ddy = iy as f64 + 0.5 - cy;
             let r = (ddx * ddx + ddy * ddy).sqrt();
-            let bin = (r as usize).min(n_bins - 1);
+            let bin = ((r / bin_width) as usize).min(n_bins - 1);
             bin_sum[bin] += data[iy * nx + ix];
             bin_count[bin] += 1;
         }
@@ -446,7 +624,7 @@ fn compute_radial_profile(data: &[f64], nx: usize, ny: usize, dx: f64) -> Vec<(f
         .zip(bin_count.iter())
         .enumerate()
         .filter(|&(_, (&_, &c))| c > 0)
-        .map(|(i, (&s, &c))| ((i as f64 + 0.5) * dx, s / c as f64))
+        .map(|(i, (&s, &c))| ((i as f64 + 0.5) * bin_width * dx, s / c as f64))
         .collect()
 }
 

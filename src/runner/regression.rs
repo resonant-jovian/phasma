@@ -34,6 +34,9 @@ pub async fn run_regression_test(dir: &str) -> anyhow::Result<bool> {
     let mut handle = SimHandle::spawn(config_str);
     let mut new_final = None;
     while let Some(state) = handle.state_rx.recv().await {
+        for msg in &state.log_messages {
+            eprintln!("  [verbose] {msg}");
+        }
         let is_exit = state.exit_reason.is_some();
         new_final = Some(state);
         if is_exit {

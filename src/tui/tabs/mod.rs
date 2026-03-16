@@ -24,7 +24,7 @@ use crate::{
     colormaps::Colormap,
     data::DataProvider,
     themes::{Theme, ThemeColors},
-    tui::{action::Action, config::Config},
+    tui::{action::Action, config::Config, layout::LayoutMode},
 };
 
 use density::DensityTab;
@@ -67,6 +67,7 @@ pub struct TabAreas {
     pub tab_bar: Rect,
     pub content: Rect,
     pub footer: Rect,
+    pub layout_mode: LayoutMode,
 }
 
 pub struct TabView {
@@ -119,6 +120,16 @@ impl TabView {
     /// Read the colormap chosen in the settings tab.
     pub fn settings_colormap(&self) -> Colormap {
         self.settings.current_colormap()
+    }
+
+    /// Toggle the preset popup on the Setup tab (§2.2).
+    pub fn setup_toggle_presets(&mut self) {
+        self.setup.toggle_preset_popup();
+    }
+
+    /// Reset Setup tab config to defaults (§2.2).
+    pub fn setup_reset_defaults(&mut self) {
+        self.setup.reset_to_defaults();
     }
 
     pub fn register_action_handler(&mut self, tx: UnboundedSender<Action>) {
@@ -240,21 +251,36 @@ impl TabView {
             .current_state()
             .map(|s| s.repr_type.as_str())
             .unwrap_or("");
+        let poisson_type = data_provider
+            .current_state()
+            .map(|s| s.poisson_type.as_str())
+            .unwrap_or("");
         let is_ht = repr_type == "ht";
+        let is_fft_isolated = poisson_type == "fft_isolated";
+
+        let compact = areas.layout_mode == LayoutMode::Compact;
 
         let mut tab_spans: Vec<Span> = Vec::new();
         for (i, tab) in Tab::iter().enumerate() {
             if i > 0 {
-                tab_spans.push(Span::styled(" | ", Style::default().fg(theme.dim)));
+                tab_spans.push(Span::styled(
+                    if compact { "|" } else { " | " },
+                    Style::default().fg(theme.dim),
+                ));
             }
-            let label = tab.to_string();
+            let label = if compact {
+                compact_tab_label(tab)
+            } else {
+                tab.to_string()
+            };
             let is_selected = i == self.selected as usize;
-            let is_dimmed = matches!(tab, Tab::Rank) && !is_ht;
+            let is_dimmed = (matches!(tab, Tab::Rank) && !is_ht)
+                || (matches!(tab, Tab::PoissonDetail) && !is_fft_isolated);
 
             let style = if is_selected {
                 Style::default()
-                    .fg(Color::White)
-                    .bg(Color::DarkGray)
+                    .fg(theme.fg)
+                    .bg(theme.highlight)
                     .add_modifier(Modifier::BOLD)
             } else if is_dimmed {
                 Style::default().fg(theme.dim).add_modifier(Modifier::DIM)
@@ -287,32 +313,81 @@ impl TabView {
         let inner = content_block.inner(areas.content);
         frame.render_widget(content_block, areas.content);
 
-        match self.selected {
-            Tab::Setup => self.setup.draw(frame, inner, theme),
-            Tab::RunControl => self
-                .run_control
-                .draw(frame, inner, theme, colormap, data_provider),
-            Tab::Density => self
-                .density
-                .draw(frame, inner, theme, colormap, data_provider),
-            Tab::PhaseSpace => self
-                .phase_space
-                .draw(frame, inner, theme, colormap, data_provider),
-            Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
-            Tab::Rank => self.rank.draw(frame, inner, theme, data_provider),
-            Tab::Profiles => self.profiles.draw(frame, inner, theme, data_provider),
-            Tab::Performance => self.performance.draw(frame, inner, theme, data_provider),
-            Tab::PoissonDetail => self.poisson_detail.draw(frame, inner, theme, data_provider),
-            Tab::Settings => self.settings.draw(frame, inner, theme),
+        // Check if tab is unavailable per §2.6
+        let unavailable_msg = match self.selected {
+            Tab::Rank if !is_ht => Some("Rank Monitor requires hierarchical_tucker representation"),
+            Tab::PoissonDetail if !is_fft_isolated => {
+                Some("Poisson Detail requires fft_isolated solver")
+            }
+            _ => None,
+        };
+
+        if let Some(msg) = unavailable_msg {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(Line::from(vec![Span::styled(
+                    format!("  {msg}"),
+                    Style::default().fg(theme.dim),
+                )])),
+                inner,
+            );
+        } else {
+            match self.selected {
+                Tab::Setup => self.setup.draw(frame, inner, theme),
+                Tab::RunControl => {
+                    self.run_control
+                        .draw(frame, inner, theme, colormap, data_provider)
+                }
+                Tab::Density => self
+                    .density
+                    .draw(frame, inner, theme, colormap, data_provider),
+                Tab::PhaseSpace => {
+                    self.phase_space
+                        .draw(frame, inner, theme, colormap, data_provider)
+                }
+                Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
+                Tab::Rank => self.rank.draw(frame, inner, theme, data_provider),
+                Tab::Profiles => self.profiles.draw(frame, inner, theme, data_provider),
+                Tab::Performance => self.performance.draw(frame, inner, theme, data_provider),
+                Tab::PoissonDetail => self.poisson_detail.draw(frame, inner, theme, data_provider),
+                Tab::Settings => self.settings.draw(frame, inner, theme),
+            }
         }
 
-        // Footer hint
+        // Footer hint — wrap across available lines
         let hint = help_line(self.selected);
+        let lines = wrap_hint_line(hint, areas.footer.width as usize);
         frame.render_widget(
-            ratatui::widgets::Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+            ratatui::widgets::Paragraph::new(lines).style(Style::default().fg(theme.dim)),
             areas.footer,
         );
     }
+}
+
+/// Wrap a hint `Line` into multiple lines when it exceeds `max_width`.
+fn wrap_hint_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return vec![line];
+    }
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_width: usize = 0;
+
+    for span in line.spans {
+        let span_width = span.content.len();
+        if current_width + span_width > max_width && !current_spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
+        }
+        current_width += span_width;
+        current_spans.push(span);
+    }
+    if !current_spans.is_empty() {
+        lines.push(Line::from(current_spans));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    lines
 }
 
 fn help_line(selected: Tab) -> Line<'static> {
@@ -349,7 +424,11 @@ fn help_line(selected: Tab) -> Line<'static> {
                 key("[Enter]"),
                 desc(" load  "),
                 key("[r]"),
-                desc(" run"),
+                desc(" run  "),
+                key("[Ctrl+P]"),
+                desc(" presets  "),
+                key("[Ctrl+D]"),
+                desc(" defaults"),
             ]);
         }
         Tab::RunControl => {
@@ -366,15 +445,17 @@ fn help_line(selected: Tab) -> Line<'static> {
         }
         Tab::Density => {
             spans.extend([
-                key("  [x/y/z]"),
+                key("  [1/2/3]"),
                 desc(" axis  "),
                 key("[+/-]"),
                 desc(" zoom  "),
                 key("[r]"),
                 desc(" reset  "),
+                key("[0]"),
+                desc(" auto  "),
                 key("[l]"),
                 desc(" log  "),
-                key("[c]"),
+                key("[Shift+c]"),
                 desc(" cmap  "),
                 key("[n]"),
                 desc(" contour  "),
@@ -388,12 +469,20 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" dims  "),
                 key("[+/-]"),
                 desc(" zoom  "),
-                key("[r]"),
-                desc(" reset  "),
                 key("[l]"),
                 desc(" log  "),
-                key("[c]"),
-                desc(" cmap  "),
+                key("[,/.]"),
+                desc(" s1  "),
+                key("[(/)]"),
+                desc(" s2  "),
+                key("[{/}]"),
+                desc(" s3  "),
+                key("[</>]"),
+                desc(" s4  "),
+                key("[p]"),
+                desc(" aspect  "),
+                key("[s]"),
+                desc(" stream  "),
                 key("[i]"),
                 desc(" info"),
             ]);
@@ -408,7 +497,7 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" panel  "),
                 key("[h/l]"),
                 desc(" scroll  "),
-                key("[H/L]"),
+                key("[Shift+h/l]"),
                 desc(" zoom  "),
                 key("[f]"),
                 desc(" fit  "),
@@ -425,7 +514,9 @@ fn help_line(selected: Tab) -> Line<'static> {
                 key("[a]"),
                 desc(" analytic  "),
                 key("[s]"),
-                desc(" stacked/single"),
+                desc(" stacked/single  "),
+                key("[b]"),
+                desc(" bins"),
             ]);
         }
         Tab::Settings => {
@@ -436,8 +527,27 @@ fn help_line(selected: Tab) -> Line<'static> {
                 desc(" change"),
             ]);
         }
-        _ => {} // Rank, Performance, Poisson: display-only
+        Tab::Rank => {
+            spans.extend([key("  [n/N]"), desc(" node")]);
+        }
+        _ => {} // Performance, Poisson: display-only
     }
 
     Line::from(spans)
+}
+
+/// Abbreviated tab labels for compact mode (§2.5).
+fn compact_tab_label(tab: Tab) -> String {
+    match tab {
+        Tab::Setup => "1".to_string(),
+        Tab::RunControl => "2".to_string(),
+        Tab::Density => "3".to_string(),
+        Tab::PhaseSpace => "4".to_string(),
+        Tab::Energy => "5".to_string(),
+        Tab::Rank => "6".to_string(),
+        Tab::Profiles => "7".to_string(),
+        Tab::Performance => "8".to_string(),
+        Tab::PoissonDetail => "9".to_string(),
+        Tab::Settings => "10".to_string(),
+    }
 }

@@ -33,6 +33,10 @@ pub enum Action {
     ScrubBackward,
     ScrubForward,
     ScrubToLive,
+    ScrubJumpBackward,
+    ScrubJumpForward,
+    ScrubToStart,
+    ScrubToEnd,
     // Visualization
     VizCycleColormap,
     VizToggleLog,

@@ -1,0 +1,69 @@
+# HT Plummer — Hierarchical Tucker representation with LoMaC conservation
+#
+# Demonstrates the advanced HT tensor decomposition for a Plummer sphere.
+# Uses SLAR (Semi-Lagrangian Adaptive Rank) advection with rank-adaptive
+# truncation and LoMaC mass/momentum/energy conservation.
+#
+# The HT representation compresses the 6D distribution function from
+# O(N^6) to O(dNk^3) where k is the rank and d=6 is the dimensionality.
+# At N=16, k=50: ~50 MB vs 134 GB full grid (>2000x compression).
+#
+# The Rank Monitor tab (F6) shows rank evolution, per-node ranks, and
+# singular value spectra. The LoMaC conservation framework ensures exact
+# conservation of mass, momentum, and energy despite rank truncation.
+#
+# Memory estimate: ~50 MB (HT, rank 50) / 134 GB (full grid)
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "hierarchical_tucker"
+poisson = "fft_isolated"
+advection = "slar"
+integrator = "strang"
+conservation = "lomac"
+
+[solver.ht]
+max_rank = 50
+initial_rank = 10
+tolerance = 1e-6
+rank_adaptation = "tolerance"
+dimension_tree = "balanced_xv"
+
+[solver.slar]
+reconstruction_order = 3
+aca_tolerance = 1e-8
+max_aca_iterations = 500
+oversampling_factor = 2.0
+
+[solver.lomac]
+flux_scheme = "kfvs"
+projection_tolerance = 1e-12
+
+[time]
+t_final = 20.0
+dt_mode = "adaptive"
+cfl_factor = 0.5
+
+[output]
+directory = "output/ht_plummer"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 1e-4
+mass_drift_tolerance = 1e-8
+virial_equilibrium = true
+virial_tolerance = 0.01

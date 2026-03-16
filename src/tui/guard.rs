@@ -41,7 +41,7 @@ impl TerminalGuard {
             )]),
             Line::from(""),
             Line::from(Span::styled(
-                format!("  Minimum: {}×{}", self.min_cols, self.min_rows),
+                format!("  Need at least {}×{}", self.min_cols, self.min_rows),
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
@@ -50,7 +50,7 @@ impl TerminalGuard {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Please resize or zoom out.",
+                "  Resize to continue",
                 Style::default().fg(Color::Gray),
             )),
         ])

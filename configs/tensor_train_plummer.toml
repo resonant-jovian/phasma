@@ -1,0 +1,47 @@
+# Tensor Train Plummer — Low-rank TT decomposition for phase space
+#
+# Uses the Tensor Train representation instead of a full 6D grid.
+# TT decomposes f(x1,x2,x3,v1,v2,v3) as a chain of 3-way tensors
+# connected by low-rank bonds. Memory scales as O(6 * N * r^2)
+# instead of O(N^6) for the full grid.
+#
+# At N=16, r=50: ~0.6 MB vs 134 MB full grid (~200x compression).
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "tensor_train"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[solver.ht]
+max_rank = 50
+initial_rank = 20
+tolerance = 1e-6
+
+[time]
+t_final = 20.0
+dt_mode = "adaptive"
+cfl_factor = 0.5
+
+[output]
+directory = "output/tt_plummer"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 0.5

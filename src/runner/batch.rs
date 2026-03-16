@@ -70,6 +70,11 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
             state.energy_drift(),
         );
 
+        // Verbose log messages to stderr
+        for msg in &state.log_messages {
+            eprintln!("  [verbose] {msg}");
+        }
+
         // Progress to stderr
         eprintln!(
             "  t={:.4}  step={}  |ΔE/E|={:.2e}  M={:.4}",

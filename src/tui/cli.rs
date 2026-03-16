@@ -104,6 +104,12 @@ pub struct Cli {
     /// Install with: phasma --generate-man > phasma.1
     #[arg(long)]
     pub generate_man: bool,
+
+    /// Enable verbose output — detailed logging of every action during
+    /// startup and simulation. In batch/headless mode, prints to stderr.
+    /// In the TUI, messages appear in the F2 Run tab log panel.
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 impl Cli {

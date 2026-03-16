@@ -22,12 +22,16 @@ pub struct StatusBar {
     step_times: VecDeque<Instant>,
     last_step: u64,
     max_density: f64,
+    /// HT rank info: (avg_rank, max_rank, budget)
+    rank_info: Option<(f64, usize, u32)>,
     sim_start_time: Option<Instant>,
     /// Accumulated wall-clock seconds spent paused (excluded from ETA calculation).
     paused_duration: f64,
     /// When the current pause began (None if not paused).
     pause_start: Option<Instant>,
     rss_mb: f64,
+    /// Counter for periodic RSS refresh even when idle.
+    rss_tick: u32,
     /// Scrub position: None = live, Some((index, total))
     scrub_position: Option<(usize, usize)>,
 }
@@ -44,16 +48,26 @@ impl Default for StatusBar {
             step_times: VecDeque::with_capacity(12),
             last_step: 0,
             max_density: 0.0,
+            rank_info: None,
             sim_start_time: None,
             paused_duration: 0.0,
             pause_start: None,
-            rss_mb: 0.0,
+            rss_mb: read_rss_mb(),
             scrub_position: None,
+            rss_tick: 0,
         }
     }
 }
 
 impl StatusBar {
+    /// Call on every render tick to keep RSS up-to-date even when idle.
+    pub fn tick_rss(&mut self) {
+        self.rss_tick += 1;
+        if self.rss_tick.is_multiple_of(30) {
+            self.rss_mb = read_rss_mb();
+        }
+    }
+
     pub fn set_scrub_position(&mut self, pos: Option<(usize, usize)>) {
         self.scrub_position = pos;
     }
@@ -93,6 +107,20 @@ impl StatusBar {
         self.last_t = s.t;
         self.t_final = s.t_final;
         self.max_density = s.max_density;
+
+        // Capture HT rank info
+        if let Some(ref ranks) = s.rank_per_node {
+            let max_rank = ranks.iter().copied().max().unwrap_or(0);
+            let avg_rank = if ranks.is_empty() {
+                0.0
+            } else {
+                ranks.iter().sum::<usize>() as f64 / ranks.len() as f64
+            };
+            // Budget comes from config; use 100 as fallback
+            self.rank_info = Some((avg_rank, max_rank, 100));
+        } else {
+            self.rank_info = None;
+        }
 
         if s.step != self.last_step {
             self.last_step = s.step;
@@ -223,6 +251,16 @@ impl StatusBar {
             }
         }
 
+        // HT rank display (spec §2.1: "current rank (HT only)")
+        if let Some((avg, max_r, _budget)) = self.rank_info {
+            spans.push(sep.clone());
+            let rank_color = if max_r > 80 { theme.warn } else { theme.dim };
+            spans.push(Span::styled(
+                format!(" Rank {avg:.0}/{max_r}"),
+                Style::default().fg(rank_color),
+            ));
+        }
+
         if let Some((idx, total)) = self.scrub_position {
             spans.push(sep.clone());
             spans.push(Span::styled(
@@ -234,11 +272,25 @@ impl StatusBar {
         }
 
         if self.rss_mb > 0.0 {
+            let rss_color = if self.rss_mb > 8192.0 {
+                theme.error
+            } else if self.rss_mb > 4096.0 {
+                theme.warn
+            } else {
+                theme.dim
+            };
             spans.push(Span::styled(" │ ", Style::default().fg(theme.dim)));
-            spans.push(Span::styled(
-                format!(" {:.0} MB", self.rss_mb),
-                Style::default().fg(theme.dim),
-            ));
+            if self.rss_mb >= 1024.0 {
+                spans.push(Span::styled(
+                    format!(" RSS {:.1} GB", self.rss_mb / 1024.0),
+                    Style::default().fg(rss_color),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!(" RSS {:.0} MB", self.rss_mb),
+                    Style::default().fg(rss_color),
+                ));
+            }
         }
 
         let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.highlight));
@@ -259,14 +311,25 @@ fn format_duration(secs: f64) -> String {
 fn read_rss_mb() -> f64 {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
-            for line in content.lines() {
-                if let Some(val) = line.strip_prefix("VmRSS:") {
-                    let val = val.trim().trim_end_matches(" kB").trim();
-                    if let Ok(kb) = val.parse::<f64>() {
-                        return kb / 1024.0;
-                    }
-                }
+        // Read from /proc/self/statm — single read, cheaper than /proc/self/status.
+        // Field 1 (index 1) is RSS in pages.
+        if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
+            let mut fields = content.split_whitespace();
+            if let Some(Ok(pages)) = fields.nth(1).map(|s| s.parse::<u64>()) {
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+                return (pages * page_size) as f64 / (1024.0 * 1024.0);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::mem::MaybeUninit;
+        unsafe {
+            let mut info = MaybeUninit::<libc::rusage>::uninit();
+            if libc::getrusage(libc::RUSAGE_SELF, info.as_mut_ptr()) == 0 {
+                let info = info.assume_init();
+                // macOS reports ru_maxrss in bytes
+                return info.ru_maxrss as f64 / (1024.0 * 1024.0);
             }
         }
     }

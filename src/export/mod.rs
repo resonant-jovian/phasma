@@ -10,21 +10,25 @@ pub mod zip_archive;
 
 use std::path::Path;
 
+use crate::config::PhasmaConfig;
 use crate::data::live::DiagnosticsStore;
 use crate::sim::SimState;
 
 /// Which export format the user selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
+    Screenshot,
     Csv,
     Json,
+    Parquet,
+    ConfigToml,
+    Vtk,
     Npy,
     Markdown,
-    Zip,
-    Screenshot,
-    Parquet,
-    Vtk,
     Animation,
+    RadialProfilesCsv,
+    PerformanceParquet,
+    Zip,
 }
 
 impl ExportFormat {
@@ -35,25 +39,49 @@ impl ExportFormat {
             "npy" | "numpy" => Self::Npy,
             "md" | "markdown" => Self::Markdown,
             "zip" => Self::Zip,
-            "screenshot" | "txt" => Self::Screenshot,
+            "screenshot" | "txt" | "svg" => Self::Screenshot,
             "parquet" => Self::Parquet,
             "vtk" => Self::Vtk,
             "animation" | "anim" => Self::Animation,
+            "config" | "toml" => Self::ConfigToml,
+            "radial" | "profiles" => Self::RadialProfilesCsv,
+            "performance" | "perf" => Self::PerformanceParquet,
             _ => Self::Csv,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Csv => "CSV",
-            Self::Json => "JSON",
-            Self::Npy => "NPY (NumPy)",
-            Self::Markdown => "Markdown report",
-            Self::Zip => "ZIP bundle",
-            Self::Screenshot => "Text snapshot",
-            Self::Parquet => "Parquet (Arrow)",
-            Self::Vtk => "VTK (ParaView)",
-            Self::Animation => "Animation frames",
+            Self::Screenshot => "Screenshot (SVG)",
+            Self::Csv => "Time series → CSV",
+            Self::Json => "Time series → JSON",
+            Self::Parquet => "Time series → Parquet",
+            Self::ConfigToml => "Config → TOML",
+            Self::Vtk => "Snapshot → VTK (ParaView)",
+            Self::Npy => "Snapshot → NumPy .npy",
+            Self::Markdown => "Full report → Markdown",
+            Self::Animation => "Animation → frame sequence",
+            Self::RadialProfilesCsv => "Radial profiles → CSV",
+            Self::PerformanceParquet => "Performance data → Parquet",
+            Self::Zip => "★ Export All → ZIP archive",
+        }
+    }
+
+    /// Shortcut key label for the export menu.
+    pub fn shortcut(&self) -> &'static str {
+        match self {
+            Self::Screenshot => "1",
+            Self::Csv => "2",
+            Self::Json => "3",
+            Self::Parquet => "4",
+            Self::ConfigToml => "5",
+            Self::Vtk => "6",
+            Self::Npy => "7",
+            Self::Markdown => "8",
+            Self::Animation => "9",
+            Self::RadialProfilesCsv => "0",
+            Self::PerformanceParquet => "a",
+            Self::Zip => "z",
         }
     }
 }
@@ -64,21 +92,119 @@ pub fn export_diagnostics(
     format: ExportFormat,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
+    config: Option<&PhasmaConfig>,
     stem: &str,
 ) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
 
     match format {
+        ExportFormat::Screenshot => screenshot::export_screenshot(dir, diagnostics, state, stem),
         ExportFormat::Csv => csv::export_csv(dir, diagnostics, stem),
         ExportFormat::Json => json::export_json(dir, diagnostics, state, stem),
+        ExportFormat::Parquet => parquet::export_parquet(dir, diagnostics, state, stem),
+        ExportFormat::ConfigToml => export_config_toml(dir, config, stem),
+        ExportFormat::Vtk => vtk::export_vtk(dir, state, stem),
         ExportFormat::Npy => npy::export_npy(dir, state, stem),
         ExportFormat::Markdown => report::export_markdown(dir, diagnostics, state, stem),
-        ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
-        ExportFormat::Screenshot => screenshot::export_screenshot(dir, diagnostics, state, stem),
-        ExportFormat::Parquet => parquet::export_parquet(dir, diagnostics, state, stem),
-        ExportFormat::Vtk => vtk::export_vtk(dir, state, stem),
         ExportFormat::Animation => {
             animation::export_animation_frames(dir, diagnostics, state, stem)
         }
+        ExportFormat::RadialProfilesCsv => export_radial_profiles_csv(dir, state, stem),
+        ExportFormat::PerformanceParquet => export_performance_csv(dir, diagnostics, stem),
+        ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
     }
+}
+
+/// Export the current config as a TOML file.
+fn export_config_toml(
+    dir: &Path,
+    config: Option<&PhasmaConfig>,
+    stem: &str,
+) -> Result<String, String> {
+    let cfg = config.ok_or("No config available")?;
+    let toml_str = toml::to_string_pretty(cfg).map_err(|e| format!("serialize config: {e}"))?;
+    let path = dir.join(format!("{stem}_config.toml"));
+    std::fs::write(&path, toml_str).map_err(|e| format!("write: {e}"))?;
+    Ok(path.display().to_string())
+}
+
+/// Export radial density profile as CSV.
+fn export_radial_profiles_csv(
+    dir: &Path,
+    state: Option<&SimState>,
+    stem: &str,
+) -> Result<String, String> {
+    let state = state.ok_or("No simulation state available")?;
+    if state.density_xy.is_empty() {
+        return Err("No density data available".to_string());
+    }
+
+    let l_box = state.spatial_extent * 2.0;
+    let nx = state.density_nx;
+    let ny = state.density_ny;
+    let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
+    let n_bins = 64usize;
+
+    // Compute radial profile (inline — same algorithm as profiles.rs)
+    let cx = nx as f64 / 2.0;
+    let cy = ny as f64 / 2.0;
+    let max_r = cx.min(cy);
+    let bin_width = max_r / n_bins as f64;
+    let mut bin_sum = vec![0.0f64; n_bins];
+    let mut bin_count = vec![0u32; n_bins];
+    for iy in 0..ny {
+        for ix in 0..nx {
+            let ddx = ix as f64 + 0.5 - cx;
+            let ddy = iy as f64 + 0.5 - cy;
+            let r = (ddx * ddx + ddy * ddy).sqrt();
+            let bin = ((r / bin_width) as usize).min(n_bins - 1);
+            bin_sum[bin] += state.density_xy[iy * nx + ix];
+            bin_count[bin] += 1;
+        }
+    }
+
+    let path = dir.join(format!("{stem}_radial_profiles.csv"));
+    let mut csv = String::from("r,density,count\n");
+    for i in 0..n_bins {
+        let r = (i as f64 + 0.5) * bin_width * dx;
+        let rho = if bin_count[i] > 0 {
+            bin_sum[i] / bin_count[i] as f64
+        } else {
+            0.0
+        };
+        csv.push_str(&format!("{r:.6e},{rho:.6e},{}\n", bin_count[i]));
+    }
+    std::fs::write(&path, csv).map_err(|e| format!("write: {e}"))?;
+    Ok(path.display().to_string())
+}
+
+/// Export performance data as CSV (simpler than Parquet, no extra dependency needed).
+fn export_performance_csv(
+    dir: &Path,
+    diagnostics: &DiagnosticsStore,
+    stem: &str,
+) -> Result<String, String> {
+    let energy_data = diagnostics.total_energy.iter_chart_data();
+    if energy_data.is_empty() {
+        return Err("No diagnostics data available".to_string());
+    }
+    let kinetic_data = diagnostics.kinetic_energy.iter_chart_data();
+    let potential_data = diagnostics.potential_energy.iter_chart_data();
+    let mass_data = diagnostics.total_mass.iter_chart_data();
+    let virial_data = diagnostics.virial_ratio.iter_chart_data();
+
+    let path = dir.join(format!("{stem}_performance.csv"));
+    let mut csv =
+        String::from("t,total_energy,kinetic_energy,potential_energy,total_mass,virial_ratio\n");
+    for (i, &(t, e)) in energy_data.iter().enumerate() {
+        let k = kinetic_data.get(i).map(|x| x.1).unwrap_or(0.0);
+        let w = potential_data.get(i).map(|x| x.1).unwrap_or(0.0);
+        let m = mass_data.get(i).map(|x| x.1).unwrap_or(0.0);
+        let v = virial_data.get(i).map(|x| x.1).unwrap_or(0.0);
+        csv.push_str(&format!(
+            "{t:.6e},{e:.6e},{k:.6e},{w:.6e},{m:.6e},{v:.6e}\n"
+        ));
+    }
+    std::fs::write(&path, csv).map_err(|e| format!("write: {e}"))?;
+    Ok(path.display().to_string())
 }

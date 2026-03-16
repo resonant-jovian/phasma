@@ -317,8 +317,15 @@ impl App {
                 let dir = std::path::PathBuf::from(format!("./{stem}"));
                 let provider = self.active_provider();
                 let state = provider.current_state();
-                let result =
-                    export::export_diagnostics(&dir, fmt, provider.diagnostics(), state, &stem);
+                let cfg = provider.config();
+                let result = export::export_diagnostics(
+                    &dir,
+                    fmt,
+                    provider.diagnostics(),
+                    state,
+                    cfg,
+                    &stem,
+                );
                 match &result {
                     Ok(path) => {
                         notifications::notify(
@@ -431,24 +438,139 @@ impl App {
             return Ok(());
         }
 
+        // Ctrl+S: save config to file (§2.3)
+        if let crossterm::event::KeyCode::Char('s') = key.code
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if let Some(ref path) = self.config_path
+                && let Some(cfg) = self.active_provider().config()
+            {
+                match crate::config::save(path, cfg) {
+                    Ok(()) => {
+                        action_tx.send(Action::StatusMsg(format!("Config saved to {path}")))?;
+                    }
+                    Err(e) => {
+                        action_tx.send(Action::StatusMsg(format!("Save failed: {e}")))?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Ctrl+O: load config / switch to Setup tab (§2.3)
+        if let crossterm::event::KeyCode::Char('o') = key.code
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            action_tx.send(Action::SelectTab(0))?; // Jump to Setup tab
+            return Ok(());
+        }
+
+        // Ctrl+P: preset selection (§2.2) — only on Setup tab
+        if let crossterm::event::KeyCode::Char('p') = key.code
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if self.tab_view.selected == crate::tui::tabs::Tab::Setup {
+                self.tab_view.setup_toggle_presets();
+            }
+            return Ok(());
+        }
+
+        // Ctrl+D: reset to defaults (§2.2) — only on Setup tab
+        if let crossterm::event::KeyCode::Char('d') = key.code
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if self.tab_view.selected == crate::tui::tabs::Tab::Setup {
+                self.tab_view.setup_reset_defaults();
+            }
+            return Ok(());
+        }
+
+        // `/`: jump-to-time shortcut — opens command palette with "jump " pre-filled
+        if let crossterm::event::KeyCode::Char('/') = key.code {
+            self.command_palette.open_with("jump ");
+            return Ok(());
+        }
+
         // Let the tab view handle keys (F1-F9, Tab, BackTab, tab-specific)
         if let Some(action) = self.tab_view.handle_key_event(key) {
             action_tx.send(action)?;
             return Ok(());
         }
 
-        // Arrow keys for scrubbing — only if the active tab didn't consume them
+        // Scrubbing / playback keys (§2.3, §3.2)
         match key.code {
-            KeyCode::Left => {
+            KeyCode::Left | KeyCode::Char('[') => {
                 action_tx.send(Action::ScrubBackward)?;
                 return Ok(());
             }
-            KeyCode::Right => {
+            KeyCode::Right | KeyCode::Char(']') => {
                 action_tx.send(Action::ScrubForward)?;
+                return Ok(());
+            }
+            KeyCode::Char('{') => {
+                action_tx.send(Action::ScrubJumpBackward)?;
+                return Ok(());
+            }
+            KeyCode::Char('}') => {
+                action_tx.send(Action::ScrubJumpForward)?;
+                return Ok(());
+            }
+            KeyCode::Home => {
+                action_tx.send(Action::ScrubToStart)?;
+                return Ok(());
+            }
+            KeyCode::End => {
+                action_tx.send(Action::ScrubToEnd)?;
                 return Ok(());
             }
             KeyCode::Backspace => {
                 action_tx.send(Action::ScrubToLive)?;
+                return Ok(());
+            }
+            // Playback speed control (§3.2)
+            KeyCode::Char('<') => {
+                if let AltProvider::Playback(ref mut p) = self.alt_provider {
+                    p.decrease_speed();
+                    let _ = action_tx.send(Action::StatusMsg(format!(
+                        "Playback speed: {:.1} fps",
+                        p.fps()
+                    )));
+                }
+                return Ok(());
+            }
+            KeyCode::Char('>') => {
+                if let AltProvider::Playback(ref mut p) = self.alt_provider {
+                    p.increase_speed();
+                    let _ = action_tx.send(Action::StatusMsg(format!(
+                        "Playback speed: {:.1} fps",
+                        p.fps()
+                    )));
+                }
+                return Ok(());
+            }
+            // Fine-step scrub (§3.2) — `,`/`.` act as single-frame step in playback mode
+            KeyCode::Char(',') => {
+                if let AltProvider::Playback(ref mut p) = self.alt_provider {
+                    p.step_backward();
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
+                return Ok(());
+            }
+            KeyCode::Char('.') => {
+                if let AltProvider::Playback(ref mut p) = self.alt_provider {
+                    p.step_forward();
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
                 return Ok(());
             }
             _ => {}
@@ -602,6 +724,42 @@ impl App {
                     self.status_bar
                         .set_scrub_position(self.active_provider().scrub_position());
                 }
+                Action::ScrubJumpBackward => {
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_jump_backward(10),
+                        AltProvider::Comparison(p) => p.scrub_jump_backward(10),
+                        AltProvider::None => self.data_provider.scrub_jump_backward(10),
+                    }
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
+                Action::ScrubJumpForward => {
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_jump_forward(10),
+                        AltProvider::Comparison(p) => p.scrub_jump_forward(10),
+                        AltProvider::None => self.data_provider.scrub_jump_forward(10),
+                    }
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
+                Action::ScrubToStart => {
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_to_start(),
+                        AltProvider::Comparison(p) => p.scrub_to_start(),
+                        AltProvider::None => self.data_provider.scrub_to_start(),
+                    }
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
+                Action::ScrubToEnd => {
+                    match &mut self.alt_provider {
+                        AltProvider::Playback(p) => p.scrub_to_end(),
+                        AltProvider::Comparison(p) => p.scrub_to_end(),
+                        AltProvider::None => self.data_provider.scrub_to_end(),
+                    }
+                    self.status_bar
+                        .set_scrub_position(self.active_provider().scrub_position());
+                }
                 Action::ScrubToLive => {
                     match &mut self.alt_provider {
                         AltProvider::Playback(p) => p.scrub_to_live(),
@@ -650,9 +808,18 @@ impl App {
             Command::Quit => {
                 action_tx.send(Action::Quit)?;
             }
-            Command::JumpToTime(_t) => {
+            Command::JumpToTime(t) => {
                 // Scrub-to-time: find nearest snapshot in history
-                // For now, this is a placeholder — real implementation needs DataProvider support
+                match &mut self.alt_provider {
+                    AltProvider::Playback(p) => {
+                        p.scrub_to_time(t);
+                    }
+                    _ => {
+                        self.data_provider.scrub_to_time(t);
+                    }
+                }
+                self.status_bar
+                    .set_scrub_position(self.active_provider().scrub_position());
             }
             Command::Export(fmt) => {
                 let stem = self.export_stem();
@@ -660,8 +827,15 @@ impl App {
                 let provider = self.active_provider();
                 let state = provider.current_state();
                 let format = crate::export::ExportFormat::from_name(&fmt);
-                let _ =
-                    export::export_diagnostics(&dir, format, provider.diagnostics(), state, &stem);
+                let cfg = provider.config();
+                let _ = export::export_diagnostics(
+                    &dir,
+                    format,
+                    provider.diagnostics(),
+                    state,
+                    cfg,
+                    &stem,
+                );
             }
             Command::SetColormap(name) => {
                 self.colormap = Colormap::from_name(&name);
@@ -704,7 +878,8 @@ impl App {
 
                 let layout = ResponsiveLayout::compute(Size::new(size.width, size.height));
 
-                // Status bar
+                // Status bar — refresh RSS periodically
+                self.status_bar.tick_rss();
                 self.status_bar.draw(frame, layout.status_area, &theme);
 
                 // Tab bar + content + footer
@@ -720,6 +895,7 @@ impl App {
                         tab_bar: layout.tab_bar_area,
                         content: layout.content_area,
                         footer: layout.footer_area,
+                        layout_mode: layout.mode,
                     },
                     &theme,
                     colormap,

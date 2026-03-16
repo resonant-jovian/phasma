@@ -40,6 +40,13 @@ impl CommandPalette {
         self.cursor = 0;
     }
 
+    /// Open with pre-filled text (e.g. "jump " for `/` shortcut).
+    pub fn open_with(&mut self, prefix: &str) {
+        self.visible = true;
+        self.input = prefix.to_string();
+        self.cursor = self.input.len();
+    }
+
     pub fn close(&mut self) {
         self.visible = false;
         self.input.clear();

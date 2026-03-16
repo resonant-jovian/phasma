@@ -1,6 +1,6 @@
 [package]
 name = "phasma"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "Terminal interface for the caustic Vlasov-Poisson solver"
 authors = ["Albin <albin@sjoegren.se>"]
@@ -20,10 +20,10 @@ include = [
 ]
 
 [dependencies]
-caustic = "0.0.5"    # { path = "../caustic" }
+caustic = { version = "0.0.8", features = ["hdf5", "jemalloc", "tracy"] } # path = "../caustic"
 toml = "1.0.6"
 better-panic = "0.3.0"
-clap = { version = "4.5.60", features = [
+clap = { version = "4.6.0", features = [
     "derive",
     "cargo",
     "wrap_help",
@@ -31,9 +31,9 @@ clap = { version = "4.5.60", features = [
     "string",
     "unstable-styles",
 ] }
-clap_mangen = "0.2.31"
+clap_mangen = "0.2.33"
 color-eyre = "0.6.5"
-config = "0.15.19"
+config = "0.15.21"
 crossterm = { version = "0.29.0", features = ["serde", "event-stream"] }
 directories = "6.0.0"
 futures = "0.3.32"
@@ -51,7 +51,7 @@ tokio = { version = "1.50.0", features = ["full"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-error = "0.2.1"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "serde"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "serde"] }
 rust_decimal = "1.40.0"
 anyhow = "1.0.102"
 zip = "8.2.0"

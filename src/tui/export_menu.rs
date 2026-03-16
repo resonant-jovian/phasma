@@ -9,14 +9,17 @@ use ratatui::{
 use crate::{export::ExportFormat, themes::ThemeColors, tui::action::Action};
 
 const FORMATS: &[ExportFormat] = &[
+    ExportFormat::Screenshot,
     ExportFormat::Csv,
     ExportFormat::Json,
+    ExportFormat::Parquet,
+    ExportFormat::ConfigToml,
+    ExportFormat::Vtk,
     ExportFormat::Npy,
     ExportFormat::Markdown,
-    ExportFormat::Screenshot,
-    ExportFormat::Parquet,
-    ExportFormat::Vtk,
     ExportFormat::Animation,
+    ExportFormat::RadialProfilesCsv,
+    ExportFormat::PerformanceParquet,
     ExportFormat::Zip,
 ];
 
@@ -55,7 +58,7 @@ impl ExportMenu {
                 self.visible = false;
                 None
             }
-            // Number key shortcuts: 1-9 select and immediately export
+            // Shortcut keys matching spec §4.1
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
                 if idx < FORMATS.len() {
@@ -66,6 +69,24 @@ impl ExportMenu {
                     None
                 }
             }
+            KeyCode::Char('0') => {
+                // [0] Radial profiles → CSV (index 9)
+                self.selected = 9;
+                self.visible = false;
+                Some(Action::ExportMenuClose)
+            }
+            KeyCode::Char('a') => {
+                // [a] Performance data → Parquet (index 10)
+                self.selected = 10;
+                self.visible = false;
+                Some(Action::ExportMenuClose)
+            }
+            KeyCode::Char('z') => {
+                // [z] Export All → ZIP archive (index 11)
+                self.selected = 11;
+                self.visible = false;
+                Some(Action::ExportMenuClose)
+            }
             _ => None,
         }
     }
@@ -75,8 +96,8 @@ impl ExportMenu {
             return;
         }
 
-        let w = area.width.min(40);
-        let h = area.height.min(14);
+        let w = area.width.min(44);
+        let h = area.height.min(16);
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
         let overlay = Rect::new(x, y, w, h);
@@ -102,8 +123,7 @@ impl ExportMenu {
                     Style::default().fg(theme.fg)
                 };
                 let marker = if i == self.selected { "► " } else { "  " };
-                let shortcut = i + 1;
-                ListItem::new(format!("{marker}[{shortcut}] {}", fmt.name())).style(style)
+                ListItem::new(format!("{marker}[{}] {}", fmt.shortcut(), fmt.name())).style(style)
             })
             .collect();
 

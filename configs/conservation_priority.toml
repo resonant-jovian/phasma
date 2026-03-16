@@ -1,5 +1,14 @@
-# Conservation Priority — 16^3 x 16^3 Plummer with Yoshida + tight tolerances
-# Validates energy, mass, and Casimir conservation
+# Conservation Priority — 16^3 × 16^3 Plummer with Yoshida 4th-order
+#
+# Phase-space array: 16^6 × 8 B ≈ 134 MB.  Peak memory ~300 MB.
+# Designed to validate energy, mass, and Casimir conservation.
+#
+# Yoshida 4th-order integrator gives much tighter conservation than
+# Strang at the cost of 3.5× more work per timestep (7 sub-steps).
+# The moderate cfl_factor = 0.3 balances accuracy against wall-clock.
+#
+# Compare F5 Energy ΔE/E₀ and ΔM/M₀ panels against speed_priority
+# to see the resolution/integrator impact.
 
 [model]
 type = "plummer"
@@ -19,17 +28,17 @@ gravitational_constant = 1.0
 representation = "uniform"
 poisson = "fft_periodic"
 advection = "semi_lagrangian"
-integrator = "yoshida"
+integrator = "yoshida"            # 4th-order Yoshida splitting
 
 [time]
-t_final = 10.0
+t_final = 10.0            # ~5 dynamical times
 dt_mode = "adaptive"
 cfl_factor = 0.3
 
 [output]
 directory = "output/conservation_priority"
 prefix = "run"
-snapshot_interval = 0.5
+snapshot_interval = 0.5    # finer output for conservation tracking
 
 [exit]
 energy_drift_tolerance = 5.0

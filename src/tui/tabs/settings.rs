@@ -187,13 +187,15 @@ impl SettingsTab {
             let (label, value) = match section {
                 SettingsSection::Theme => {
                     let name = THEMES[self.theme_idx].name();
-                    let all: Vec<&str> = THEMES.iter().map(|t| t.name()).collect();
-                    ("Theme", format!("◄ {} ►  ({})", name, all.join(", ")))
+                    let idx = self.theme_idx + 1;
+                    let total = THEMES.len();
+                    ("Theme", format!("◄ {name} ►  ({idx}/{total})"))
                 }
                 SettingsSection::Colormap => {
                     let name = COLORMAPS[self.colormap_idx].name();
-                    let all: Vec<&str> = COLORMAPS.iter().map(|c| c.name()).collect();
-                    ("Colormap", format!("◄ {} ►  ({})", name, all.join(", ")))
+                    let idx = self.colormap_idx + 1;
+                    let total = COLORMAPS.len();
+                    ("Colormap", format!("◄ {name} ►  ({idx}/{total})"))
                 }
                 SettingsSection::CellAspect => {
                     ("Cell aspect ratio", format!("◄ {:.2} ►", self.cell_aspect))

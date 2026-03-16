@@ -1,5 +1,15 @@
-# Cosmological — Zeldovich single-mode pancake
-# Tests caustic formation in a periodic box
+# Cosmological — Zel'dovich single-mode pancake
+#
+# Phase-space: 32^6 × 8 B ≈ 8.6 GB.  Requires ≥16 GB RAM.
+# This is the largest preset; reduce resolution to 16 if RAM is tight.
+#
+# Initialises a cold (δ-function in velocity) single sinusoidal mode.
+# The density evolves through shell-crossing to form a caustic (pancake).
+# The analytic Zel'dovich solution gives the exact caustic position,
+# making this a quantitative validation test.
+#
+# spatial_extent = 2π matches the mode wavelength λ = 2π/k with k = 1.
+# Short t_final (1.2) because the first caustic forms at t ≈ 1/A.
 
 [model]
 type = "zeldovich"
@@ -7,15 +17,15 @@ total_mass = 1.0
 scale_radius = 1.0
 
 [model.zeldovich]
-amplitude = 0.3
-wave_number = 1.0
+amplitude = 0.3           # initial perturbation amplitude A
+wave_number = 1.0          # k = 1 → wavelength = 2π
 
 [domain]
-spatial_extent = 6.283185
+spatial_extent = 6.283185  # L = 2π (one full wavelength)
 velocity_extent = 2.0
-spatial_resolution = 32
+spatial_resolution = 32    # need fine grid to resolve caustic
 velocity_resolution = 32
-boundary = "periodic|truncated"
+boundary = "periodic|truncated"   # periodic BC essential for this test
 coordinates = "cartesian"
 gravitational_constant = 1.0
 
@@ -26,14 +36,14 @@ advection = "semi_lagrangian"
 integrator = "strang"
 
 [time]
-t_final = 1.2
+t_final = 1.2              # just past first caustic
 dt_mode = "adaptive"
 cfl_factor = 0.5
 
 [output]
 directory = "output/cosmological"
 prefix = "run"
-snapshot_interval = 0.1
+snapshot_interval = 0.1    # frequent snapshots to track caustic
 
 [exit]
 energy_drift_tolerance = 0.5

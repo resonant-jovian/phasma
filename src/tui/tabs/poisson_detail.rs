@@ -82,17 +82,32 @@ impl PoissonDetailTab {
             }
         }
 
-        // Layout: top half = P(k) spectrum, bottom half = residual chart + solver stats
+        // Compact mode: show only P(k) spectrum
+        if area.width < 76 {
+            self.draw_power_spectrum(frame, area, theme, data_provider);
+            return;
+        }
+
+        // Layout: top = P(k) spectrum + Green's function stub,
+        //         bottom = residual chart + solver stats + Hadamard stub
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [bottom_left, bottom_right] =
-            Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .areas(bottom);
+        let [top_left, top_right] =
+            Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).areas(top);
 
-        self.draw_power_spectrum(frame, top, theme, data_provider);
+        let [bottom_left, bottom_mid, bottom_right] = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Percentage(35),
+            Constraint::Percentage(25),
+        ])
+        .areas(bottom);
+
+        self.draw_power_spectrum(frame, top_left, theme, data_provider);
+        Self::draw_green_rank_stub(frame, top_right, theme);
         self.draw_residual_chart(frame, bottom_left, theme);
-        self.draw_solver_stats(frame, bottom_right, theme, data_provider);
+        self.draw_solver_stats(frame, bottom_mid, theme, data_provider);
+        Self::draw_hadamard_stub(frame, bottom_right, theme);
     }
 
     fn draw_power_spectrum(
@@ -121,14 +136,23 @@ impl PoissonDetailTab {
             Some(ref data) if data.len() >= 2 => {
                 let (x_min, x_max, y_min, y_max) = data_bounds(data);
 
-                let dataset = Dataset::default()
+                let chart_width = area.width.saturating_sub(2) as usize;
+                let dense = densify(data, chart_width * 2);
+
+                let line_ds = Dataset::default()
                     .name("|\u{03a6}\u{0302}(k)|\u{00b2}")
                     .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(theme.chart[0]))
+                    .data(&dense);
+
+                let dots_ds = Dataset::default()
+                    .marker(symbols::Marker::Dot)
                     .graph_type(GraphType::Scatter)
                     .style(Style::default().fg(theme.chart[0]))
                     .data(data);
 
-                let chart = Chart::new(vec![dataset])
+                let chart = Chart::new(vec![line_ds, dots_ds])
                     .block(block)
                     .x_axis(
                         Axis::default()
@@ -329,6 +353,77 @@ impl PoissonDetailTab {
         };
 
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+    fn draw_green_rank_stub(frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let block = Block::bordered()
+            .title(" Green\u{2019}s Fn Rank (Braess-Hackbusch) ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  1/|x| \u{2248} \u{03a3} c\u{2096} exp(-\u{03b1}\u{2096}|x|\u{00b2})",
+                    Style::default().fg(theme.accent),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  R\u{1d33} terms: \u{2014}",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(Span::styled(
+                    "  Approx error: \u{2014}",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Requires TensorPoisson",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(Span::styled(
+                    "  solver diagnostics",
+                    Style::default().fg(theme.dim),
+                )),
+            ]),
+            inner,
+        );
+    }
+
+    fn draw_hadamard_stub(frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let block = Block::bordered()
+            .title(" Hadamard Rank ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    " \u{03c1}\u{0302} \u{2218} \u{011c} product",
+                    Style::default().fg(theme.accent),
+                )),
+                Line::from(Span::styled(
+                    " rank evolution.",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    " R_result(t): \u{2014}",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    " Requires HT cross",
+                    Style::default().fg(theme.dim),
+                )),
+                Line::from(Span::styled(
+                    " approximation data",
+                    Style::default().fg(theme.dim),
+                )),
+            ]),
+            inner,
+        );
     }
 }
 

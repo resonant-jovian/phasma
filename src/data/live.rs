@@ -359,4 +359,16 @@ impl DataProvider for LiveDataProvider {
     fn scrub_to_live(&mut self) {
         LiveDataProvider::scrub_to_live(self);
     }
+
+    fn scrub_to_start(&mut self) {
+        if !self.snapshot_history.is_empty() {
+            self.scrub_index = Some(0);
+        }
+    }
+
+    fn scrub_to_end(&mut self) {
+        if !self.snapshot_history.is_empty() {
+            self.scrub_index = Some(self.snapshot_history.len() - 1);
+        }
+    }
 }
