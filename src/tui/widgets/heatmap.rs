@@ -1,6 +1,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
     widgets::{Block, Widget},
 };
 
@@ -71,12 +72,18 @@ impl Widget for HeatmapWidget<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if inner.width == 0
-            || inner.height == 0
-            || self.data.is_empty()
-            || self.nx == 0
-            || self.ny == 0
-        {
+        if self.data.is_empty() || self.nx == 0 || self.ny == 0 {
+            return;
+        }
+
+        // §2.5: heatmap minimum 10×5
+        if inner.width < 10 || inner.height < 5 {
+            if inner.width > 0 && inner.height > 0 {
+                let msg = "(too small)";
+                let x = inner.x + inner.width.saturating_sub(msg.len() as u16) / 2;
+                let y = inner.y + inner.height / 2;
+                buf.set_string(x, y, msg, Style::default().fg(Color::DarkGray));
+            }
             return;
         }
 

@@ -85,7 +85,12 @@ impl DensityTab {
                 self.show_contours = !self.show_contours;
                 None
             }
-            KeyCode::Char('r') | KeyCode::Char('0') => {
+            KeyCode::Char('r') => {
+                self.zoom = 1.0;
+                None
+            }
+            KeyCode::Char('0') => {
+                // Auto-scale: fit data to view (currently same as reset)
                 self.zoom = 1.0;
                 None
             }

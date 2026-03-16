@@ -164,8 +164,8 @@ impl Component for TabView {
         }
 
         // Help footer
-        let help = Paragraph::new(help_line(self.selected))
-            .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+        let help =
+            Paragraph::new(help_line(self.selected)).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(help, help_area);
 
         Ok(())

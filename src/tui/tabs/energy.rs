@@ -201,6 +201,17 @@ impl EnergyTab {
             return;
         }
 
+        // Compact mode: single panel (selected by panel key 1-4)
+        if area.width < 76 {
+            match self.selected_panel {
+                0 => self.draw_energy_chart(frame, area, theme, data_provider),
+                1 => self.draw_mass_chart(frame, area, theme, data_provider),
+                2 => self.draw_virial_chart(frame, area, theme, data_provider),
+                _ => self.draw_entropy_chart(frame, area, theme, data_provider),
+            }
+            return;
+        }
+
         // 2×2 grid layout
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
@@ -280,19 +291,27 @@ impl EnergyTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        let drift = data_provider.diagnostics().mass_drift_series();
-        let threshold = data_provider
-            .config()
-            .map(|c| c.exit.mass_drift_tolerance)
-            .unwrap_or(0.1);
-        draw_single_series_with_threshold(
+        let diag = data_provider.diagnostics();
+        let energy_drift = diag.energy_drift_series();
+        let mass_drift = diag.mass_drift_series();
+        let c2_drift = diag.c2_drift_series();
+
+        // Convert to absolute values for log-like display
+        let abs_energy: Vec<(f64, f64)> = energy_drift.iter().map(|&(t, v)| (t, v.abs())).collect();
+        let abs_mass: Vec<(f64, f64)> = mass_drift.iter().map(|&(t, v)| (t, v.abs())).collect();
+        let abs_c2: Vec<(f64, f64)> = c2_drift.iter().map(|&(t, v)| (t, v.abs())).collect();
+
+        let series: Vec<SeriesData> = vec![
+            ("ΔE/E", abs_energy, theme.chart[0]),
+            ("ΔM/M", abs_mass, theme.chart[1]),
+            ("ΔC₂/C₂", abs_c2, theme.chart[2]),
+        ];
+        draw_multi_series_windowed(
             frame,
             area,
-            " ΔM/M₀ ",
-            &drift,
-            theme.chart[4],
+            " Conservation Errors ",
+            &series,
             theme,
-            Some(threshold),
             &self.time_window,
             self.show_grid,
         );

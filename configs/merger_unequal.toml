@@ -1,0 +1,57 @@
+# Unequal-Mass Merger — 3:1 mass ratio Plummer merger with impact parameter
+#
+# Two Plummer spheres with mass ratio 3:1 on an off-axis encounter.
+# The heavier body (M1=1.5) barely deflects while the lighter (M2=0.5)
+# is tidally disrupted, producing asymmetric tidal streams visible
+# on F3 Density.
+#
+# The impact parameter b=2.0 and relative velocity [0, 0.5, 0] create
+# a parabolic-like orbit rather than a head-on collision. The lighter
+# body's tidal radius r_t ~ a2 * (M2/3M1)^(1/3) ≈ 0.47 means it
+# starts marginally bound and progressively strips.
+#
+# Memory: 16^6 × 8 B ≈ 134 MB.
+
+[model]
+type = "merger"
+total_mass = 2.0
+scale_radius = 1.0
+
+[model.merger]
+separation = 8.0
+mass_ratio = 3.0                       # M1/M2 = 3
+relative_velocity = [0.0, 0.5, 0.0]   # tangential approach
+impact_parameter = 2.0
+model_1 = "plummer"
+model_2 = "plummer"
+scale_radius_1 = 1.0
+scale_radius_2 = 0.7                  # smaller secondary
+
+[domain]
+spatial_extent = 15.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 40.0
+dt_mode = "adaptive"
+cfl_factor = 0.4
+
+[output]
+directory = "output/merger_unequal"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 0.5

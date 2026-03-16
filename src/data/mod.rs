@@ -27,4 +27,22 @@ pub trait DataProvider: Send {
     fn scrub_backward(&mut self) {}
     fn scrub_forward(&mut self) {}
     fn scrub_to_live(&mut self) {}
+    /// Jump backward N frames (default 10).
+    fn scrub_jump_backward(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scrub_backward();
+        }
+    }
+    /// Jump forward N frames (default 10).
+    fn scrub_jump_forward(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scrub_forward();
+        }
+    }
+    /// Jump to the first frame.
+    fn scrub_to_start(&mut self) {}
+    /// Jump to the last frame (same as scrub_to_live for live providers).
+    fn scrub_to_end(&mut self) {
+        self.scrub_to_live();
+    }
 }

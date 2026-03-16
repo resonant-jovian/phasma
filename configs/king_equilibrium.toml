@@ -23,13 +23,13 @@ spatial_extent = 10.0
 velocity_extent = 1.5      # low escape speed → narrow velocity box
 spatial_resolution = 16
 velocity_resolution = 16
-boundary = "periodic|truncated"
+boundary = "isolated|truncated"
 coordinates = "cartesian"
 gravitational_constant = 1.0
 
 [solver]
 representation = "uniform"
-poisson = "fft_periodic"
+poisson = "fft_isolated"
 advection = "semi_lagrangian"
 integrator = "strang"
 

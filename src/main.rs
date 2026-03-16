@@ -22,6 +22,9 @@ async fn main() -> color_eyre::Result<()> {
 
     let args = Cli::parse();
 
+    // Set global verbose flag
+    sim::set_verbose(args.verbose);
+
     // Modes that don't launch the TUI
     if args.generate_man {
         Cli::print_man_page()?;

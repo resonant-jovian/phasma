@@ -152,21 +152,323 @@ impl PerformanceTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        // 2×2 + timing breakdown layout
+        // Compact mode: stats + wall time only
+        if area.width < 76 {
+            let [stats_area, chart_area] =
+                Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)])
+                    .areas(area);
+            self.draw_stats(frame, stats_area, theme, data_provider);
+            self.draw_wall_time_chart(frame, chart_area, theme);
+            return;
+        }
+
+        // Wide mode (160+): 3-column layout for more breathing room
+        if area.width >= 156 {
+            let [top, bottom] =
+                Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(area);
+
+            let [stats_area, timing_area, memory_area] = Layout::horizontal([
+                Constraint::Percentage(28),
+                Constraint::Percentage(36),
+                Constraint::Percentage(36),
+            ])
+            .areas(top);
+
+            let [wall_area, dt_area, cumul_area] = Layout::horizontal([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .areas(bottom);
+
+            self.draw_stats(frame, stats_area, theme, data_provider);
+            Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
+            Self::draw_memory_breakdown(frame, memory_area, theme, data_provider);
+            self.draw_wall_time_chart(frame, wall_area, theme);
+            self.draw_dt_chart(frame, dt_area, theme);
+            self.draw_cumulative_chart(frame, cumul_area, theme);
+            return;
+        }
+
+        // Standard 2×3 layout
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [stats_area, dt_area] =
-            Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(top);
+        let [stats_area, timing_area, memory_area, dt_area] = Layout::horizontal([
+            Constraint::Percentage(28),
+            Constraint::Percentage(22),
+            Constraint::Percentage(22),
+            Constraint::Percentage(28),
+        ])
+        .areas(top);
 
         let [wall_area, cumul_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(bottom);
 
         self.draw_stats(frame, stats_area, theme, data_provider);
+        Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
+        Self::draw_memory_breakdown(frame, memory_area, theme, data_provider);
         self.draw_dt_chart(frame, dt_area, theme);
         self.draw_wall_time_chart(frame, wall_area, theme);
         self.draw_cumulative_chart(frame, cumul_area, theme);
+    }
+
+    fn draw_memory_breakdown(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        // Split memory area: memory info + roofline indicators
+        let [mem_area, roofline_area] =
+            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+
+        let block = Block::bordered()
+            .title(" Memory ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(mem_area);
+        frame.render_widget(block, mem_area);
+
+        let state = data_provider.current_state();
+        let iw = inner.width as usize;
+        let lbl_w = if iw < 16 { 5 } else { 7 };
+        let lines = if let Some(s) = state {
+            let mut ls = Vec::new();
+            ls.push(Line::from(vec![
+                Span::styled(
+                    format!(" {:<lbl_w$}", "Type"),
+                    Style::default().fg(theme.dim),
+                ),
+                Span::styled(
+                    if s.repr_type.is_empty() {
+                        "—".to_string()
+                    } else {
+                        s.repr_type.clone()
+                    },
+                    Style::default().fg(theme.fg),
+                ),
+            ]));
+            if let Some(mem) = s.rank_memory_bytes {
+                ls.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {:<lbl_w$}", "Repr"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(format_size(mem as f64), Style::default().fg(theme.fg)),
+                ]));
+            }
+            if let Some(cr) = s.compression_ratio {
+                ls.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {:<lbl_w$}", "Comp"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        format!("{cr:.1}\u{00d7}"),
+                        Style::default().fg(theme.chart[2]),
+                    ),
+                ]));
+            }
+            if s.svd_count > 0 {
+                ls.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {:<lbl_w$}", "SVDs"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        format!("{}/step", s.svd_count),
+                        Style::default().fg(theme.fg),
+                    ),
+                ]));
+            }
+            if s.htaca_evaluations > 0 {
+                ls.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {:<lbl_w$}", "HTACA"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        format!("{}", s.htaca_evaluations),
+                        Style::default().fg(theme.fg),
+                    ),
+                ]));
+            }
+            ls
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(" No data", Style::default().fg(theme.dim))),
+            ]
+        };
+
+        frame.render_widget(Paragraph::new(lines), inner);
+
+        // Roofline indicators stub
+        let rf_block = Block::bordered()
+            .title(" Roofline ")
+            .border_style(Style::default().fg(theme.border));
+        let rf_inner = rf_block.inner(roofline_area);
+        frame.render_widget(rf_block, roofline_area);
+
+        let rf_inner_w = rf_inner.width as usize;
+        let rf_lines = if let Some(s) = state {
+            // Estimate arithmetic intensity from step timing
+            let total_ms = s.step_wall_ms;
+            let nx = s.density_nx as f64;
+            let nv = s.phase_nv as f64;
+            let cells = nx * nx * nx * nv * nv * nv;
+            let flops_est = cells * 20.0; // ~20 FLOP/cell estimate
+            let gflops = if total_ms > 0.0 {
+                flops_est / (total_ms * 1e6)
+            } else {
+                0.0
+            };
+            let mut ls = vec![Line::from(vec![
+                Span::styled(" Est. ", Style::default().fg(theme.dim)),
+                Span::styled(format!("{gflops:.1} GF/s"), Style::default().fg(theme.fg)),
+            ])];
+            let note = if rf_inner_w >= 30 {
+                " (needs instrumentation)"
+            } else {
+                " (estimated)"
+            };
+            ls.push(Line::from(Span::styled(
+                note,
+                Style::default().fg(theme.dim),
+            )));
+            ls
+        } else {
+            vec![Line::from(Span::styled(
+                " No data",
+                Style::default().fg(theme.dim),
+            ))]
+        };
+        frame.render_widget(Paragraph::new(rf_lines), rf_inner);
+    }
+
+    fn draw_timing_breakdown(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let block = Block::bordered()
+            .title(" Phase Timings ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // If SimState has phase timings, display them; otherwise show stub
+        let state = data_provider.current_state();
+        let has_timings = state.map(|s| s.step_wall_ms > 0.0).unwrap_or(false);
+
+        if !has_timings {
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "  Timing breakdown",
+                        Style::default().fg(theme.dim),
+                    )),
+                    Line::from(Span::styled(
+                        "  not yet available",
+                        Style::default().fg(theme.dim),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "  Requires phase",
+                        Style::default().fg(theme.dim),
+                    )),
+                    Line::from(Span::styled(
+                        "  timing data from",
+                        Style::default().fg(theme.dim),
+                    )),
+                    Line::from(Span::styled(
+                        "  caustic runtime.",
+                        Style::default().fg(theme.dim),
+                    )),
+                ]),
+                inner,
+            );
+            return;
+        }
+
+        let s = state.unwrap();
+        let total = s.step_wall_ms;
+        let timing_w = inner.width as usize;
+        let plw = if timing_w < 22 { 5 } else { 8 }; // phase label width
+
+        const PHASE_NAMES: [&str; 7] = ["Drift", "Poissn", "Kick", "Dens", "Diag", "I/O", "Other"];
+
+        let lines = if let Some(ref timings) = s.phase_timings {
+            // Real phase timings from caustic instrumentation
+            let mut ls = Vec::new();
+            let bar_max = timing_w.saturating_sub(plw + 7); // label + " NNN%"
+            for (i, (&name, &ms)) in PHASE_NAMES.iter().zip(timings.iter()).enumerate() {
+                if ms <= 0.0 {
+                    continue;
+                }
+                let pct = if total > 0.0 { ms / total * 100.0 } else { 0.0 };
+                let bar_width = (pct / 100.0 * bar_max as f64) as usize;
+                let bar = "\u{2588}".repeat(bar_width.max(1));
+                ls.push(Line::from(vec![
+                    Span::styled(format!(" {:<plw$}", name), Style::default().fg(theme.dim)),
+                    Span::styled(bar, Style::default().fg(theme.chart[i % 6])),
+                    Span::styled(format!(" {pct:.0}%"), Style::default().fg(theme.fg)),
+                ]));
+            }
+            ls.push(Line::from(""));
+            ls.push(Line::from(vec![
+                Span::styled(
+                    format!(" {:<plw$}", "Total"),
+                    Style::default().fg(theme.dim),
+                ),
+                Span::styled(
+                    format!("{total:.1}ms"),
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            ls
+        } else {
+            // Estimated split (Strang: drift 33%, Poisson 34%, kick 33%)
+            vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {:<plw$}", "Drift"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled("~33%", Style::default().fg(theme.chart[0])),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {:<plw$}", "Poissn"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled("~34%", Style::default().fg(theme.chart[1])),
+                ]),
+                Line::from(vec![
+                    Span::styled(format!(" {:<plw$}", "Kick"), Style::default().fg(theme.dim)),
+                    Span::styled("~33%", Style::default().fg(theme.chart[2])),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {:<plw$}", "Total"),
+                        Style::default().fg(theme.dim),
+                    ),
+                    Span::styled(
+                        format!("{total:.1}ms"),
+                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
+            ]
+        };
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn draw_stats(
@@ -219,9 +521,11 @@ impl PerformanceTab {
         // Current dt
         let current_dt = self.dt_history.back().map(|(_, dt)| *dt).unwrap_or(0.0);
 
-        let val = |label: &str, value: String| -> Line {
+        let inner_w = area.width.saturating_sub(2) as usize;
+        let lw = if inner_w < 30 { 8 } else { 12 };
+        let val = move |label: &str, value: String| -> Line {
             Line::from(vec![
-                Span::styled(format!("  {label:<14}"), Style::default().fg(theme.dim)),
+                Span::styled(format!(" {label:<lw$}"), Style::default().fg(theme.dim)),
                 Span::styled(value, Style::default().fg(theme.fg)),
             ])
         };
@@ -430,6 +734,21 @@ impl PerformanceTab {
             );
 
         frame.render_widget(chart, area);
+    }
+}
+
+fn format_size(bytes: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if bytes >= GB {
+        format!("{:.2} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes / KB)
+    } else {
+        format!("{:.0} B", bytes)
     }
 }
 

@@ -131,6 +131,16 @@ impl DataProvider for ComparisonDataProvider {
         self.a.scrub_to_live();
         self.b.scrub_to_live();
     }
+
+    fn scrub_to_start(&mut self) {
+        self.a.scrub_to_start();
+        self.b.scrub_to_start();
+    }
+
+    fn scrub_to_end(&mut self) {
+        self.a.scrub_to_end();
+        self.b.scrub_to_end();
+    }
 }
 
 fn diff_vec(a: &[f64], b: &[f64]) -> Vec<f64> {

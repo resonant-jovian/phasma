@@ -110,6 +110,30 @@ impl PlaybackDataProvider {
             self.current_index -= 1;
         }
     }
+
+    /// Increase playback speed (up to 120 fps).
+    pub fn increase_speed(&mut self) {
+        self.fps = (self.fps * 1.5).min(120.0);
+    }
+
+    /// Decrease playback speed (down to 0.5 fps).
+    pub fn decrease_speed(&mut self) {
+        self.fps = (self.fps / 1.5).max(0.5);
+    }
+
+    /// Current playback FPS.
+    pub fn fps(&self) -> f64 {
+        self.fps
+    }
+
+    /// Scrub to the nearest snapshot at or after the given simulation time.
+    pub fn scrub_to_time(&mut self, t: f64) {
+        if let Some(idx) = self.snapshots.iter().position(|s| s.t >= t) {
+            self.current_index = idx;
+        } else if !self.snapshots.is_empty() {
+            self.current_index = self.snapshots.len() - 1;
+        }
+    }
 }
 
 impl DataProvider for PlaybackDataProvider {
@@ -170,6 +194,16 @@ impl DataProvider for PlaybackDataProvider {
     }
 
     fn scrub_to_live(&mut self) {
+        if !self.snapshots.is_empty() {
+            self.current_index = self.snapshots.len() - 1;
+        }
+    }
+
+    fn scrub_to_start(&mut self) {
+        self.current_index = 0;
+    }
+
+    fn scrub_to_end(&mut self) {
         if !self.snapshots.is_empty() {
             self.current_index = self.snapshots.len() - 1;
         }

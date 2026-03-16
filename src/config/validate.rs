@@ -76,11 +76,98 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
                 message: "custom_file model requires [model.custom_file] section".into(),
             });
         }
+        "uniform_perturbation" if cfg.model.uniform_perturbation.is_none() => {
+            warnings.push(ValidationWarning {
+                field: "model".into(),
+                message: "uniform_perturbation requires [model.uniform_perturbation] section"
+                    .into(),
+            });
+        }
+        "disk_exponential" | "disk_stability" if cfg.model.disk.is_none() => {
+            warnings.push(ValidationWarning {
+                field: "model".into(),
+                message: "disk model requires [model.disk] section".into(),
+            });
+        }
+        "tidal" if cfg.model.tidal.is_none() => {
+            warnings.push(ValidationWarning {
+                field: "model".into(),
+                message: "tidal model requires [model.tidal] section".into(),
+            });
+        }
         _ => {}
     }
 
+    // Model type validity
+    let valid_models = [
+        "plummer",
+        "hernquist",
+        "king",
+        "nfw",
+        "zeldovich",
+        "merger",
+        "two_body_merger",
+        "uniform_perturbation",
+        "disk_exponential",
+        "disk_stability",
+        "tidal",
+        "custom_function",
+        "custom_file",
+    ];
+    if !valid_models.contains(&cfg.model.model_type.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "model.type".into(),
+            message: format!(
+                "unknown model type '{}'; valid: {}",
+                cfg.model.model_type,
+                valid_models.join(", ")
+            ),
+        });
+    }
+    // disk_exponential is a legacy alias — suggest disk_stability instead
+    if cfg.model.model_type == "disk_exponential" {
+        warnings.push(ValidationWarning {
+            field: "model.type".into(),
+            message: "consider using 'disk_stability' instead of 'disk_exponential'".into(),
+        });
+    }
+
     // Solver name validity
-    let valid_poisson = ["fft_periodic", "fft", "fft_isolated"];
+    let valid_repr = [
+        "uniform",
+        "uniform_grid",
+        "hierarchical_tucker",
+        "ht",
+        "tensor_train",
+        "sheet_tracker",
+        "spectral",
+        "velocity_ht",
+        "amr",
+        "hybrid",
+    ];
+    if !valid_repr.contains(&cfg.solver.representation.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "solver.representation".into(),
+            message: format!(
+                "unknown representation '{}'; valid: {}",
+                cfg.solver.representation,
+                valid_repr.join(", ")
+            ),
+        });
+    }
+
+    let valid_poisson = [
+        "fft_periodic",
+        "fft",
+        "fft_isolated",
+        "tensor",
+        "tensor_poisson",
+        "multigrid",
+        "spherical",
+        "spherical_harmonics",
+        "tree",
+        "barnes_hut",
+    ];
     if !valid_poisson.contains(&cfg.solver.poisson.as_str()) {
         warnings.push(ValidationWarning {
             field: "solver.poisson".into(),
@@ -92,7 +179,29 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
-    let valid_integrator = ["strang", "yoshida", "lie"];
+    let valid_advection = ["semi_lagrangian", "spectral", "slar"];
+    if !valid_advection.contains(&cfg.solver.advection.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "solver.advection".into(),
+            message: format!(
+                "unknown advection '{}'; valid: {}",
+                cfg.solver.advection,
+                valid_advection.join(", ")
+            ),
+        });
+    }
+
+    let valid_integrator = [
+        "strang",
+        "yoshida",
+        "lie",
+        "strang_splitting",
+        "yoshida_splitting",
+        "unsplit",
+        "unsplit_rk2",
+        "unsplit_rk3",
+        "unsplit_rk4",
+    ];
     if !valid_integrator.contains(&cfg.solver.integrator.as_str()) {
         warnings.push(ValidationWarning {
             field: "solver.integrator".into(),
@@ -104,17 +213,56 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
-    // Memory estimate
-    let nx = cfg.domain.spatial_resolution as u64;
-    let nv = cfg.domain.velocity_resolution as u64;
-    let cells = nx * nx * nx * nv * nv * nv;
-    let mem_gb = cells as f64 * 8.0 / 1e9;
+    // Resolution must be power of 2 for FFT-based solvers
+    let is_fft = cfg.solver.poisson.starts_with("fft");
+    if is_fft && !cfg.domain.spatial_resolution.is_power_of_two() {
+        warnings.push(ValidationWarning {
+            field: "domain.spatial_resolution".into(),
+            message: format!(
+                "{} requires power-of-2 resolution (got {})",
+                cfg.solver.poisson, cfg.domain.spatial_resolution
+            ),
+        });
+    }
+
+    // SLAR requires hierarchical_tucker
+    if cfg.solver.advection == "slar"
+        && !matches!(
+            cfg.solver.representation.as_str(),
+            "hierarchical_tucker" | "ht"
+        )
+    {
+        warnings.push(ValidationWarning {
+            field: "solver.advection".into(),
+            message: "slar advection requires hierarchical_tucker representation".into(),
+        });
+    }
+
+    // LoMaC works with any representation but is most useful with HT
+    let valid_conservation = ["none", "lomac", "standard_svd", "macro_micro"];
+    if !valid_conservation.contains(&cfg.solver.conservation.as_str()) {
+        warnings.push(ValidationWarning {
+            field: "solver.conservation".into(),
+            message: format!(
+                "unknown conservation '{}'; valid: {}",
+                cfg.solver.conservation,
+                valid_conservation.join(", ")
+            ),
+        });
+    }
+
+    // Memory estimate — use the detailed breakdown, not naive full-grid
+    let breakdown = super::defaults::estimate_memory_breakdown(cfg);
+    let mem_gb = breakdown.total_mb() / 1000.0;
     if mem_gb > cfg.performance.memory_budget_gb {
         warnings.push(ValidationWarning {
             field: "performance.memory_budget_gb".into(),
             message: format!(
-                "estimated memory {mem_gb:.1} GB exceeds budget {:.1} GB ({}^3 x {}^3 grid)",
-                cfg.performance.memory_budget_gb, nx, nv
+                "estimated peak memory {mem_gb:.1} GB exceeds budget {:.1} GB \
+                 (resident {:.1} GB + transient {:.1} GB)",
+                cfg.performance.memory_budget_gb,
+                breakdown.resident_mb() / 1000.0,
+                breakdown.peak_transient_mb() / 1000.0,
             ),
         });
     }
@@ -165,8 +313,8 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
-    // Playback checks
-    if cfg.playback.fps <= 0.0 {
+    // Playback checks — only validate if playback is explicitly configured
+    if cfg.playback.source_directory.is_some() && cfg.playback.fps <= 0.0 {
         warnings.push(ValidationWarning {
             field: "playback.fps".into(),
             message: "must be > 0".into(),

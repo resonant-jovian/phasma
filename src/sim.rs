@@ -1,8 +1,17 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+/// Global verbose flag — set once at startup from CLI args.
+pub static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Set the global verbose flag. Call once from main().
+pub fn set_verbose(v: bool) {
+    VERBOSE.store(v, Ordering::Relaxed);
+}
 
 /// Snapshot of simulation state emitted at each diagnostic step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +73,25 @@ pub struct SimState {
     pub poisson_residual_l2: Option<f64>,
     #[serde(default)]
     pub potential_power_spectrum: Option<Vec<(f64, f64)>>,
+    // ── Per-step performance phase timings (§2.2 F8) ──
+    /// Phase breakdown: [drift_ms, poisson_ms, kick_ms, density_ms, diagnostics_ms, io_ms, other_ms]
+    #[serde(default)]
+    pub phase_timings: Option<[f64; 7]>,
+    /// Per-node HSVD truncation errors (same indexing as rank_per_node)
+    #[serde(default)]
+    pub truncation_errors: Option<Vec<f64>>,
+    /// Number of SVD operations performed this step
+    #[serde(default)]
+    pub svd_count: u32,
+    /// Number of HTACA pointwise evaluations this step
+    #[serde(default)]
+    pub htaca_evaluations: u64,
+    // ── Velocity extent for aspect ratio (F4) ──
+    #[serde(default)]
+    pub velocity_extent: f64,
+    // ── Verbose log messages (--verbose) ──
+    #[serde(default)]
+    pub log_messages: Vec<String>,
 }
 
 impl SimState {
@@ -131,6 +159,13 @@ pub struct SimHandle {
 
 impl SimHandle {
     pub fn spawn(config_path: String) -> Self {
+        Self::spawn_with_verbose(
+            config_path,
+            VERBOSE.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    pub fn spawn_with_verbose(config_path: String, verbose: bool) -> Self {
         let (state_tx, state_rx) = mpsc::unbounded_channel::<SimState>();
         let (control_tx, mut control_rx) = mpsc::unbounded_channel::<SimControl>();
         let (std_ctrl_tx, std_ctrl_rx) = std::sync::mpsc::channel::<SimControl>();
@@ -138,7 +173,7 @@ impl SimHandle {
         // Simulation is not Send, so it runs on a dedicated std thread.
         let sim_state_tx = state_tx.clone();
         std::thread::spawn(move || {
-            run_caustic_sim(config_path, sim_state_tx, std_ctrl_rx);
+            run_caustic_sim(config_path, sim_state_tx, std_ctrl_rx, verbose);
         });
 
         // Bridge tokio control channel → std channel.
@@ -162,8 +197,14 @@ fn run_caustic_sim(
     config_path: String,
     state_tx: mpsc::UnboundedSender<SimState>,
     ctrl_rx: std::sync::mpsc::Receiver<SimControl>,
+    verbose: bool,
 ) {
-    let mut sim = match build_caustic_sim(&config_path) {
+    let mut build_logs: Vec<String> = Vec::new();
+    let build_start = Instant::now();
+    if verbose {
+        build_logs.push(format!("Loading config from: {config_path}"));
+    }
+    let mut sim = match build_caustic_sim(&config_path, verbose, &mut build_logs) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("phasma: sim build error: {e:#}");
@@ -171,6 +212,12 @@ fn run_caustic_sim(
             return;
         }
     };
+    if verbose {
+        build_logs.push(format!(
+            "Build complete in {:.1} ms",
+            build_start.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
 
     let initial_energy = sim
         .diagnostics
@@ -192,6 +239,13 @@ fn run_caustic_sim(
         .map(|c| c.solver.poisson.clone())
         .unwrap_or_else(|_| "fft_periodic".to_string());
     let mut paused = false;
+    let mut first_state = true;
+
+    if verbose {
+        build_logs.push(format!(
+            "Initial energy: E₀={initial_energy:.6e}, t_final={t_final}"
+        ));
+    }
 
     loop {
         while let Ok(ctrl) = ctrl_rx.try_recv() {
@@ -210,7 +264,7 @@ fn run_caustic_sim(
         match sim.step() {
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
-                let state = extract_sim_state(
+                let mut state = extract_sim_state(
                     &sim,
                     initial_energy,
                     t_final,
@@ -220,6 +274,20 @@ fn run_caustic_sim(
                     grav_const,
                     &poisson_type,
                 );
+                // Attach build logs to first state, per-step verbose to subsequent
+                if first_state {
+                    state.log_messages = std::mem::take(&mut build_logs);
+                    first_state = false;
+                } else if verbose {
+                    state.log_messages.push(format!(
+                        "Step {} → t={:.4}, dt={:.2e}, wall={:.1}ms, |ΔE/E|={:.2e}",
+                        state.step,
+                        state.t,
+                        state.dt,
+                        wall_ms,
+                        state.energy_drift()
+                    ));
+                }
                 if state_tx.send(state).is_err() {
                     return;
                 }
@@ -227,7 +295,7 @@ fn run_caustic_sim(
             Ok(Some(reason)) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
                 let exit = map_exit_reason(reason);
-                let _ = state_tx.send(extract_sim_state(
+                let mut state = extract_sim_state(
                     &sim,
                     initial_energy,
                     t_final,
@@ -236,7 +304,17 @@ fn run_caustic_sim(
                     spatial_extent,
                     grav_const,
                     &poisson_type,
-                ));
+                );
+                if first_state {
+                    state.log_messages = std::mem::take(&mut build_logs);
+                }
+                if verbose {
+                    state.log_messages.push(format!(
+                        "Exit: {exit} at step {}, t={:.4}",
+                        state.step, state.t
+                    ));
+                }
+                let _ = state_tx.send(state);
                 return;
             }
             Err(_e) => {
@@ -247,16 +325,49 @@ fn run_caustic_sim(
     }
 }
 
-fn build_caustic_sim(config_path: &str) -> anyhow::Result<caustic::Simulation> {
+fn build_caustic_sim(
+    config_path: &str,
+    verbose: bool,
+    logs: &mut Vec<String>,
+) -> anyhow::Result<caustic::Simulation> {
     // Try new PhasmaConfig format first, fall back to legacy toml.rs
     match crate::config::load(config_path) {
-        Ok(cfg) => build_from_config(&cfg),
+        Ok(cfg) => {
+            if verbose {
+                logs.push(format!(
+                    "Config loaded: model={}, repr={}, poisson={}, integrator={}",
+                    cfg.model.model_type,
+                    cfg.solver.representation,
+                    cfg.solver.poisson,
+                    cfg.solver.integrator
+                ));
+                logs.push(format!(
+                    "Domain: spatial_extent={}, velocity_extent={}, N_x={}, N_v={}",
+                    cfg.domain.spatial_extent,
+                    cfg.domain.velocity_extent,
+                    cfg.domain.spatial_resolution,
+                    cfg.domain.velocity_resolution
+                ));
+                let total_cells = (cfg.domain.spatial_resolution as u64).pow(3)
+                    * (cfg.domain.velocity_resolution as u64).pow(3);
+                logs.push(format!(
+                    "Phase-space grid: {}^3 × {}^3 = {} cells ({:.1} MB)",
+                    cfg.domain.spatial_resolution,
+                    cfg.domain.velocity_resolution,
+                    total_cells,
+                    total_cells as f64 * 8.0 / 1_048_576.0
+                ));
+            }
+            build_from_config(&cfg, verbose, logs)
+        }
         Err(_new_err) => {
+            if verbose {
+                logs.push("New config format failed, trying legacy format...".to_string());
+            }
             // Legacy fallback
             match build_from_legacy(config_path) {
                 Ok(sim) => Ok(sim),
                 Err(_legacy_err) => {
-                    // Return the new-format error since that's the preferred path
                     Err(_new_err
                         .context("failed to parse config (tried both new and legacy formats)"))
                 }
@@ -265,17 +376,28 @@ fn build_caustic_sim(config_path: &str) -> anyhow::Result<caustic::Simulation> {
     }
 }
 
-fn build_from_config(cfg: &crate::config::PhasmaConfig) -> anyhow::Result<caustic::Simulation> {
+fn build_from_config(
+    cfg: &crate::config::PhasmaConfig,
+    verbose: bool,
+    logs: &mut Vec<String>,
+) -> anyhow::Result<caustic::Simulation> {
     use caustic::{
-        Domain, FftIsolated, FftPoisson, LieSplitting, MassLossCondition, SemiLagrangian,
-        SteadyStateCondition, StrangSplitting, VirialRelaxedCondition, WallClockCondition,
-        YoshidaSplitting,
+        AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
+        FftIsolated, FftPoisson, HtTensor, HybridRepr, LieSplitting, MassLossCondition, Multigrid,
+        SemiLagrangian, SheetTracker, SpectralV, SphericalHarmonicsPoisson, SteadyStateCondition,
+        StrangSplitting, TensorPoisson, TensorTrain, TreePoisson, UniformGrid6D,
+        VirialRelaxedCondition, WallClockCondition, YoshidaSplitting,
     };
 
     let g = cfg.domain.gravitational_constant;
 
     let (spatial_bc, velocity_bc) = parse_boundary(&cfg.domain.boundary);
+    if verbose {
+        logs.push(format!("Boundary conditions: {}", cfg.domain.boundary));
+        logs.push("Building domain...".to_string());
+    }
 
+    let t0 = Instant::now();
     let domain = Domain::builder()
         .spatial_extent(cfg.domain.spatial_extent)
         .velocity_extent(cfg.domain.velocity_extent)
@@ -285,58 +407,257 @@ fn build_from_config(cfg: &crate::config::PhasmaConfig) -> anyhow::Result<causti
         .spatial_bc(spatial_bc)
         .velocity_bc(velocity_bc)
         .build()?;
+    if verbose {
+        logs.push(format!(
+            "Domain built in {:.1} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
 
     // Build initial conditions based on model type
+    if verbose {
+        logs.push(format!(
+            "Building IC: model={}, M={}, a={}",
+            cfg.model.model_type, cfg.model.total_mass, cfg.model.scale_radius
+        ));
+    }
+    let t0 = Instant::now();
     let snap = build_ic(cfg, &domain, g)?;
+    if verbose {
+        let nonzero = snap.data.iter().filter(|&&v| v > 0.0).count();
+        logs.push(format!(
+            "IC sampled in {:.1} ms — {} non-zero cells out of {}",
+            t0.elapsed().as_secs_f64() * 1000.0,
+            nonzero,
+            snap.data.len()
+        ));
+    }
+
+    // Build phase-space representation from IC snapshot
+    if verbose {
+        logs.push(format!(
+            "Building phase-space representation: {}",
+            cfg.solver.representation
+        ));
+    }
+    let t0 = Instant::now();
+    let repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
+        "uniform" | "uniform_grid" => Box::new(UniformGrid6D::from_snapshot(snap, domain.clone())),
+        "hierarchical_tucker" | "ht" => {
+            let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
+            let max_rank = cfg
+                .solver
+                .ht
+                .as_ref()
+                .map(|h| h.max_rank as usize)
+                .unwrap_or(100);
+            if verbose {
+                logs.push(format!(
+                    "  HT params: tolerance={tolerance:.1e}, max_rank={max_rank}"
+                ));
+                logs.push("  Running HSVD decomposition...".to_string());
+            }
+            let ht = HtTensor::from_full(&snap.data, snap.shape, &domain, tolerance);
+            let mut ht = ht;
+            ht.max_rank = max_rank;
+            ht.tolerance = tolerance;
+            if verbose {
+                logs.push(format!(
+                    "  HT total rank: {}, memory: {:.1} MB",
+                    ht.total_rank(),
+                    ht.memory_bytes() as f64 / 1_048_576.0
+                ));
+            }
+            Box::new(ht)
+        }
+        "tensor_train" => {
+            let max_rank = cfg
+                .solver
+                .ht
+                .as_ref()
+                .map(|h| h.max_rank as usize)
+                .unwrap_or(50);
+            let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
+            if verbose {
+                logs.push(format!(
+                    "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
+                ));
+            }
+            Box::new(TensorTrain::from_snapshot(
+                &snap, max_rank, tolerance, &domain,
+            ))
+        }
+        "sheet_tracker" => Box::new(SheetTracker::new(domain.clone())),
+        "spectral" | "velocity_ht" => {
+            let n_modes = cfg
+                .solver
+                .ht
+                .as_ref()
+                .map(|h| h.initial_rank as usize)
+                .unwrap_or(16);
+            if verbose {
+                logs.push(format!("  Spectral n_modes={n_modes}"));
+            }
+            Box::new(SpectralV::from_snapshot(&snap, n_modes, &domain))
+        }
+        "amr" => Box::new(AmrGrid::new(domain.clone(), 0.1, 3)),
+        "hybrid" => Box::new(HybridRepr::new(domain.clone())),
+        other => anyhow::bail!("unsupported representation '{other}'"),
+    };
+    if verbose {
+        logs.push(format!(
+            "Representation built in {:.1} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
 
     // Build Poisson solver
+    if verbose {
+        logs.push(format!("Building Poisson solver: {}", cfg.solver.poisson));
+    }
+    let t0 = Instant::now();
     let poisson: Box<dyn caustic::PoissonSolver> = match cfg.solver.poisson.as_str() {
         "fft_periodic" | "fft" => Box::new(FftPoisson::new(&domain)),
         "fft_isolated" => Box::new(FftIsolated::new(&domain)),
+        "tensor" | "tensor_poisson" => {
+            let shape = [
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+            ];
+            let dx = domain.dx();
+            if verbose {
+                logs.push(format!("  TensorPoisson: shape={shape:?}, dx={dx:?}"));
+            }
+            Box::new(TensorPoisson::new(shape, dx, 1e-6, 1e-6, 30))
+        }
+        "multigrid" => {
+            if verbose {
+                logs.push("  Multigrid: 4 levels, 3 V-cycles".to_string());
+            }
+            Box::new(Multigrid::new(&domain, 4, 3))
+        }
+        "spherical" | "spherical_harmonics" => {
+            let n = cfg.domain.spatial_resolution as usize;
+            let shape = [n, n, n];
+            let dx = domain.dx();
+            if verbose {
+                logs.push(format!("  SphericalHarmonics: l_max=8, n_radial={}", n / 2));
+            }
+            Box::new(SphericalHarmonicsPoisson::new(8, n / 2, shape, dx))
+        }
+        "tree" | "barnes_hut" => {
+            if verbose {
+                logs.push("  TreePoisson: theta=0.5".to_string());
+            }
+            Box::new(TreePoisson::new(domain.clone(), 0.5))
+        }
         other => anyhow::bail!("unsupported poisson solver '{other}'"),
     };
+    if verbose {
+        logs.push(format!(
+            "Poisson solver built in {:.1} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
 
     // Build integrator
+    if verbose {
+        logs.push(format!("Building integrator: {}", cfg.solver.integrator));
+    }
     let integrator: Box<dyn caustic::TimeIntegrator> = match cfg.solver.integrator.as_str() {
-        "strang" => Box::new(StrangSplitting::new(g)),
-        "yoshida" => Box::new(YoshidaSplitting::new(g)),
+        "strang" | "strang_splitting" => Box::new(StrangSplitting::new(g)),
+        "yoshida" | "yoshida_splitting" => Box::new(YoshidaSplitting::new(g)),
         "lie" => Box::new(LieSplitting::new(g)),
+        "unsplit" | "unsplit_rk4" => {
+            Box::new(caustic::UnsplitIntegrator::new(4, g, domain.clone()))
+        }
+        "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, g, domain.clone())),
+        "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, g, domain.clone())),
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 
+    // Build simulation
+    if verbose {
+        logs.push(format!(
+            "Assembling simulation: G={g}, t_final={}, cfl={}, conservation={}",
+            cfg.time.t_final, cfg.time.cfl_factor, cfg.solver.conservation
+        ));
+    }
+    let t0 = Instant::now();
     let mut sim = caustic::Simulation::builder()
         .domain(domain)
         .poisson_solver_boxed(poisson)
         .advector(SemiLagrangian::new())
         .integrator_boxed(integrator)
-        .initial_conditions(snap)
+        .representation_boxed(repr)
         .time_final(cfg.time.t_final)
         .cfl_factor(cfg.time.cfl_factor)
         .gravitational_constant(g)
         .exit_on_energy_drift(cfg.exit.energy_drift_tolerance)
+        .lomac(cfg.solver.conservation == "lomac")
         .build()?;
+    if verbose {
+        logs.push(format!(
+            "Simulation assembled in {:.1} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
 
     // Wire exit conditions
+    let mut exit_count = 0u32;
     sim.exit_evaluator
         .add_condition(Box::new(MassLossCondition {
             threshold: cfg.exit.mass_drift_tolerance,
         }));
+    exit_count += 1;
+    // Always have energy drift (set during builder)
+    exit_count += 1;
 
     if let Some(limit) = cfg.exit.wall_clock_limit {
         sim.exit_evaluator
             .add_condition(Box::new(WallClockCondition::new(limit)));
+        exit_count += 1;
     }
     if cfg.exit.steady_state {
         sim.exit_evaluator
             .add_condition(Box::new(SteadyStateCondition::new(
                 cfg.exit.steady_state_tolerance,
             )));
+        exit_count += 1;
     }
     if cfg.exit.virial_equilibrium {
         sim.exit_evaluator
             .add_condition(Box::new(VirialRelaxedCondition {
                 tolerance: cfg.exit.virial_tolerance,
             }));
+        exit_count += 1;
+    }
+    if cfg.exit.cfl_violation {
+        sim.exit_evaluator
+            .add_condition(Box::new(CflViolationCondition {
+                dt_min: cfg.time.dt_min,
+            }));
+        exit_count += 1;
+    }
+    if cfg.exit.casimir_drift_tolerance > 0.0 {
+        sim.exit_evaluator
+            .add_condition(Box::new(CasimirDriftCondition {
+                tolerance: cfg.exit.casimir_drift_tolerance,
+            }));
+        exit_count += 1;
+    }
+    if cfg.exit.caustic_formation {
+        sim.exit_evaluator
+            .add_condition(Box::new(CausticFormationCondition));
+        exit_count += 1;
+    }
+    if verbose {
+        logs.push(format!(
+            "Exit conditions wired: {exit_count} active (energy_drift_tol={}, mass_drift_tol={})",
+            cfg.exit.energy_drift_tolerance, cfg.exit.mass_drift_tolerance
+        ));
+        logs.push("Simulation ready — entering time-step loop".to_string());
     }
 
     Ok(sim)
@@ -396,17 +717,19 @@ fn build_ic(
             };
             Ok(ic.sample_on_grid(domain))
         }
-        "merger" => {
+        "merger" | "two_body_merger" => {
             let merger = cfg.model.merger.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("merger requires [model.merger] with separation and mass_ratio")
             })?;
             let m1 = m / (1.0 + merger.mass_ratio);
             let m2 = m - m1;
-            let body1 = Box::new(PlummerIC::new(m1, a, g));
-            let body2 = Box::new(PlummerIC::new(m2, a, g));
+            let a1 = merger.scale_radius_1;
+            let a2 = merger.scale_radius_2;
+            let body1 = Box::new(PlummerIC::new(m1, a1, g));
+            let body2 = Box::new(PlummerIC::new(m2, a2, g));
             let sep = [merger.separation, 0.0, 0.0];
-            let vel = [0.0, 0.0, 0.0];
-            let ic = MergerIC::new(body1, m1, body2, m2, sep, vel, 0.0);
+            let vel = merger.relative_velocity;
+            let ic = MergerIC::new(body1, m1, body2, m2, sep, vel, merger.impact_parameter);
             Ok(ic.sample_on_grid(domain))
         }
         "custom_file" => {
@@ -416,7 +739,200 @@ fn build_ic(
             let ic = CustomICArray::from_npy(&cf.file_path, domain)?;
             Ok(ic.snapshot)
         }
+        "uniform_perturbation" => {
+            let pert = cfg.model.uniform_perturbation.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "uniform_perturbation requires [model.uniform_perturbation] section"
+                )
+            })?;
+            Ok(build_uniform_perturbation_ic(domain, pert))
+        }
+        "tidal" => {
+            let tc = cfg
+                .model
+                .tidal
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("tidal model requires [model.tidal] section"))?;
+            // Build progenitor equilibrium
+            let progenitor: Box<dyn caustic::IsolatedEquilibrium> =
+                match tc.progenitor_type.as_str() {
+                    "plummer" => Box::new(caustic::PlummerIC::new(
+                        tc.progenitor_mass,
+                        tc.progenitor_scale_radius,
+                        g,
+                    )),
+                    "hernquist" => Box::new(caustic::HernquistIC::new(
+                        tc.progenitor_mass,
+                        tc.progenitor_scale_radius,
+                        g,
+                    )),
+                    "king" => {
+                        let w0 = cfg.model.king.as_ref().map(|k| k.w0).unwrap_or(7.0);
+                        Box::new(caustic::KingIC::new(
+                            tc.progenitor_mass,
+                            w0,
+                            tc.progenitor_scale_radius,
+                            g,
+                        ))
+                    }
+                    "nfw" => {
+                        let c = cfg
+                            .model
+                            .nfw
+                            .as_ref()
+                            .map(|n| n.concentration)
+                            .unwrap_or(10.0);
+                        Box::new(caustic::NfwIC::new(
+                            tc.progenitor_mass,
+                            tc.progenitor_scale_radius,
+                            c,
+                            g,
+                        ))
+                    }
+                    other => anyhow::bail!("unsupported tidal progenitor type '{other}'"),
+                };
+            // Build host potential
+            let host_mass = tc.host_mass;
+            let host_scale = tc.host_scale_radius;
+            let host_potential: Box<dyn Fn([f64; 3]) -> f64 + Send + Sync> =
+                match tc.host_type.as_str() {
+                    "point_mass" => Box::new(move |x: [f64; 3]| {
+                        let r = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt().max(1e-10);
+                        -g * host_mass / r
+                    }),
+                    "nfw_fixed" => Box::new(move |x: [f64; 3]| {
+                        let r = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt().max(1e-10);
+                        let s = r / host_scale;
+                        -g * host_mass * (1.0 + s).ln() / r
+                    }),
+                    "logarithmic" => Box::new(move |x: [f64; 3]| {
+                        let r2 = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+                        // Φ = 0.5 * v_c² * ln(r² + r_c²), v_c = sqrt(G*M/r_c)
+                        let vc2 = g * host_mass / host_scale;
+                        0.5 * vc2 * (r2 + host_scale * host_scale).ln()
+                    }),
+                    other => anyhow::bail!("unsupported tidal host type '{other}'"),
+                };
+            let ic = caustic::TidalIC::new(
+                host_potential,
+                progenitor,
+                tc.progenitor_position,
+                tc.progenitor_velocity,
+            );
+            Ok(ic.sample_on_grid(domain))
+        }
+        "disk_exponential" | "disk_stability" => {
+            let rd = cfg.model.disk.as_ref().map_or(a, |d| d.disk_scale_length);
+            let disk_mass = cfg.model.disk.as_ref().map_or(m, |d| d.disk_mass);
+            let sigma_0 = disk_mass / (2.0 * std::f64::consts::PI * rd * rd);
+            let sigma_r0 = cfg
+                .model
+                .disk
+                .as_ref()
+                .map_or(0.3 * (g * sigma_0 * rd).sqrt(), |d| {
+                    d.radial_velocity_dispersion
+                });
+            let ic = caustic::DiskStabilityIC::new(
+                Box::new(move |r: f64| sigma_0 * (-r / rd).exp()),
+                Box::new(move |r: f64| sigma_r0 * (-r / (2.0 * rd)).exp()),
+                2,    // m=2 bar mode
+                0.0,  // pattern speed
+                0.05, // perturbation amplitude
+            );
+            Ok(ic.sample_on_grid(domain))
+        }
         other => anyhow::bail!("unsupported model type '{other}'"),
+    }
+}
+
+/// Build uniform Maxwellian + sinusoidal perturbation IC directly on grid.
+/// f(x,v) = C * exp(-v²/2σ²) * (1 + ε * cos(k·x))
+fn build_uniform_perturbation_ic(
+    domain: &caustic::Domain,
+    pert: &crate::config::PerturbationConfig,
+) -> caustic::PhaseSpaceSnapshot {
+    use rust_decimal::prelude::ToPrimitive;
+
+    let sigma = pert.velocity_dispersion;
+    let eps = pert.perturbation_amplitude;
+    let k = pert.perturbation_wavenumber;
+
+    let nx1 = domain.spatial_res.x1 as usize;
+    let nx2 = domain.spatial_res.x2 as usize;
+    let nx3 = domain.spatial_res.x3 as usize;
+    let nv1 = domain.velocity_res.v1 as usize;
+    let nv2 = domain.velocity_res.v2 as usize;
+    let nv3 = domain.velocity_res.v3 as usize;
+
+    let dx = domain.dx();
+    let dv = domain.dv();
+    let lx = [
+        domain.spatial.x1.to_f64().unwrap(),
+        domain.spatial.x2.to_f64().unwrap(),
+        domain.spatial.x3.to_f64().unwrap(),
+    ];
+    let lv = [
+        domain.velocity.v1.to_f64().unwrap(),
+        domain.velocity.v2.to_f64().unwrap(),
+        domain.velocity.v3.to_f64().unwrap(),
+    ];
+
+    // Compute velocity-space normalization
+    let sigma2 = sigma * sigma;
+    let mut s_norm = 0.0f64;
+    for iv1 in 0..nv1 {
+        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+        for iv2 in 0..nv2 {
+            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+            for iv3 in 0..nv3 {
+                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
+                s_norm += (-v2sq / (2.0 * sigma2)).exp() * dv[0] * dv[1] * dv[2];
+            }
+        }
+    }
+    let c = pert.background_density / s_norm;
+
+    // Fill 6D grid
+    let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
+    let mut data = vec![0.0f64; total];
+    let sv3 = 1usize;
+    let sv2 = nv3;
+    let sv1 = nv2 * nv3;
+    let sx3 = nv1 * sv1;
+    let sx2 = nx3 * sx3;
+    let sx1 = nx2 * sx2;
+
+    for ix1 in 0..nx1 {
+        let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+        for ix2 in 0..nx2 {
+            let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+            for ix3 in 0..nx3 {
+                let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                let phase = k[0] * x1 + k[1] * x2 + k[2] * x3;
+                let spatial_factor = c * (1.0 + eps * phase.cos());
+                let base = ix1 * sx1 + ix2 * sx2 + ix3 * sx3;
+
+                for iv1 in 0..nv1 {
+                    let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                    for iv2 in 0..nv2 {
+                        let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                        for iv3 in 0..nv3 {
+                            let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                            let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
+                            let f = spatial_factor * (-v2sq / (2.0 * sigma2)).exp();
+                            data[base + iv1 * sv1 + iv2 * sv2 + iv3 * sv3] = f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    caustic::PhaseSpaceSnapshot {
+        data,
+        shape: [nx1, nx2, nx3, nv1, nv2, nv3],
+        time: 0.0,
     }
 }
 
@@ -606,6 +1122,16 @@ fn extract_sim_state(
         poisson_type: poisson_type.to_string(),
         poisson_residual_l2: Some(residual),
         potential_power_spectrum: spectrum,
+        // Phase timings: estimated split (actual instrumented timings would come from caustic tracing)
+        phase_timings: None,
+        truncation_errors: None,
+        svd_count: 0,
+        htaca_evaluations: 0,
+        velocity_extent: {
+            use rust_decimal::prelude::ToPrimitive;
+            sim.domain.velocity.v1.to_f64().unwrap_or(3.0)
+        },
+        log_messages: Vec::new(),
     }
 }
 
@@ -681,8 +1207,7 @@ fn compute_all_phase_slices(data: &[f64], shape: [usize; 6]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-fn error_state(_msg: String) -> SimState {
-    // Error is reported via the channel, not stderr (would corrupt TUI).
+fn error_state(msg: String) -> SimState {
     SimState {
         t: 0.0,
         t_final: 0.0,
@@ -721,6 +1246,12 @@ fn error_state(_msg: String) -> SimState {
         poisson_type: String::new(),
         poisson_residual_l2: None,
         potential_power_spectrum: None,
+        phase_timings: None,
+        truncation_errors: None,
+        svd_count: 0,
+        htaca_evaluations: 0,
+        velocity_extent: 0.0,
+        log_messages: vec![format!("ERROR: {msg}")],
     }
 }
 
@@ -905,4 +1436,344 @@ fn compute_potential_power_spectrum(
             (k, p / c as f64)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    use crate::config::defaults::{estimate_memory_breakdown, estimate_memory_mb};
+
+    /// Read current process RSS in MB from /proc/self/statm.
+    fn read_rss_mb() -> f64 {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
+                let rss_pages: u64 = content
+                    .split_whitespace()
+                    .nth(1) // second field = resident pages
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
+                return rss_pages as f64 * page_size / 1_000_000.0;
+            }
+        }
+        0.0
+    }
+
+    /// Load a config file and return (config, config_path).
+    fn load_test_config(name: &str) -> (crate::config::PhasmaConfig, String) {
+        let path = format!("{}/configs/{name}.toml", env!("CARGO_MANIFEST_DIR"));
+        let cfg =
+            crate::config::load(&path).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
+        (cfg, path)
+    }
+
+    /// Build a simulation from a config and measure the RSS delta.
+    /// If `run_step` is true, runs one simulation step to capture peak allocations.
+    /// Returns (estimated_mb, measured_delta_mb, config_name).
+    fn measure_sim_memory(name: &str, run_step: bool) -> Option<(f64, f64, String)> {
+        let (cfg, _path) = load_test_config(name);
+
+        // Skip configs that can't build (custom_function requires external lib)
+        if cfg.model.model_type == "custom_function" {
+            return None;
+        }
+
+        let estimated = estimate_memory_mb(&cfg);
+
+        // Force a GC-like compaction by dropping large temporaries
+        std::hint::black_box(0);
+
+        let rss_before = read_rss_mb();
+        if rss_before == 0.0 {
+            // Not on Linux, skip RSS measurement
+            return None;
+        }
+
+        let sim_result = build_from_config(&cfg, false, &mut Vec::new());
+        match sim_result {
+            Ok(mut sim) => {
+                if run_step {
+                    // Run one step to trigger advection clone, workspace, etc.
+                    let _ = sim.step();
+                }
+                let rss_after = read_rss_mb();
+                let delta = rss_after - rss_before;
+
+                // Keep sim alive until after measurement
+                std::hint::black_box(&sim);
+
+                Some((estimated, delta, name.to_string()))
+            }
+            Err(e) => {
+                eprintln!("skipping {name}: {e}");
+                None
+            }
+        }
+    }
+
+    /// Helper: check estimate vs actual, print result, assert ratio.
+    /// Only asserts when actual delta > 50 MB — below that, RSS noise dominates.
+    fn check_ratio(est: f64, actual: f64, name: &str, label: &str, lo: f64, hi: f64) {
+        let ratio = if actual > 0.0 { est / actual } else { f64::NAN };
+        eprintln!(
+            "{name} ({label}): estimated={est:.1} MB, actual_delta={actual:.1} MB, ratio={ratio:.2}"
+        );
+        if actual > 50.0 {
+            assert!(
+                ratio > lo && ratio < hi,
+                "{name}: estimate/actual ratio {ratio:.2} is outside [{lo}, {hi}]"
+            );
+        }
+    }
+
+    /// Small config (8^6 ≈ 2 MB) — test with one step to verify peak allocation.
+    #[test]
+    fn memory_estimate_vs_actual_debug_step() {
+        if let Some((est, actual, name)) = measure_sim_memory("debug", true) {
+            check_ratio(est, actual, &name, "step", 0.1, 50.0);
+        }
+    }
+
+    /// Small config — step-based peak measurement.
+    #[test]
+    fn memory_estimate_vs_actual_speed_priority_step() {
+        if let Some((est, actual, name)) = measure_sim_memory("speed_priority", true) {
+            check_ratio(est, actual, &name, "step", 0.1, 50.0);
+        }
+    }
+
+    /// Jeans instability — small (8^6) with perturbation IC.
+    #[test]
+    fn memory_estimate_vs_actual_jeans_step() {
+        if let Some((est, actual, name)) = measure_sim_memory("jeans_instability", true) {
+            check_ratio(est, actual, &name, "step", 0.1, 50.0);
+        }
+    }
+
+    /// Medium config (16^6 ≈ 134 MB) with fft_isolated — step to see Poisson buffers.
+    #[test]
+    fn memory_estimate_vs_actual_isolated_plummer_step() {
+        if let Some((est, actual, name)) = measure_sim_memory("isolated_plummer", true) {
+            check_ratio(est, actual, &name, "step", 0.3, 5.0);
+        }
+    }
+
+    /// Medium config (16^6 ≈ 134 MB) — construct only (no step) to avoid large peak.
+    #[test]
+    fn memory_estimate_vs_actual_hernquist_construct() {
+        if let Some((est, actual, name)) = measure_sim_memory("hernquist_galaxy", false) {
+            check_ratio(est, actual, &name, "construct", 0.2, 10.0);
+        }
+    }
+
+    /// Large config — construct only (24^6 ≈ 1.5 GB, stepping would double).
+    #[test]
+    fn memory_estimate_vs_actual_default_construct() {
+        if let Some((est, actual, name)) = measure_sim_memory("default", false) {
+            check_ratio(est, actual, &name, "construct", 0.2, 10.0);
+        }
+    }
+
+    /// Run estimates for all loadable configs and print a summary table.
+    #[test]
+    fn memory_estimate_summary_table() {
+        let configs_dir = format!("{}/configs", env!("CARGO_MANIFEST_DIR"));
+        let mut entries: Vec<_> = std::fs::read_dir(&configs_dir)
+            .expect("configs/ directory should exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        eprintln!(
+            "\n{:<25} {:>12} {:>12} {:>12} {:>8}",
+            "Config", "Phase(MB)", "Poisson(MB)", "Total(MB)", "FG(MB)"
+        );
+        eprintln!("{}", "-".repeat(75));
+
+        for entry in &entries {
+            let path = entry.path();
+            let name = path.file_stem().unwrap().to_string_lossy();
+            if let Ok(cfg) = crate::config::load(path.to_str().unwrap()) {
+                let b = estimate_memory_breakdown(&cfg);
+                let fg = crate::config::defaults::full_grid_memory_mb(&cfg);
+                eprintln!(
+                    "{:<25} {:>12.2} {:>12.2} {:>12.2} {:>8.1}",
+                    name,
+                    b.phase_space_mb,
+                    b.poisson_buffers_mb,
+                    b.total_mb(),
+                    fg
+                );
+            }
+        }
+        eprintln!();
+    }
+}
+
+#[cfg(test)]
+mod drift_threshold_tests {
+    use super::*;
+
+    /// Maximum phase-space size (MB) we're willing to test — avoids OOM.
+    /// 150 MB covers 16^6 configs (134 MB) but skips 20^6+ (512+ MB).
+    const MAX_PHASE_SPACE_MB: f64 = 150.0;
+
+    /// Number of steps to run for the drift test.
+    const TEST_STEPS: u32 = 10;
+
+    /// Build a simulation from a config and run N steps.
+    /// Returns None if the config can't be built (e.g. disk_exponential).
+    /// Returns Some((steps_completed, exit_reason)) — exit_reason is None if all steps completed.
+    fn run_steps(
+        cfg: &crate::config::PhasmaConfig,
+        n_steps: u32,
+    ) -> Option<(u32, Option<ExitReason>)> {
+        let mut sim = match build_from_config(cfg, false, &mut Vec::new()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  skip build: {e}");
+                return None;
+            }
+        };
+
+        for i in 0..n_steps {
+            match sim.step() {
+                Ok(None) => {} // step completed, sim continues
+                Ok(Some(reason)) => {
+                    let exit = map_exit_reason(reason);
+                    return Some((i + 1, Some(exit)));
+                }
+                Err(e) => {
+                    eprintln!("  step {i} error: {e}");
+                    return Some((i, None));
+                }
+            }
+        }
+        Some((n_steps, None))
+    }
+
+    /// Test every config TOML: run 10 steps and assert no premature EnergyDrift or MassLoss exit.
+    ///
+    /// Configs with too-tight thresholds will cause the simulation to exit on the first
+    /// few steps before any meaningful physics has occurred. This test catches that.
+    #[test]
+    fn no_premature_drift_exit_all_configs() {
+        let configs_dir = format!("{}/configs", env!("CARGO_MANIFEST_DIR"));
+        let mut entries: Vec<_> = std::fs::read_dir(&configs_dir)
+            .expect("configs/ directory should exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        let mut failures: Vec<String> = Vec::new();
+
+        eprintln!(
+            "\n{:<25} {:>10} {:>8} {:>12} {:>15}",
+            "Config", "Phase(MB)", "Steps", "Exit?", "Energy drift"
+        );
+        eprintln!("{}", "-".repeat(75));
+
+        for entry in &entries {
+            let path = entry.path();
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+
+            let cfg = match crate::config::load(path.to_str().unwrap()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{:<25} LOAD ERROR: {e}", name);
+                    continue;
+                }
+            };
+
+            // Skip configs that are too large to test
+            let breakdown = crate::config::defaults::estimate_memory_breakdown(&cfg);
+            if breakdown.phase_space_mb > MAX_PHASE_SPACE_MB {
+                eprintln!(
+                    "{:<25} {:>10.1} {:>8} {:>12}",
+                    name, breakdown.phase_space_mb, "-", "SKIPPED (large)"
+                );
+                continue;
+            }
+
+            // Skip models that require external resources
+            if cfg.model.model_type == "custom_function" {
+                eprintln!(
+                    "{:<25} {:>10.1} {:>8} {:>12}",
+                    name, 0.0, "-", "SKIPPED (custom)"
+                );
+                continue;
+            }
+
+            // Skip non-uniform representations — HTACA/SLAR/TT are too slow in debug mode
+            if !matches!(
+                cfg.solver.representation.as_str(),
+                "uniform" | "uniform_grid"
+            ) {
+                eprintln!(
+                    "{:<25} {:>10.1} {:>8} {:>12}",
+                    name, breakdown.phase_space_mb, "-", "SKIPPED (slow repr)"
+                );
+                continue;
+            }
+
+            match run_steps(&cfg, TEST_STEPS) {
+                Some((steps, None)) => {
+                    // All steps completed without exit — good
+                    eprintln!(
+                        "{:<25} {:>10.1} {:>8} {:>12}",
+                        name, breakdown.phase_space_mb, steps, "OK"
+                    );
+                }
+                Some((steps, Some(reason))) => {
+                    let ok = !matches!(reason, ExitReason::EnergyDrift | ExitReason::MassLoss);
+                    let status = if ok {
+                        format!("{reason} (ok)")
+                    } else {
+                        format!("{reason} (FAIL)")
+                    };
+                    eprintln!(
+                        "{:<25} {:>10.1} {:>8} {:>12}",
+                        name, breakdown.phase_space_mb, steps, status
+                    );
+
+                    if !ok {
+                        failures.push(format!(
+                            "{name}: exited after {steps} steps with {reason} \
+                             (energy_drift_tol={}, mass_drift_tol={})",
+                            cfg.exit.energy_drift_tolerance, cfg.exit.mass_drift_tolerance
+                        ));
+                    }
+                }
+                None => {
+                    eprintln!(
+                        "{:<25} {:>10.1} {:>8} {:>12}",
+                        name, breakdown.phase_space_mb, 0, "BUILD FAIL"
+                    );
+                }
+            }
+        }
+
+        eprintln!();
+        if !failures.is_empty() {
+            eprintln!("=== DRIFT THRESHOLD FAILURES ===");
+            for f in &failures {
+                eprintln!("  {f}");
+            }
+            eprintln!(
+                "\nFix: increase energy_drift_tolerance / mass_drift_tolerance in the affected configs."
+            );
+            panic!(
+                "{} config(s) exit prematurely due to drift thresholds: {}",
+                failures.len(),
+                failures
+                    .iter()
+                    .map(|f| f.split(':').next().unwrap_or("?"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
 }

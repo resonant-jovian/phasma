@@ -34,22 +34,41 @@ const MAX_HISTORY: usize = 500;
 pub struct RankTab {
     /// Time-series of (sim_time, total_rank).
     rank_history: VecDeque<(f64, usize)>,
+    /// Time-series of (sim_time, max truncation error) for secondary y-axis.
+    trunc_error_history: VecDeque<(f64, f64)>,
     /// Last simulation step we recorded, to avoid duplicate pushes.
     last_step: u64,
+    /// Selected node index for SV spectrum (0–10, cycles with j/k or n/N).
+    selected_node: usize,
 }
 
 impl Default for RankTab {
     fn default() -> Self {
         Self {
             rank_history: VecDeque::with_capacity(MAX_HISTORY),
+            trunc_error_history: VecDeque::with_capacity(MAX_HISTORY),
             last_step: u64::MAX,
+            selected_node: 0,
         }
     }
 }
 
 impl RankTab {
-    pub fn handle_key_event(&mut self, _key: KeyEvent) -> Option<Action> {
-        None
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
+        use crossterm::event::KeyCode;
+        match key.code {
+            // n/N to cycle selected node for SV spectrum
+            KeyCode::Char('n') => {
+                self.selected_node = (self.selected_node + 1) % NODE_LABELS.len();
+                None
+            }
+            KeyCode::Char('N') => {
+                self.selected_node =
+                    (self.selected_node + NODE_LABELS.len() - 1) % NODE_LABELS.len();
+                None
+            }
+            _ => None,
+        }
     }
 
     pub fn handle_scroll(&mut self, _delta: i32) {}
@@ -87,19 +106,42 @@ impl RankTab {
                 self.rank_history.pop_front();
             }
             self.rank_history.push_back((state.t, total));
+
+            // Track truncation error history
+            if let Some(ref errs) = state.truncation_errors {
+                let max_err = errs.iter().copied().fold(0.0f64, f64::max);
+                if max_err > 0.0 {
+                    if self.trunc_error_history.len() >= MAX_HISTORY {
+                        self.trunc_error_history.pop_front();
+                    }
+                    self.trunc_error_history.push_back((state.t, max_err));
+                }
+            }
+
             self.last_step = state.step;
         }
 
-        // Layout: top row (evolution chart + table) and bottom row (bar chart).
+        // Compact mode: show only rank evolution chart
+        if area.width < 76 {
+            self.draw_rank_evolution(frame, area, theme);
+            return;
+        }
+
+        // Layout: top row (evolution chart + table) and bottom row (bar chart + SV spectrum).
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
 
         let [top_left, top_right] =
             Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top);
 
+        let [bottom_left, bottom_right] =
+            Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .areas(bottom);
+
         self.draw_rank_evolution(frame, top_left, theme);
         self.draw_per_node_table(frame, top_right, theme, state);
-        self.draw_rank_bars(frame, bottom, theme, state);
+        self.draw_rank_bars(frame, bottom_left, theme, state);
+        self.draw_sv_spectrum(frame, bottom_right, theme, state);
     }
 
     // ── Panels ──────────────────────────────────────────────────────────
@@ -185,13 +227,31 @@ impl RankTab {
 
         let dense = densify(&chart_data, area.width.saturating_sub(2) as usize * 2);
 
-        let datasets = vec![
+        let trunc_data: Vec<(f64, f64)> = self
+            .trunc_error_history
+            .iter()
+            .filter(|&&(_, e)| e > 0.0)
+            .map(|&(t, e)| (t, e.log10() * 10.0 + y_max)) // scale log error into rank y-range
+            .collect();
+        let dense_trunc = densify(&trunc_data, area.width.saturating_sub(2) as usize * 2);
+
+        let mut datasets = vec![
             Dataset::default()
                 .name("total rank")
                 .marker(symbols::Marker::Braille)
                 .style(Style::default().fg(theme.chart[0]))
                 .data(&dense),
         ];
+
+        if dense_trunc.len() >= 2 {
+            datasets.push(
+                Dataset::default()
+                    .name("ε_trunc")
+                    .marker(symbols::Marker::Braille)
+                    .style(Style::default().fg(theme.chart[2]))
+                    .data(&dense_trunc),
+            );
+        }
 
         let chart = Chart::new(datasets)
             .block(block)
@@ -245,16 +305,27 @@ impl RankTab {
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
+            Cell::from("ε_trunc").style(
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ])
         .height(1);
 
+        let trunc_errors = state.truncation_errors.as_deref();
         let mut rows: Vec<Row> = Vec::with_capacity(14);
         for (i, label) in NODE_LABELS.iter().enumerate() {
             let rank_val = ranks.get(i).copied().unwrap_or(0);
+            let err_str = trunc_errors
+                .and_then(|e| e.get(i))
+                .map(|&e| format!("{e:.1e}"))
+                .unwrap_or_else(|| "—".to_string());
             rows.push(Row::new(vec![
                 Cell::from(format!("{i:>2}")),
                 Cell::from(*label),
                 Cell::from(format!("{rank_val}")),
+                Cell::from(err_str),
             ]));
         }
 
@@ -294,7 +365,8 @@ impl RankTab {
 
         let widths = [
             Constraint::Length(4),
-            Constraint::Min(12),
+            Constraint::Min(10),
+            Constraint::Length(6),
             Constraint::Length(10),
         ];
 
@@ -391,6 +463,82 @@ impl RankTab {
                 ),
             );
         }
+    }
+    fn draw_sv_spectrum(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        state: &crate::sim::SimState,
+    ) {
+        let node = self.selected_node;
+        let node_label = NODE_LABELS.get(node).unwrap_or(&"?");
+        let title = format!(" SV Spectrum — node {node} ({node_label}) [n/N] ");
+        let block = Block::bordered()
+            .title(title.as_str())
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let ranks = state.rank_per_node.as_ref();
+        let rank_val = ranks.and_then(|r| r.get(node)).copied().unwrap_or(0);
+        let trunc_err = state
+            .truncation_errors
+            .as_ref()
+            .and_then(|e| e.get(node))
+            .copied();
+        let budget = 100usize; // TODO: from config
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(vec![
+            Span::styled("  Rank: ", Style::default().fg(theme.dim)),
+            Span::styled(
+                format!("{rank_val}/{budget}"),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({:.0}%)", rank_val as f64 / budget as f64 * 100.0),
+                Style::default().fg(if rank_val * 100 > budget * 80 {
+                    theme.warn
+                } else {
+                    theme.fg
+                }),
+            ),
+        ]));
+
+        if let Some(err) = trunc_err {
+            lines.push(Line::from(vec![
+                Span::styled("  \u{03b5}_trunc: ", Style::default().fg(theme.dim)),
+                Span::styled(format!("{err:.2e}"), Style::default().fg(theme.fg)),
+            ]));
+        }
+
+        let node_type = if node < 6 { "leaf" } else { "transfer" };
+        lines.push(Line::from(vec![
+            Span::styled("  Type: ", Style::default().fg(theme.dim)),
+            Span::styled(node_type, Style::default().fg(theme.fg)),
+        ]));
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Decay slope: \u{2014}",
+            Style::default().fg(theme.dim),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  (requires per-node SV data)",
+            Style::default().fg(theme.dim),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Moment-carrying: \u{2014}/k",
+            Style::default().fg(theme.dim),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  (LoMaC conservation)",
+            Style::default().fg(theme.dim),
+        )));
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 }
 

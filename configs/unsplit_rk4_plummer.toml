@@ -1,0 +1,46 @@
+# Unsplit RK4 — Method-of-lines Runge-Kutta 4th-order on full Vlasov PDE
+#
+# Instead of operator splitting (drift-kick-drift), this integrator
+# discretizes the full 6D Vlasov equation as a single RHS and advances
+# with classical RK4. No splitting error — but requires CFL in both
+# x and v simultaneously (no semi-Lagrangian CFL freedom).
+#
+# Uses upwind finite-difference spatial derivatives for the Vlasov RHS.
+# Compare energy conservation on F5 against strang and yoshida presets.
+#
+# Memory: 8^6 × 8 B ≈ 2 MB (plus 4 RK stage copies ≈ 8 MB total).
+# Small grid because unsplit is more expensive per step than splitting.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "unsplit_rk4"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/unsplit_rk4"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 0.5

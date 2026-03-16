@@ -20,11 +20,19 @@ pub fn run_wizard() -> anyhow::Result<()> {
     match model_type.as_str() {
         "king" => {
             let w0 = prompt_f64("King W0 parameter", 5.0)?;
-            cfg.model.king = Some(crate::config::KingModelConfig { w0 });
+            cfg.model.king = Some(crate::config::KingModelConfig {
+                w0,
+                anisotropy: 0.0,
+            });
         }
         "nfw" => {
             let c = prompt_f64("NFW concentration", 10.0)?;
-            cfg.model.nfw = Some(crate::config::NfwModelConfig { concentration: c });
+            cfg.model.nfw = Some(crate::config::NfwModelConfig {
+                concentration: c,
+                virial_mass: cfg.model.total_mass,
+                velocity_anisotropy: "isotropic".to_string(),
+                beta: 0.0,
+            });
         }
         "zeldovich" => {
             let amp = prompt_f64("Zeldovich amplitude", 0.01)?;
@@ -32,6 +40,11 @@ pub fn run_wizard() -> anyhow::Result<()> {
             cfg.model.zeldovich = Some(crate::config::ZeldovichConfig {
                 amplitude: amp,
                 wave_number: k,
+                box_size: 100.0,
+                redshift_initial: 50.0,
+                cosmology_h: 0.7,
+                cosmology_omega_m: 0.3,
+                cosmology_omega_lambda: 0.7,
             });
         }
         "merger" => {
@@ -40,6 +53,12 @@ pub fn run_wizard() -> anyhow::Result<()> {
             cfg.model.merger = Some(crate::config::MergerConfig {
                 separation: sep,
                 mass_ratio: ratio,
+                relative_velocity: [0.0, 0.3, 0.0],
+                impact_parameter: 2.0,
+                model_1: "plummer".to_string(),
+                model_2: "plummer".to_string(),
+                scale_radius_1: cfg.model.scale_radius,
+                scale_radius_2: cfg.model.scale_radius,
             });
         }
         _ => {}

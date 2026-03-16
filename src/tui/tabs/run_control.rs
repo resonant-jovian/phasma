@@ -120,6 +120,11 @@ impl RunControlTab {
     pub fn update(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::SimUpdate(state) => {
+                // Ingest verbose log messages from sim thread
+                for msg in &state.log_messages {
+                    self.push_log(Level::Info, msg.clone());
+                }
+
                 // Track initial values
                 if self.initial_energy == 0.0 && state.total_energy != 0.0 {
                     self.initial_energy = state.total_energy;
@@ -201,6 +206,15 @@ impl RunControlTab {
         colormap: Colormap,
         data_provider: &dyn DataProvider,
     ) {
+        // Compact mode: controls + bottom only (no maps)
+        if area.width < 76 {
+            let [top_area, bottom_area] =
+                Layout::vertical([Constraint::Length(4), Constraint::Min(6)]).areas(area);
+            self.draw_controls(frame, top_area, theme);
+            self.draw_bottom(frame, bottom_area, theme, data_provider);
+            return;
+        }
+
         let ideal_map_h = (area.width / 4).clamp(8, area.height.saturating_sub(16));
 
         let [top_area, maps_area, bottom_area] = Layout::vertical([
@@ -495,7 +509,7 @@ impl RunControlTab {
                 let init_m = self.initial_mass;
                 let init_c = self.initial_c2;
 
-                let rows: Vec<SparklineRow> = vec![
+                let mut rows: Vec<SparklineRow> = vec![
                     SparklineRow::new(
                         "Energy E",
                         state.total_energy,
@@ -506,14 +520,6 @@ impl RunControlTab {
                         },
                     )
                     .thresholds(1e-4, 1e-2),
-                    SparklineRow::new("Kinetic T", state.kinetic_energy, 0.0),
-                    SparklineRow::new("Potential W", state.potential_energy, 0.0),
-                    SparklineRow::new(
-                        "Virial 2T/|W|",
-                        state.virial_ratio,
-                        state.virial_ratio - 1.0,
-                    )
-                    .thresholds(0.1, 0.5),
                     SparklineRow::new(
                         "Mass M",
                         state.total_mass,
@@ -534,8 +540,44 @@ impl RunControlTab {
                         },
                     )
                     .thresholds(1e-5, 1e-2),
-                    SparklineRow::new("Entropy S", state.entropy, 0.0),
+                    SparklineRow::new(
+                        "Virial 2T/|W|",
+                        state.virial_ratio,
+                        state.virial_ratio - 1.0,
+                    )
+                    .thresholds(0.1, 0.5),
+                    SparklineRow::new("Max density", state.max_density, 0.0),
                 ];
+
+                // HT rank rows (§2.2 spec: Avg rank, Peak rank)
+                if let Some(ref ranks) = state.rank_per_node {
+                    let budget = 100u32; // fallback budget
+                    let avg = if ranks.is_empty() {
+                        0.0
+                    } else {
+                        ranks.iter().sum::<usize>() as f64 / ranks.len() as f64
+                    };
+                    let peak = ranks.iter().copied().max().unwrap_or(0);
+                    rows.push(
+                        SparklineRow::new("Avg rank", avg, avg / budget as f64)
+                            .thresholds(0.5, 0.8),
+                    );
+                    rows.push(
+                        SparklineRow::new("Peak rank", peak as f64, peak as f64 / budget as f64)
+                            .thresholds(0.5, 0.8),
+                    );
+                }
+
+                // Memory row
+                if let Some(mem) = state.rank_memory_bytes {
+                    rows.push(SparklineRow::new(
+                        "Memory",
+                        mem as f64 / (1024.0 * 1024.0),
+                        0.0,
+                    ));
+                }
+
+                rows.push(SparklineRow::new("Entropy S", state.entropy, 0.0));
 
                 SparklineTable::new(&rows, " Diagnostics ").draw(frame, diag_area, theme);
             }

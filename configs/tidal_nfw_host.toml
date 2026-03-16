@@ -1,0 +1,56 @@
+# Tidal Stream (NFW host) — Plummer progenitor in an NFW halo potential
+#
+# Same concept as tidal_stream but with a realistic NFW host potential
+# instead of a point mass. The NFW potential Phi(r) = -G*M*ln(1+r/r_s)/r
+# produces a flat rotation curve at large radii, giving a more realistic
+# orbital dynamics for the satellite.
+#
+# The progenitor is on a circular-ish orbit at r=8.0 with v_circ ≈ 1.2.
+# Tidal stripping forms leading and trailing streams that trace the orbit.
+#
+# Memory: 16^6 × 8 B ≈ 134 MB.
+
+[model]
+type = "tidal"
+total_mass = 0.05
+scale_radius = 0.3
+
+[model.tidal]
+progenitor_type = "plummer"
+progenitor_mass = 0.05
+progenitor_scale_radius = 0.3
+host_type = "nfw_fixed"
+host_mass = 10.0
+host_scale_radius = 5.0               # NFW scale radius r_s
+progenitor_position = [8.0, 0.0, 0.0]
+progenitor_velocity = [0.0, 1.2, 0.0] # approximate circular velocity
+
+[domain]
+spatial_extent = 15.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 60.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/tidal_nfw_host"
+prefix = "run"
+snapshot_interval = 2.0
+
+[exit]
+energy_drift_tolerance = 10.0
+mass_drift_tolerance = 5.0
+caustic_formation = true

@@ -27,10 +27,13 @@ pub struct PhaseSpaceTab {
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
-    /// Slice position offset in normalised coordinates (-1.0 to 1.0)
-    slice_offset: f64,
+    /// Slice position offsets for the 4 hidden dimensions (-1.0 to 1.0 each).
+    /// Order: first hidden, second hidden, third hidden, fourth hidden.
+    slice_offsets: [f64; 4],
     /// When true, use physical extents for aspect ratio; when false, fill available area
     physical_aspect: bool,
+    /// Toggle stream-count overlay (§2.2 F4 `[s]`)
+    show_stream_count: bool,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
@@ -47,8 +50,9 @@ impl Default for PhaseSpaceTab {
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
-            slice_offset: 0.0,
+            slice_offsets: [0.0; 4],
             physical_aspect: false,
+            show_stream_count: false,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
@@ -118,16 +122,47 @@ impl PhaseSpaceTab {
                 self.zoom = 1.0;
                 None
             }
+            // Slice position: ,/. = 1st hidden dim, (/) = 2nd, {/} = 3rd, </> = 4th
             KeyCode::Char(',') => {
-                self.slice_offset = (self.slice_offset - 0.1).max(-1.0);
+                self.slice_offsets[0] = (self.slice_offsets[0] - 0.1).max(-1.0);
                 None
             }
             KeyCode::Char('.') => {
-                self.slice_offset = (self.slice_offset + 0.1).min(1.0);
+                self.slice_offsets[0] = (self.slice_offsets[0] + 0.1).min(1.0);
+                None
+            }
+            KeyCode::Char('(') => {
+                self.slice_offsets[1] = (self.slice_offsets[1] - 0.1).max(-1.0);
+                None
+            }
+            KeyCode::Char(')') => {
+                self.slice_offsets[1] = (self.slice_offsets[1] + 0.1).min(1.0);
+                None
+            }
+            // Slice position: {/} = 3rd hidden dim, </> = 4th hidden dim
+            KeyCode::Char('{') => {
+                self.slice_offsets[2] = (self.slice_offsets[2] - 0.1).max(-1.0);
+                None
+            }
+            KeyCode::Char('}') => {
+                self.slice_offsets[2] = (self.slice_offsets[2] + 0.1).min(1.0);
+                None
+            }
+            KeyCode::Char('<') => {
+                self.slice_offsets[3] = (self.slice_offsets[3] - 0.1).max(-1.0);
+                None
+            }
+            KeyCode::Char('>') => {
+                self.slice_offsets[3] = (self.slice_offsets[3] + 0.1).min(1.0);
                 None
             }
             KeyCode::Char('p') => {
                 self.physical_aspect = !self.physical_aspect;
+                None
+            }
+            // §2.2 F4 overlays (stubs — data not yet available from caustic)
+            KeyCode::Char('s') => {
+                self.show_stream_count = !self.show_stream_count;
                 None
             }
             _ => None,
@@ -157,7 +192,21 @@ impl PhaseSpaceTab {
     ) {
         let effective_cmap = colormap;
 
-        let Some((data, nx, nv)) = data_provider.phase_slice(self.dim_x, self.dim_v, &[]) else {
+        // Build fixed-dim slice specifications from the 4 hidden dimension offsets.
+        // The 6 dimensions are [x1, x2, x3, v1, v2, v3]; the visible pair is
+        // (dim_x, 3+dim_v). The remaining 4 are "hidden" and can be sliced.
+        let visible_x = self.dim_x;
+        let visible_v = 3 + self.dim_v;
+        let hidden: Vec<usize> = (0..6)
+            .filter(|&d| d != visible_x && d != visible_v)
+            .collect();
+        let fixed: Vec<(usize, f64)> = hidden
+            .iter()
+            .zip(self.slice_offsets.iter())
+            .filter(|(_, off)| off.abs() > 0.001)
+            .map(|(&dim, &off)| (dim, off))
+            .collect();
+        let Some((data, nx, nv)) = data_provider.phase_slice(self.dim_x, self.dim_v, &fixed) else {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(
@@ -178,10 +227,18 @@ impl PhaseSpaceTab {
 
         let dim_labels = ["x", "y", "z"];
         let vel_labels = ["vx", "vy", "vz"];
-        let slice_info = if self.slice_offset.abs() > 0.01 {
-            format!(" slice={:+.1}", self.slice_offset)
-        } else {
-            String::new()
+        let slice_info = {
+            let mut parts = Vec::new();
+            for (i, &off) in self.slice_offsets.iter().enumerate() {
+                if off.abs() > 0.01 {
+                    parts.push(format!("s{}={:+.1}", i + 1, off));
+                }
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", parts.join(","))
+            }
         };
         let title = format!(
             " f({}, {}) {}{}",
@@ -232,8 +289,9 @@ impl PhaseSpaceTab {
             } else {
                 String::new()
             };
+            let stream_tag = if self.show_stream_count { " S" } else { "" };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-/scroll] zoom  [r/0] reset  [l] log  [,/.] slice  [p] aspect  [i] hide{scrub_hint}",
+                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] log  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(

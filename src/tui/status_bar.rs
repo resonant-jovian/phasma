@@ -22,6 +22,8 @@ pub struct StatusBar {
     step_times: VecDeque<Instant>,
     last_step: u64,
     max_density: f64,
+    /// HT rank info: (avg_rank, max_rank, budget)
+    rank_info: Option<(f64, usize, u32)>,
     sim_start_time: Option<Instant>,
     /// Accumulated wall-clock seconds spent paused (excluded from ETA calculation).
     paused_duration: f64,
@@ -46,6 +48,7 @@ impl Default for StatusBar {
             step_times: VecDeque::with_capacity(12),
             last_step: 0,
             max_density: 0.0,
+            rank_info: None,
             sim_start_time: None,
             paused_duration: 0.0,
             pause_start: None,
@@ -104,6 +107,20 @@ impl StatusBar {
         self.last_t = s.t;
         self.t_final = s.t_final;
         self.max_density = s.max_density;
+
+        // Capture HT rank info
+        if let Some(ref ranks) = s.rank_per_node {
+            let max_rank = ranks.iter().copied().max().unwrap_or(0);
+            let avg_rank = if ranks.is_empty() {
+                0.0
+            } else {
+                ranks.iter().sum::<usize>() as f64 / ranks.len() as f64
+            };
+            // Budget comes from config; use 100 as fallback
+            self.rank_info = Some((avg_rank, max_rank, 100));
+        } else {
+            self.rank_info = None;
+        }
 
         if s.step != self.last_step {
             self.last_step = s.step;
@@ -232,6 +249,16 @@ impl StatusBar {
                     Style::default().fg(Color::Green),
                 ));
             }
+        }
+
+        // HT rank display (spec §2.1: "current rank (HT only)")
+        if let Some((avg, max_r, _budget)) = self.rank_info {
+            spans.push(sep.clone());
+            let rank_color = if max_r > 80 { theme.warn } else { theme.dim };
+            spans.push(Span::styled(
+                format!(" Rank {avg:.0}/{max_r}"),
+                Style::default().fg(rank_color),
+            ));
         }
 
         if let Some((idx, total)) = self.scrub_position {

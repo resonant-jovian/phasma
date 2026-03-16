@@ -1,0 +1,56 @@
+# Disk Stability — exponential disk with m=2 bar perturbation
+#
+# Models a thin stellar disk with exponential surface density profile
+# Sigma(R) = Sigma_0 * exp(-R/R_d), uses the Shu (1969) distribution
+# function with an m=2 bar-mode perturbation seeded at 5% amplitude.
+#
+# The disk is marginally unstable to bar formation. Uses isolated BC
+# since the disk is a finite-extent structure. Watch for spiral arm
+# development on F3 Density and bar-mode growth on F4 Phase Space.
+#
+# Memory: 16^6 × 8 B ≈ 134 MB. Resolution reduced from 32 to 16 for
+# practicality — increase to 32 for production runs (8.6 GB).
+
+[model]
+type = "disk_stability"
+total_mass = 1.0
+scale_radius = 3.0
+
+[model.disk]
+disk_mass = 1.0
+disk_scale_length = 3.0
+disk_scale_height = 0.3
+radial_velocity_dispersion = 0.15
+halo_type = "nfw"
+halo_mass = 10.0
+halo_concentration = 10.0
+toomre_q = 1.5
+
+[domain]
+spatial_extent = 20.0
+velocity_extent = 2.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 50.0
+dt_mode = "adaptive"
+cfl_factor = 0.4
+
+[output]
+directory = "output/disk_stability"
+prefix = "run"
+snapshot_interval = 2.0
+
+[exit]
+energy_drift_tolerance = 5.0
+mass_drift_tolerance = 1.0
