@@ -36,6 +36,10 @@ pub struct RankTab {
     rank_history: VecDeque<(f64, usize)>,
     /// Time-series of (sim_time, max truncation error) for secondary y-axis.
     trunc_error_history: VecDeque<(f64, f64)>,
+    /// Time-series of (sim_time, poisson_rank_amplification).
+    poisson_amp_history: VecDeque<(f64, f64)>,
+    /// Time-series of (sim_time, advection_rank_amplification).
+    advection_amp_history: VecDeque<(f64, f64)>,
     /// Last simulation step we recorded, to avoid duplicate pushes.
     last_step: u64,
     /// Selected node index for SV spectrum (0–10, cycles with j/k or n/N).
@@ -47,6 +51,8 @@ impl Default for RankTab {
         Self {
             rank_history: VecDeque::with_capacity(MAX_HISTORY),
             trunc_error_history: VecDeque::with_capacity(MAX_HISTORY),
+            poisson_amp_history: VecDeque::with_capacity(MAX_HISTORY),
+            advection_amp_history: VecDeque::with_capacity(MAX_HISTORY),
             last_step: u64::MAX,
             selected_node: 0,
         }
@@ -116,6 +122,20 @@ impl RankTab {
                     }
                     self.trunc_error_history.push_back((state.t, max_err));
                 }
+            }
+
+            // Track rank amplification histories
+            if let Some(amp) = state.poisson_rank_amplification {
+                if self.poisson_amp_history.len() >= MAX_HISTORY {
+                    self.poisson_amp_history.pop_front();
+                }
+                self.poisson_amp_history.push_back((state.t, amp));
+            }
+            if let Some(amp) = state.advection_rank_amplification {
+                if self.advection_amp_history.len() >= MAX_HISTORY {
+                    self.advection_amp_history.pop_front();
+                }
+                self.advection_amp_history.push_back((state.t, amp));
             }
 
             self.last_step = state.step;
@@ -250,6 +270,46 @@ impl RankTab {
                     .marker(symbols::Marker::Braille)
                     .style(Style::default().fg(theme.chart[2]))
                     .data(&dense_trunc),
+            );
+        }
+
+        // Poisson rank amplification (scaled into rank y-range)
+        let poisson_amp_data: Vec<(f64, f64)> = self
+            .poisson_amp_history
+            .iter()
+            .map(|&(t, a)| (t, a * y_max / 2.0)) // scale amplification into chart range
+            .collect();
+        let dense_poisson_amp =
+            densify(&poisson_amp_data, area.width.saturating_sub(2) as usize * 2);
+
+        if dense_poisson_amp.len() >= 2 {
+            datasets.push(
+                Dataset::default()
+                    .name("Poisson amp.")
+                    .marker(symbols::Marker::Braille)
+                    .style(Style::default().fg(theme.chart[3 % theme.chart.len()]))
+                    .data(&dense_poisson_amp),
+            );
+        }
+
+        // Advection rank amplification
+        let advection_amp_data: Vec<(f64, f64)> = self
+            .advection_amp_history
+            .iter()
+            .map(|&(t, a)| (t, a * y_max / 2.0))
+            .collect();
+        let dense_advection_amp = densify(
+            &advection_amp_data,
+            area.width.saturating_sub(2) as usize * 2,
+        );
+
+        if dense_advection_amp.len() >= 2 {
+            datasets.push(
+                Dataset::default()
+                    .name("Advect. amp.")
+                    .marker(symbols::Marker::Braille)
+                    .style(Style::default().fg(theme.chart[4 % theme.chart.len()]))
+                    .data(&dense_advection_amp),
             );
         }
 
@@ -520,14 +580,38 @@ impl RankTab {
         ]));
 
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Decay slope: \u{2014}",
-            Style::default().fg(theme.dim),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  (requires per-node SV data)",
-            Style::default().fg(theme.dim),
-        )));
+        // Compute SV decay slope if singular values available
+        if let Some(ref svs) = state.singular_values {
+            if let Some(sv_vec) = svs.get(node) {
+                if sv_vec.len() >= 2 {
+                    let first = sv_vec[0].max(1e-300).ln();
+                    let last = sv_vec[sv_vec.len() - 1].max(1e-300).ln();
+                    let slope = (last - first) / (sv_vec.len() as f64 - 1.0);
+                    lines.push(Line::from(vec![
+                        Span::styled("  Decay slope: ", Style::default().fg(theme.dim)),
+                        Span::styled(
+                            format!("{slope:.2}"),
+                            Style::default().fg(if slope < -0.5 { theme.ok } else { theme.warn }),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "  Decay slope: (too few SVs)",
+                        Style::default().fg(theme.dim),
+                    )));
+                }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  Decay slope: \u{2014}",
+                    Style::default().fg(theme.dim),
+                )));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  Decay slope: \u{2014}",
+                Style::default().fg(theme.dim),
+            )));
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Moment-carrying: \u{2014}/k",

@@ -372,3 +372,231 @@ impl DataProvider for LiveDataProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::SimState;
+
+    fn mock_sim_state(t: f64, total_energy: f64, total_mass: f64) -> SimState {
+        SimState {
+            t,
+            t_final: 10.0,
+            step: 0,
+            total_energy,
+            initial_energy: 0.0,
+            kinetic_energy: total_energy * 0.5,
+            potential_energy: total_energy * -0.5,
+            virial_ratio: 1.0,
+            total_mass,
+            momentum: [0.0, 0.0, 0.0],
+            casimir_c2: 1.0,
+            entropy: 0.0,
+            max_density: 1.0,
+            step_wall_ms: 1.0,
+            has_new_data: true,
+            density_xy: vec![],
+            density_xz: vec![],
+            density_yz: vec![],
+            density_nx: 0,
+            density_ny: 0,
+            density_nz: 0,
+            phase_slices: vec![],
+            phase_slice: vec![],
+            phase_nx: 0,
+            phase_nv: 0,
+            spatial_extent: 10.0,
+            gravitational_constant: 1.0,
+            dt: 0.1,
+            exit_reason: None,
+            rank_per_node: None,
+            rank_total: None,
+            rank_memory_bytes: None,
+            compression_ratio: None,
+            repr_type: String::new(),
+            poisson_type: String::new(),
+            poisson_residual_l2: None,
+            potential_power_spectrum: None,
+            phase_timings: None,
+            truncation_errors: None,
+            svd_count: 0,
+            htaca_evaluations: 0,
+            velocity_extent: 5.0,
+            singular_values: None,
+            lagrangian_radii: None,
+            poisson_rank_amplification: None,
+            advection_rank_amplification: None,
+            green_function_rank: None,
+            exp_sum_terms: None,
+            density_power_spectrum: None,
+            field_energy_spectrum: None,
+            log_messages: vec![],
+        }
+    }
+
+    // ── TimeSeriesStore ──
+
+    #[test]
+    fn ts_empty() {
+        let ts = TimeSeriesStore::default();
+        assert!(ts.is_empty());
+        assert_eq!(ts.len(), 0);
+        assert!(ts.last_value().is_none());
+        assert!(ts.first_value().is_none());
+    }
+
+    #[test]
+    fn ts_push_single() {
+        let mut ts = TimeSeriesStore::default();
+        ts.push(0.0, 42.0);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts.last_value(), Some(42.0));
+        assert_eq!(ts.first_value(), Some(42.0));
+    }
+
+    #[test]
+    fn ts_push_hundred() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..100 {
+            ts.push(i as f64, i as f64 * 2.0);
+        }
+        assert_eq!(ts.len(), 100);
+        assert_eq!(ts.iter_chart_data().len(), 100);
+    }
+
+    #[test]
+    fn ts_recent_ring_cap() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..10_500 {
+            ts.push(i as f64, i as f64);
+        }
+        assert_eq!(ts.len(), 10_000);
+        assert_eq!(ts.last_value(), Some(10_499.0));
+    }
+
+    #[test]
+    fn ts_history_populated() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..101 {
+            ts.push(i as f64, i as f64);
+        }
+        // SUBSAMPLE=100, so after 100 pushes there should be 1 history entry
+        assert!(!ts.history.is_empty());
+    }
+
+    #[test]
+    fn ts_first_value_preserved() {
+        let mut ts = TimeSeriesStore::default();
+        ts.push(0.0, 99.0);
+        ts.push(1.0, 100.0);
+        ts.push(2.0, 101.0);
+        assert_eq!(ts.first_value(), Some(99.0));
+    }
+
+    #[test]
+    fn ts_chart_covers_range() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..50 {
+            ts.push(i as f64, i as f64);
+        }
+        let data = ts.iter_chart_data();
+        assert_eq!(data.first().unwrap().0, 0.0);
+        assert_eq!(data.last().unwrap().0, 49.0);
+    }
+
+    #[test]
+    fn ts_over_max_no_panic() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..100_000 {
+            ts.push(i as f64, i as f64);
+        }
+        assert_eq!(ts.len(), 10_000);
+    }
+
+    #[test]
+    fn ts_len_is_recent_only() {
+        let mut ts = TimeSeriesStore::default();
+        for i in 0..200 {
+            ts.push(i as f64, i as f64);
+        }
+        // len() returns recent.len(), not history len
+        assert_eq!(ts.len(), 200);
+        assert!(!ts.history.is_empty());
+    }
+
+    // ── DiagnosticsStore ──
+
+    #[test]
+    fn diag_empty() {
+        let ds = DiagnosticsStore::default();
+        assert!(ds.is_empty());
+    }
+
+    #[test]
+    fn diag_push_populates() {
+        let mut ds = DiagnosticsStore::default();
+        ds.push_state(&mock_sim_state(0.0, 1.0, 1.0));
+        assert_eq!(ds.total_energy.len(), 1);
+        assert_eq!(ds.kinetic_energy.len(), 1);
+        assert_eq!(ds.potential_energy.len(), 1);
+        assert_eq!(ds.total_mass.len(), 1);
+        assert_eq!(ds.momentum_x.len(), 1);
+        assert_eq!(ds.momentum_y.len(), 1);
+        assert_eq!(ds.momentum_z.len(), 1);
+        assert_eq!(ds.casimir_c2.len(), 1);
+        assert_eq!(ds.entropy.len(), 1);
+        assert_eq!(ds.virial_ratio.len(), 1);
+    }
+
+    #[test]
+    fn diag_energy_drift() {
+        let mut ds = DiagnosticsStore::default();
+        ds.push_state(&mock_sim_state(0.0, 1.0, 1.0));
+        ds.push_state(&mock_sim_state(1.0, 1.01, 1.0));
+        let drift = ds.energy_drift_series();
+        assert_eq!(drift.len(), 2);
+        assert!((drift[0].1).abs() < 1e-12); // (1.0-1.0)/1.0 = 0
+        assert!((drift[1].1 - 0.01).abs() < 1e-12); // (1.01-1.0)/1.0 = 0.01
+    }
+
+    #[test]
+    fn diag_energy_drift_zero() {
+        let mut ds = DiagnosticsStore::default();
+        ds.push_state(&mock_sim_state(0.0, 0.0, 1.0));
+        let drift = ds.energy_drift_series();
+        assert!(drift.is_empty());
+    }
+
+    #[test]
+    fn diag_mass_drift() {
+        let mut ds = DiagnosticsStore::default();
+        ds.push_state(&mock_sim_state(0.0, 1.0, 2.0));
+        ds.push_state(&mock_sim_state(1.0, 1.0, 2.02));
+        let drift = ds.mass_drift_series();
+        assert_eq!(drift.len(), 2);
+        assert!((drift[1].1 - 0.01).abs() < 1e-12); // (2.02-2.0)/2.0 = 0.01
+    }
+
+    #[test]
+    fn diag_c2_drift() {
+        let mut ds = DiagnosticsStore::default();
+        let mut s1 = mock_sim_state(0.0, 1.0, 1.0);
+        s1.casimir_c2 = 10.0;
+        let mut s2 = mock_sim_state(1.0, 1.0, 1.0);
+        s2.casimir_c2 = 10.1;
+        ds.push_state(&s1);
+        ds.push_state(&s2);
+        let drift = ds.c2_drift_series();
+        assert_eq!(drift.len(), 2);
+        assert!((drift[1].1 - 0.01).abs() < 1e-12); // (10.1-10.0)/10.0 = 0.01
+    }
+
+    #[test]
+    fn diag_clear() {
+        let mut ds = DiagnosticsStore::default();
+        ds.push_state(&mock_sim_state(0.0, 1.0, 1.0));
+        assert!(!ds.is_empty());
+        ds.clear();
+        assert!(ds.is_empty());
+    }
+}

@@ -31,9 +31,9 @@ pub async fn run_regression_test(dir: &str) -> anyhow::Result<bool> {
     let config_str = config_path.display().to_string();
     eprintln!("phasma regression: re-running {config_str}...");
 
-    let mut handle = SimHandle::spawn(config_str);
+    let mut handle = SimHandle::spawn_unbounded(config_str);
     let mut new_final = None;
-    while let Some(state) = handle.state_rx.recv().await {
+    while let Some(state) = handle.state_rx.recv_async().await {
         for msg in &state.log_messages {
             eprintln!("  [verbose] {msg}");
         }

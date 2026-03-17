@@ -1,5 +1,3 @@
-use std::env;
-
 use tracing::error;
 
 pub fn init() -> color_eyre::Result<()> {
@@ -20,28 +18,9 @@ pub fn init() -> color_eyre::Result<()> {
             error!("Unable to exit Terminal: {:?}", r);
         }
 
-        #[cfg(not(debug_assertions))]
-        {
-            use human_panic::{handle_dump, metadata, print_msg};
-            let metadata = metadata!();
-            let file_path = handle_dump(&metadata, panic_info);
-            // prints human-panic message
-            print_msg(file_path, &metadata)
-                .expect("human-panic: printing error message to console failed");
-            eprintln!("{}", panic_hook.panic_report(panic_info)); // prints color-eyre stack trace to stderr
-        }
         let msg = format!("{}", panic_hook.panic_report(panic_info));
-        error!("Error: {}", strip_ansi_escapes::strip_str(msg));
-
-        #[cfg(debug_assertions)]
-        {
-            // Better Panic stacktrace that is only enabled when debugging.
-            better_panic::Settings::auto()
-                .most_recent_first(false)
-                .lineno_suffix(true)
-                .verbosity(better_panic::Verbosity::Full)
-                .create_panic_handler()(panic_info);
-        }
+        eprintln!("{msg}");
+        error!("Error: {}", strip_ansi_escapes::strip_str(&msg));
 
         std::process::exit(libc::EXIT_FAILURE);
     }));

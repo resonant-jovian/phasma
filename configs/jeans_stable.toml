@@ -1,0 +1,55 @@
+# Jeans Stable — stable oscillation above Jeans wavelength
+#
+# 8^3 x 8^3 uniform grid.
+# Phase-space ~ 2 MB.
+# Same setup as jeans_unstable
+# but with high velocity dispersion sigma = 2.0.
+# k_J ~ 1.77
+# and perturbation wavenumber k = 3.0 > k_J,
+# so the mode oscillates stably.
+# omega = sqrt(k^2*sigma^2 - 4*pi*G*rho0)
+# ~ 4.9.
+#
+# Validates that the solver does NOT produce
+# spurious growth for stable modes.
+# Critical correctness check.
+
+[model]
+type = "uniform_perturbation"
+total_mass = 1.0
+scale_radius = 1.0
+
+[model.uniform_perturbation]
+background_density = 1.0
+velocity_dispersion = 2.0
+perturbation_amplitude = 0.05
+perturbation_wavenumber = [3.0, 0.0, 0.0]
+
+[domain]
+spatial_extent = 3.14159265
+velocity_extent = 8.0
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|open"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 150.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/jeans_stable"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

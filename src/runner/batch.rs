@@ -45,13 +45,13 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
     )?;
 
     let start_time = chrono::Utc::now();
-    let mut handle = SimHandle::spawn(path.clone());
+    let mut handle = SimHandle::spawn_unbounded(path.clone());
     let mut snapshot_count: usize = 0;
     let mut last_snapshot_t: f64 = f64::NEG_INFINITY;
     let snapshot_interval = cfg.output.snapshot_interval;
     let mut final_state: Option<SimState> = None;
 
-    while let Some(state) = handle.state_rx.recv().await {
+    while let Some(state) = handle.state_rx.recv_async().await {
         // Append to diagnostics CSV
         let _ = writeln!(
             csv_file,

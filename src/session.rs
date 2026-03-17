@@ -46,3 +46,41 @@ pub fn save(s: &Session) {
         let _ = std::fs::write(sp, text);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_values() {
+        let s = Session::default();
+        assert_eq!(s.active_tab, 0);
+        assert_eq!(s.colormap, "viridis");
+        assert_eq!(s.theme, "dark");
+        assert_eq!(s.projection_axis, 2);
+        assert!(s.config_path.is_none());
+    }
+
+    #[test]
+    fn toml_round_trip() {
+        let s = Session::default();
+        let toml_str = toml::to_string_pretty(&s).unwrap();
+        let loaded: Session = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.active_tab, s.active_tab);
+        assert_eq!(loaded.colormap, s.colormap);
+        assert_eq!(loaded.theme, s.theme);
+        assert_eq!(loaded.projection_axis, s.projection_axis);
+        assert_eq!(loaded.config_path, s.config_path);
+    }
+
+    #[test]
+    fn toml_round_trip_with_path() {
+        let s = Session {
+            config_path: Some("/tmp/test.toml".to_string()),
+            ..Session::default()
+        };
+        let toml_str = toml::to_string_pretty(&s).unwrap();
+        let loaded: Session = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.config_path, Some("/tmp/test.toml".to_string()));
+    }
+}

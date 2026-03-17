@@ -66,9 +66,9 @@ pub async fn run_sweep(toml_path: &str) -> anyhow::Result<()> {
 
         // Run simulation
         let config_str = temp_config.display().to_string();
-        let mut handle = SimHandle::spawn(config_str);
+        let mut handle = SimHandle::spawn_unbounded(config_str);
         let mut final_state = None;
-        while let Some(state) = handle.state_rx.recv().await {
+        while let Some(state) = handle.state_rx.recv_async().await {
             for msg in &state.log_messages {
                 eprintln!("  [verbose] {msg}");
             }

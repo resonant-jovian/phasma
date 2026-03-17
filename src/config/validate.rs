@@ -1,6 +1,7 @@
 //! Config validation — checks PhasmaConfig for common mistakes before running.
 
 use crate::config::PhasmaConfig;
+use rust_decimal::Decimal;
 
 #[derive(Debug)]
 pub struct ValidationWarning {
@@ -31,13 +32,13 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
             message: "must be > 0".into(),
         });
     }
-    if cfg.domain.spatial_extent <= 0.0 {
+    if cfg.domain.spatial_extent <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "domain.spatial_extent".into(),
             message: "must be > 0".into(),
         });
     }
-    if cfg.domain.velocity_extent <= 0.0 {
+    if cfg.domain.velocity_extent <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "domain.velocity_extent".into(),
             message: "must be > 0".into(),
@@ -268,13 +269,13 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
     }
 
     // Time checks
-    if cfg.time.t_final <= 0.0 {
+    if cfg.time.t_final <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "time.t_final".into(),
             message: "must be > 0".into(),
         });
     }
-    if cfg.time.cfl_factor <= 0.0 || cfg.time.cfl_factor > 1.0 {
+    if cfg.time.cfl_factor <= Decimal::ZERO || cfg.time.cfl_factor > Decimal::ONE {
         warnings.push(ValidationWarning {
             field: "time.cfl_factor".into(),
             message: "should be in (0, 1]".into(),
@@ -330,4 +331,235 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
     }
 
     warnings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PhasmaConfig;
+    use rust_decimal::Decimal;
+
+    fn has_warning(warnings: &[ValidationWarning], field: &str) -> bool {
+        warnings.iter().any(|w| w.field == field)
+    }
+
+    #[test]
+    fn valid_default() {
+        let cfg = PhasmaConfig::default();
+        let warnings = validate(&cfg);
+        // Default config should only potentially warn about memory
+        let non_memory: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.field != "performance.memory_budget_gb")
+            .collect();
+        assert!(non_memory.is_empty(), "unexpected warnings: {non_memory:?}");
+    }
+
+    #[test]
+    fn zero_spatial_res() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.domain.spatial_resolution = 0;
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "domain.spatial_resolution"));
+    }
+
+    #[test]
+    fn zero_velocity_res() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.domain.velocity_resolution = 0;
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "domain.velocity_resolution"));
+    }
+
+    #[test]
+    fn negative_spatial_extent() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.domain.spatial_extent = Decimal::from_f64_retain(-1.0).unwrap();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "domain.spatial_extent"));
+    }
+
+    #[test]
+    fn negative_velocity_extent() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.domain.velocity_extent = Decimal::from_f64_retain(-1.0).unwrap();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "domain.velocity_extent"));
+    }
+
+    #[test]
+    fn invalid_model_type() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "model.type"));
+    }
+
+    #[test]
+    fn invalid_representation() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.representation = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "solver.representation"));
+    }
+
+    #[test]
+    fn invalid_poisson() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.poisson = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "solver.poisson"));
+    }
+
+    #[test]
+    fn invalid_integrator() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.integrator = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "solver.integrator"));
+    }
+
+    #[test]
+    fn invalid_advection() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.advection = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "solver.advection"));
+    }
+
+    #[test]
+    fn invalid_conservation() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.conservation = "bogus".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "solver.conservation"));
+    }
+
+    #[test]
+    fn fft_non_power_of_two() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.poisson = "fft_periodic".to_string();
+        cfg.domain.spatial_resolution = 12;
+        let warnings = validate(&cfg);
+        assert!(
+            warnings.iter().any(|w| w.field == "domain.spatial_resolution" && w.message.contains("power-of-2")),
+            "should warn about non-power-of-2 for FFT"
+        );
+    }
+
+    #[test]
+    fn fft_power_of_two_ok() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.poisson = "fft_periodic".to_string();
+        cfg.domain.spatial_resolution = 16;
+        let warnings = validate(&cfg);
+        assert!(
+            !warnings.iter().any(|w| w.field == "domain.spatial_resolution" && w.message.contains("power-of-2")),
+            "should not warn about power-of-2 for N=16"
+        );
+    }
+
+    #[test]
+    fn slar_without_ht() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.advection = "slar".to_string();
+        cfg.solver.representation = "uniform".to_string();
+        let warnings = validate(&cfg);
+        assert!(
+            warnings.iter().any(|w| w.field == "solver.advection" && w.message.contains("hierarchical_tucker")),
+            "should warn that slar requires HT"
+        );
+    }
+
+    #[test]
+    fn slar_with_ht_ok() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.advection = "slar".to_string();
+        cfg.solver.representation = "ht".to_string();
+        let warnings = validate(&cfg);
+        assert!(
+            !warnings.iter().any(|w| w.field == "solver.advection" && w.message.contains("hierarchical_tucker")),
+            "should not warn about slar with HT representation"
+        );
+    }
+
+    #[test]
+    fn zero_t_final() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.time.t_final = Decimal::ZERO;
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "time.t_final"));
+    }
+
+    #[test]
+    fn cfl_above_one() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.time.cfl_factor = Decimal::from_f64_retain(1.5).unwrap();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "time.cfl_factor"));
+    }
+
+    #[test]
+    fn invalid_theme() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.appearance.theme = "neon".to_string();
+        let warnings = validate(&cfg);
+        assert!(has_warning(&warnings, "appearance.theme"));
+    }
+
+    #[test]
+    fn king_without_section() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "king".to_string();
+        cfg.model.king = None;
+        let warnings = validate(&cfg);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("king")),
+            "should warn about missing king section"
+        );
+    }
+
+    #[test]
+    fn nfw_without_section() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "nfw".to_string();
+        cfg.model.nfw = None;
+        let warnings = validate(&cfg);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("nfw")),
+            "should warn about missing nfw section"
+        );
+    }
+
+    #[test]
+    fn zeldovich_without_section() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "zeldovich".to_string();
+        cfg.model.zeldovich = None;
+        let warnings = validate(&cfg);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("zeldovich")),
+            "should warn about missing zeldovich section"
+        );
+    }
+
+    #[test]
+    fn merger_without_section() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "merger".to_string();
+        cfg.model.merger = None;
+        let warnings = validate(&cfg);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("merger")),
+            "should warn about missing merger section"
+        );
+    }
 }

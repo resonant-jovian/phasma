@@ -1,26 +1,14 @@
 #![allow(dead_code)] // Remove this once you start using the code
 
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{collections::HashMap, env, path::PathBuf, sync::LazyLock};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use directories::ProjectDirs;
-use lazy_static::lazy_static;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer};
 use tracing::error;
 
 use crate::tui::{action::Action, app::Mode};
-
-const CONFIG: &str = r#"{
-    "keybindings": {
-        "Home": {
-            "<q>": "Quit", // Quit the application
-            "<Ctrl-d>": "Quit", // Another way to quit
-            "<Ctrl-c>": "Quit", // Yet another way to quit
-            "<Ctrl-z>": "Suspend" // Suspend the application
-        },
-    }
-}"#;
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct AppConfig {
@@ -40,50 +28,70 @@ pub struct Config {
     pub styles: Styles,
 }
 
-lazy_static! {
-    pub static ref PROJECT_NAME: String = env!("CARGO_CRATE_NAME").to_uppercase().to_string();
-    pub static ref DATA_FOLDER: Option<PathBuf> =
-        env::var(format!("{}_DATA", PROJECT_NAME.clone()))
-            .ok()
-            .map(PathBuf::from);
-    pub static ref CONFIG_FOLDER: Option<PathBuf> =
-        env::var(format!("{}_CONFIG", PROJECT_NAME.clone()))
-            .ok()
-            .map(PathBuf::from);
-}
+pub static PROJECT_NAME: LazyLock<String> =
+    LazyLock::new(|| env!("CARGO_CRATE_NAME").to_uppercase().to_string());
+pub static DATA_FOLDER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    env::var(format!("{}_DATA", *PROJECT_NAME))
+        .ok()
+        .map(PathBuf::from)
+});
+pub static CONFIG_FOLDER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    env::var(format!("{}_CONFIG", *PROJECT_NAME))
+        .ok()
+        .map(PathBuf::from)
+});
 
 impl Config {
-    pub fn new() -> color_eyre::Result<Self, config::ConfigError> {
-        let default_config: Config = json5::from_str(CONFIG).unwrap();
+    fn default_config() -> Self {
+        let mut home_bindings = HashMap::new();
+        home_bindings.insert(parse_key_sequence("<q>").unwrap(), Action::Quit);
+        home_bindings.insert(parse_key_sequence("<Ctrl-d>").unwrap(), Action::Quit);
+        home_bindings.insert(parse_key_sequence("<Ctrl-c>").unwrap(), Action::Quit);
+        home_bindings.insert(parse_key_sequence("<Ctrl-z>").unwrap(), Action::Suspend);
+        let mut bindings = HashMap::new();
+        bindings.insert(Mode::Home, home_bindings);
+        Self {
+            config: AppConfig::default(),
+            keybindings: KeyBindings(bindings),
+            styles: Styles::default(),
+        }
+    }
+
+    pub fn new() -> color_eyre::Result<Self> {
+        let default_config = Self::default_config();
         let data_dir = get_data_dir();
         let config_dir = get_config_dir();
-        let mut builder = config::Config::builder()
-            .set_default("data_dir", data_dir.to_str().unwrap())?
-            .set_default("config_dir", config_dir.to_str().unwrap())?;
 
-        let config_files = [
-            ("config.json5", config::FileFormat::Json5),
-            ("config.json", config::FileFormat::Json),
-            ("config.yaml", config::FileFormat::Yaml),
-            ("config.toml", config::FileFormat::Toml),
-            ("config.ini", config::FileFormat::Ini),
-        ];
-        let mut found_config = false;
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-            if config_dir.join(file).exists() {
-                found_config = true
+        // Try loading config from TOML or JSON in config dir
+        let config_files = ["config.toml", "config.json"];
+        let mut cfg: Option<Self> = None;
+        for file in &config_files {
+            let path = config_dir.join(file);
+            if path.exists()
+                && let Ok(contents) = std::fs::read_to_string(&path)
+            {
+                let parsed: Result<Self, _> = if file.ends_with(".toml") {
+                    toml::from_str(&contents).map_err(|e| e.to_string())
+                } else {
+                    serde_json::from_str(&contents).map_err(|e| e.to_string())
+                };
+                match parsed {
+                    Ok(c) => {
+                        cfg = Some(c);
+                        break;
+                    }
+                    Err(e) => {
+                        error!("Failed to parse {}: {}", path.display(), e);
+                    }
+                }
             }
         }
-        if !found_config {
-            error!("No configuration file found. Application may not behave as expected");
-        }
 
-        let mut cfg: Self = builder.build()?.try_deserialize()?;
+        let mut cfg = cfg.unwrap_or_default();
+        cfg.config.data_dir = data_dir;
+        cfg.config.config_dir = config_dir;
 
+        // Merge defaults
         for (mode, default_bindings) in default_config.keybindings.0.iter() {
             let user_bindings = cfg.keybindings.0.entry(*mode).or_default();
             for (key, cmd) in default_bindings.iter() {

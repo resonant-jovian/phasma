@@ -2,12 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use tokio::sync::mpsc;
-
-use crate::sim::SimState;
+use crate::sim::{SimState, StateReceiver};
 
 pub struct MonitorHandle {
-    pub state_rx: mpsc::UnboundedReceiver<SimState>,
+    pub state_rx: StateReceiver,
     pub task: tokio::task::JoinHandle<()>,
 }
 
@@ -21,17 +19,20 @@ impl MonitorHandle {
     /// Watch a batch output directory for new snapshot files.
     /// Loads existing snapshots for catch-up, then watches for new files.
     pub fn spawn(dir: PathBuf) -> Self {
-        let (state_tx, state_rx) = mpsc::unbounded_channel();
+        let (state_tx, state_rx) = crossbeam_channel::bounded::<SimState>(2);
 
         let task = tokio::task::spawn_blocking(move || {
             watch_directory(&dir, &state_tx);
         });
 
-        Self { state_rx, task }
+        Self {
+            state_rx: StateReceiver::Bounded(state_rx),
+            task,
+        }
     }
 }
 
-fn watch_directory(dir: &Path, state_tx: &mpsc::UnboundedSender<SimState>) {
+fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
     let snap_dir = dir.join("snapshots");
 
     // Phase 1: catch-up — load existing snapshots

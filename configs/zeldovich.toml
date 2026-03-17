@@ -1,0 +1,52 @@
+# Zel'dovich — Single-mode cosmological pancake
+#
+# 32^3 x 32^3 uniform grid.
+# Phase-space ~ 8.6 GB.
+# Requires >= 16 GB RAM.
+# Cold (delta-function in velocity) single sinusoidal mode.
+# Density evolves through shell-crossing
+# to form a caustic (pancake).
+# The analytic Zel'dovich solution gives the exact caustic position,
+# making this a quantitative validation test.
+#
+# spatial_extent = 2*pi
+# matches wavelength lambda = 2*pi/k with k = 1.
+# First caustic forms at t ~ 1/A = 3.33.
+
+[model]
+type = "zeldovich"
+total_mass = 1.0
+scale_radius = 1.0
+
+[model.zeldovich]
+amplitude = 0.3
+wave_number = 1.0
+
+[domain]
+spatial_extent = 6.283185
+velocity_extent = 2.0
+spatial_resolution = 32
+velocity_resolution = 32
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 150.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/zeldovich"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

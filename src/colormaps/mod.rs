@@ -196,3 +196,124 @@ fn cubehelix(t: f64) -> (u8, u8, u8) {
 fn coolwarm(t: f64) -> (u8, u8, u8) {
     interp_stops(&COOLWARM_STOPS, t)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn from_name_all_variants() {
+        assert_eq!(Colormap::from_name("viridis"), Colormap::Viridis);
+        assert_eq!(Colormap::from_name("inferno"), Colormap::Inferno);
+        assert_eq!(Colormap::from_name("plasma"), Colormap::Plasma);
+        assert_eq!(Colormap::from_name("magma"), Colormap::Magma);
+        assert_eq!(Colormap::from_name("grayscale"), Colormap::Grayscale);
+        assert_eq!(Colormap::from_name("cubehelix"), Colormap::Cubehelix);
+        assert_eq!(Colormap::from_name("coolwarm"), Colormap::Coolwarm);
+    }
+
+    #[test]
+    fn from_name_fallback() {
+        assert_eq!(Colormap::from_name("unknown"), Colormap::Viridis);
+        assert_eq!(Colormap::from_name(""), Colormap::Viridis);
+    }
+
+    #[test]
+    fn name_round_trip() {
+        let all = [
+            Colormap::Viridis,
+            Colormap::Inferno,
+            Colormap::Plasma,
+            Colormap::Magma,
+            Colormap::Grayscale,
+            Colormap::Cubehelix,
+            Colormap::Coolwarm,
+        ];
+        for c in all {
+            assert_eq!(Colormap::from_name(c.name()), c);
+        }
+    }
+
+    #[test]
+    fn next_full_cycle() {
+        let start = Colormap::Viridis;
+        let end = start.next().next().next().next().next().next().next();
+        assert_eq!(start, end);
+    }
+
+    #[test]
+    fn next_order() {
+        assert_eq!(Colormap::Viridis.next(), Colormap::Inferno);
+        assert_eq!(Colormap::Inferno.next(), Colormap::Plasma);
+        assert_eq!(Colormap::Plasma.next(), Colormap::Magma);
+        assert_eq!(Colormap::Magma.next(), Colormap::Grayscale);
+        assert_eq!(Colormap::Grayscale.next(), Colormap::Cubehelix);
+        assert_eq!(Colormap::Cubehelix.next(), Colormap::Coolwarm);
+        assert_eq!(Colormap::Coolwarm.next(), Colormap::Viridis);
+    }
+
+    #[test]
+    fn lookup_viridis_start() {
+        assert_eq!(lookup(Colormap::Viridis, 0.0), Color::Rgb(68, 1, 84));
+    }
+
+    #[test]
+    fn lookup_viridis_end() {
+        assert_eq!(lookup(Colormap::Viridis, 1.0), Color::Rgb(253, 231, 37));
+    }
+
+    #[test]
+    fn lookup_clamps_negative() {
+        assert_eq!(
+            lookup(Colormap::Viridis, -1.0),
+            lookup(Colormap::Viridis, 0.0)
+        );
+    }
+
+    #[test]
+    fn lookup_clamps_above_one() {
+        assert_eq!(
+            lookup(Colormap::Viridis, 2.0),
+            lookup(Colormap::Viridis, 1.0)
+        );
+    }
+
+    #[test]
+    fn grayscale_endpoints() {
+        assert_eq!(lookup(Colormap::Grayscale, 0.0), Color::Rgb(0, 0, 0));
+        assert_eq!(lookup(Colormap::Grayscale, 1.0), Color::Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn coolwarm_midpoint() {
+        assert_eq!(lookup(Colormap::Coolwarm, 0.5), Color::Rgb(221, 221, 221));
+    }
+
+    #[test]
+    fn coolwarm_endpoints() {
+        assert_eq!(lookup(Colormap::Coolwarm, 0.0), Color::Rgb(59, 76, 192));
+        assert_eq!(lookup(Colormap::Coolwarm, 1.0), Color::Rgb(180, 4, 38));
+    }
+
+    #[test]
+    fn all_midpoint_no_panic() {
+        let all = [
+            Colormap::Viridis,
+            Colormap::Inferno,
+            Colormap::Plasma,
+            Colormap::Magma,
+            Colormap::Grayscale,
+            Colormap::Cubehelix,
+            Colormap::Coolwarm,
+        ];
+        for c in all {
+            let _ = lookup(c, 0.5);
+        }
+    }
+
+    #[test]
+    fn default_is_viridis() {
+        assert_eq!(Colormap::default(), Colormap::Viridis);
+    }
+}

@@ -1,0 +1,52 @@
+# Jeans Unstable — gravitational instability of warm uniform background
+#
+# 8^3 x 8^3 uniform grid.
+# Phase-space ~ 2 MB.
+# Uniform Maxwellian with sinusoidal density perturbation.
+# k_fund = pi/L = 1.0,
+# sigma = 0.5,
+# rho0 = 1.0.
+# k_J = sqrt(4*pi) / 0.5 ~ 7.1 >> k_fund
+# -> unstable.
+# Growth rate gamma = sqrt(4*pi*G*rho0 - k^2*sigma^2)
+# ~ 3.4 /time.
+
+[model]
+type = "uniform_perturbation"
+total_mass = 1.0
+scale_radius = 1.0
+
+[model.uniform_perturbation]
+background_density = 1.0
+velocity_dispersion = 0.5
+perturbation_amplitude = 0.1
+perturbation_wavenumber = [1.0, 0.0, 0.0]
+
+[domain]
+spatial_extent = 3.14159265
+velocity_extent = 3.0
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|open"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 150.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/jeans_unstable"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

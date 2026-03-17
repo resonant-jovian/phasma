@@ -697,9 +697,10 @@ fn compute_analytic_profile(
     };
 
     let model = &cfg.model.model_type;
-    let m = cfg.model.total_mass;
-    let a = cfg.model.scale_radius;
-    let g = cfg.domain.gravitational_constant;
+    use rust_decimal::prelude::ToPrimitive;
+    let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
+    let a = cfg.model.scale_radius.to_f64().unwrap_or(1.0);
+    let g = cfg.domain.gravitational_constant.to_f64().unwrap_or(1.0);
 
     // Generate r values matching the simulation bins
     let r_values: Vec<f64> = density_profile.iter().map(|&(r, _)| r).collect();
@@ -773,7 +774,7 @@ fn compute_analytic_profile(
                 .model
                 .nfw
                 .as_ref()
-                .map(|n| n.concentration)
+                .map(|n| n.concentration.to_f64().unwrap_or(10.0))
                 .unwrap_or(10.0);
             let rs = a; // scale radius
             let ln_factor = (1.0 + c).ln() - c / (1.0 + c);

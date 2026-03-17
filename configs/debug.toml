@@ -1,11 +1,12 @@
-# Debug — Instant feedback, tiny grid
+# Debug — Instant feedback on a tiny grid
 #
-# 4^3 × 4^3 uniform Plummer.  Phase-space array: 4^6 × 8 B = 32 KB.
-# Uses Lie splitting (cheapest per step) with a very small CFL factor,
-# resulting in many small timesteps — ideal for exercising the full
-# pipeline quickly and checking that all tabs render correctly.
-#
-# Not physically meaningful at this resolution — purely for debugging.
+# 4^3 x 4^3 uniform Plummer.
+# Phase-space: 4^6 x 8 B = 32 KB.
+# Lie splitting (cheapest per step) with very small CFL factor.
+# Not physically meaningful.
+# Purely for exercising the full pipeline,
+# checking that all TUI tabs render,
+# and quick smoke tests.
 
 [model]
 type = "plummer"
@@ -25,12 +26,12 @@ gravitational_constant = 1.0
 representation = "uniform"
 poisson = "fft_periodic"
 advection = "semi_lagrangian"
-integrator = "lie"                # 1st-order Lie splitting (fastest per step)
+integrator = "lie"
 
 [time]
-t_final = 100.0
+t_final = 200.0
 dt_mode = "adaptive"
-cfl_factor = 0.01                # tiny CFL → many small steps for testing
+cfl_factor = 0.01
 
 [output]
 directory = "output/debug"
@@ -38,7 +39,7 @@ prefix = "run"
 snapshot_interval = 1.0
 
 [exit]
-energy_drift_tolerance = 100.0   # effectively disabled
+energy_drift_tolerance = 100.0
 mass_drift_tolerance = 1.0
 
 [performance]

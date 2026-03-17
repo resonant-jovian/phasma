@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -16,40 +16,35 @@ use crate::{
 
 const PRESET_NAMES: &[&str] = &[
     // ── Basics ──
-    "default",
-    "balanced",
-    "speed_priority",
-    "resolution_priority",
-    "conservation_priority",
+    "plummer",
     "debug",
+    "plummer_hires",
     // ── Equilibrium models ──
-    "isolated_plummer",
-    "hernquist_galaxy",
-    "king_equilibrium",
-    "nfw_dark_matter",
-    "nfw_high_res",
+    "hernquist",
+    "king",
+    "nfw",
     // ── Advanced representations ──
-    "ht_plummer",
-    "tensor_train_plummer",
-    "spectral_plummer",
+    "plummer_ht",
+    "plummer_tt",
+    "plummer_spectral",
+    // ── Integrator variants ──
+    "plummer_yoshida",
+    "plummer_unsplit",
+    "plummer_lomac",
     // ── Solver variants ──
-    "yoshida_plummer",
-    "multigrid_plummer",
-    "tree_nfw",
-    "spherical_harmonics_plummer",
-    "tensor_poisson_plummer",
-    "unsplit_rk4_plummer",
-    "lomac_plummer",
+    "plummer_multigrid",
+    "plummer_spherical",
+    "plummer_tensor_poisson",
+    "nfw_tree",
     // ── Physics scenarios ──
-    "cosmological",
-    "jeans_instability",
-    "jeans_stability",
-    "merger",
-    "merger_demo",
+    "zeldovich",
+    "disk_bar",
+    "jeans_unstable",
+    "jeans_stable",
+    "merger_equal",
     "merger_unequal",
-    "tidal_stream",
-    "tidal_nfw_host",
-    "disk_exponential",
+    "tidal_point",
+    "tidal_nfw",
 ];
 
 pub struct SetupTab {
@@ -64,6 +59,7 @@ pub struct SetupTab {
     /// Preset selection popup state.
     preset_popup: bool,
     preset_selected: usize,
+    toml_scroll: u16,
 }
 
 impl SetupTab {
@@ -79,6 +75,7 @@ impl SetupTab {
             command_tx: None,
             preset_popup: false,
             preset_selected: 0,
+            toml_scroll: 0,
         };
         if let Some(ref p) = config_path {
             tab.try_load_config(p.clone());
@@ -94,6 +91,7 @@ impl SetupTab {
     pub fn register_config_handler(&mut self, _config: Config) {}
 
     fn try_load_config(&mut self, path: String) {
+        self.toml_scroll = 0;
         match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 let parsed: Result<PhasmaConfig, _> = toml::from_str(&raw);
@@ -158,6 +156,7 @@ impl SetupTab {
         self.phasma_config = PhasmaConfig::default();
         self.config_loaded = true;
         self.config_lines = vec!["# Default configuration".to_string()];
+        self.toml_scroll = 0;
     }
 
     /// Load a built-in preset by name from configs/ directory.
@@ -223,6 +222,15 @@ impl SetupTab {
                 None
             }
             KeyCode::Char('r') if self.config_loaded => Some(Action::SimStart),
+            KeyCode::Char('[') => {
+                self.toml_scroll = self.toml_scroll.saturating_sub(1);
+                None
+            }
+            KeyCode::Char(']') => {
+                let max = self.config_lines.len().saturating_sub(1) as u16;
+                self.toml_scroll = self.toml_scroll.saturating_add(1).min(max);
+                None
+            }
             _ => None,
         }
     }
@@ -405,13 +413,12 @@ impl SetupTab {
     }
 
     fn draw_preview(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Config Summary ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
         if !self.config_loaded {
+            let block = Block::bordered()
+                .title(" Config ")
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(
                     "Select a config and press Enter to load,\nor pass --config path/to/run.toml.",
@@ -422,43 +429,15 @@ impl SetupTab {
             return;
         }
 
-        let cfg = &self.phasma_config;
-        let section = |title: &'static str| -> Line<'static> {
-            Line::from(Span::styled(
-                format!("─── {title} ───"),
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        };
-        let kv = |key: &'static str, val: String| -> Line<'static> {
-            Line::from(vec![
-                Span::styled(format!("  {key:<20} "), Style::default().fg(theme.dim)),
-                Span::styled(val, Style::default().fg(theme.fg)),
-            ])
-        };
-        let fmt_mem = |mb: f64| -> String {
-            if mb >= 1000.0 {
-                format!("{:.2} GB", mb / 1000.0)
-            } else {
-                format!("{mb:.1} MB")
-            }
-        };
-
-        let breakdown = defaults::estimate_memory_breakdown(cfg);
-        let mem_mb = breakdown.total_mb();
-        let peak_mb = defaults::estimate_peak_memory_mb(cfg);
-        let full_mb = defaults::full_grid_memory_mb(cfg);
-
-        // §2.2: Live validation — show warnings below the form
-        let warnings = validate::validate(cfg);
+        // Validation warnings at bottom
+        let warnings = validate::validate(&self.phasma_config);
         let warn_height = if warnings.is_empty() {
             0
         } else {
             (warnings.len() as u16 + 1).min(5)
         };
-        let [form_area, warn_area] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(warn_height)]).areas(inner);
+        let [main_area, warn_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(warn_height)]).areas(area);
 
         if !warnings.is_empty() {
             let warn_lines: Vec<Line> = warnings
@@ -466,7 +445,7 @@ impl SetupTab {
                 .take(4)
                 .map(|w| {
                     Line::from(Span::styled(
-                        format!("  ⚠ {w}"),
+                        format!("  \u{26a0} {w}"),
                         Style::default().fg(theme.warn),
                     ))
                 })
@@ -474,150 +453,139 @@ impl SetupTab {
             frame.render_widget(Paragraph::new(warn_lines), warn_area);
         }
 
-        let inner = form_area;
+        // Two-column split: TOML source | Notes
+        let [toml_area, notes_area] =
+            Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .areas(main_area);
 
-        // §2.2: Two-column form — left: model + domain, right: solver + output
-        // If wide enough, split into two columns; otherwise single column fallback
-        if inner.width >= 60 {
-            let [left_area, right_area] =
-                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .areas(inner);
+        self.draw_toml_source(frame, toml_area, theme);
+        self.draw_comment_notes(frame, notes_area, theme);
+    }
 
-            // Left column: Model + Domain
-            let left_lines: Vec<Line> = vec![
-                section("Model"),
-                kv("Type", cfg.model.model_type.clone()),
-                kv("Total mass", format!("{}", cfg.model.total_mass)),
-                kv("Scale radius", format!("{}", cfg.model.scale_radius)),
-                Line::from(""),
-                section("Domain"),
-                kv("Spatial extent", format!("{}", cfg.domain.spatial_extent)),
-                kv("Velocity extent", format!("{}", cfg.domain.velocity_extent)),
-                kv(
-                    "Spatial resolution",
-                    format!("{}", cfg.domain.spatial_resolution),
-                ),
-                kv(
-                    "Velocity resolution",
-                    format!("{}", cfg.domain.velocity_resolution),
-                ),
-                kv("Boundary", cfg.domain.boundary.clone()),
-                Line::from(""),
-                section("Exit Conditions"),
-                kv(
-                    "Energy drift tol.",
-                    format!("{}", cfg.exit.energy_drift_tolerance),
-                ),
-                kv(
-                    "Mass drift tol.",
-                    format!("{}", cfg.exit.mass_drift_tolerance),
-                ),
-            ];
-
-            frame.render_widget(Paragraph::new(left_lines), left_area);
-
-            // Right column: Solver + Time + Output + Memory
-            let mut right_lines: Vec<Line> = vec![
-                section("Solver"),
-                kv("Representation", cfg.solver.representation.clone()),
-                kv("Poisson solver", cfg.solver.poisson.clone()),
-                kv("Advection", cfg.solver.advection.clone()),
-                kv("Integrator", cfg.solver.integrator.clone()),
-            ];
-            if cfg.solver.conservation != "none" {
-                right_lines.push(kv("Conservation", cfg.solver.conservation.clone()));
-            }
-            if let Some(ref ht) = cfg.solver.ht {
-                right_lines.push(kv("HT max rank", format!("{}", ht.max_rank)));
-                right_lines.push(kv("HT tolerance", format!("{:.1e}", ht.tolerance)));
-            }
-            right_lines.extend([
-                Line::from(""),
-                section("Time"),
-                kv("t_final", format!("{}", cfg.time.t_final)),
-                kv("dt mode", cfg.time.dt_mode.clone()),
-                kv("CFL factor", format!("{}", cfg.time.cfl_factor)),
-                Line::from(""),
-                section("Output"),
-                kv("Directory", cfg.output.directory.clone()),
-                kv("Format", cfg.output.format.clone()),
-                kv(
-                    "Snapshot interval",
-                    format!("{}", cfg.output.snapshot_interval),
-                ),
-                Line::from(""),
-                section("Memory Estimate"),
-                kv("Resident", fmt_mem(breakdown.resident_mb())),
-                kv("Peak (step)", fmt_mem(mem_mb)),
-            ]);
-            // Breakdown items (only show if > 0.1 MB)
-            if breakdown.phase_space_mb > 0.1 {
-                right_lines.push(kv("  Phase space", fmt_mem(breakdown.phase_space_mb)));
-            }
-            if breakdown.poisson_buffers_mb > 0.1 {
-                right_lines.push(kv("  Poisson bufs", fmt_mem(breakdown.poisson_buffers_mb)));
-            }
-            if breakdown.workspace_mb > 0.1 {
-                right_lines.push(kv("  Workspace", fmt_mem(breakdown.workspace_mb)));
-            }
-            if breakdown.advection_clone_mb > 0.1 {
-                right_lines.push(kv("  Advect clone*", fmt_mem(breakdown.advection_clone_mb)));
-            }
-            if breakdown.lomac_mb > 0.1 {
-                right_lines.push(kv("  LoMaC", fmt_mem(breakdown.lomac_mb)));
-            }
-            if breakdown.ht_recompression_mb > 0.1 {
-                right_lines.push(kv(
-                    "  HT recompress*",
-                    fmt_mem(breakdown.ht_recompression_mb),
-                ));
-            }
-            if (peak_mb - mem_mb).abs() > 0.01 {
-                right_lines.push(kv("Peak (max rank)", fmt_mem(peak_mb)));
-            }
-            right_lines.push(kv("Full grid equiv.", fmt_mem(full_mb)));
-
-            frame.render_widget(Paragraph::new(right_lines), right_area);
+    fn draw_toml_source(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let total = self.config_lines.len();
+        let scroll_info = if total > 0 {
+            format!(
+                " TOML [{}/{}] ",
+                (self.toml_scroll as usize + 1).min(total),
+                total
+            )
         } else {
-            // Narrow fallback: single column
-            let mut lines: Vec<Line> = Vec::new();
-            lines.push(section("Model"));
-            lines.push(kv("Type", cfg.model.model_type.clone()));
-            lines.push(kv("Total mass", format!("{}", cfg.model.total_mass)));
-            lines.push(kv("Scale radius", format!("{}", cfg.model.scale_radius)));
-            lines.push(Line::from(""));
-            lines.push(section("Domain"));
-            lines.push(kv(
-                "Spatial extent",
-                format!("{}", cfg.domain.spatial_extent),
-            ));
-            lines.push(kv(
-                "Velocity extent",
-                format!("{}", cfg.domain.velocity_extent),
-            ));
-            lines.push(kv(
-                "Spatial res.",
-                format!("{}", cfg.domain.spatial_resolution),
-            ));
-            lines.push(kv(
-                "Velocity res.",
-                format!("{}", cfg.domain.velocity_resolution),
-            ));
-            lines.push(kv("Boundary", cfg.domain.boundary.clone()));
-            lines.push(Line::from(""));
-            lines.push(section("Solver"));
-            lines.push(kv("Repr", cfg.solver.representation.clone()));
-            lines.push(kv("Poisson", cfg.solver.poisson.clone()));
-            lines.push(kv("Advection", cfg.solver.advection.clone()));
-            lines.push(kv("Integrator", cfg.solver.integrator.clone()));
-            lines.push(Line::from(""));
-            lines.push(section("Time"));
-            lines.push(kv("t_final", format!("{}", cfg.time.t_final)));
-            lines.push(kv("dt mode", cfg.time.dt_mode.clone()));
-            lines.push(Line::from(""));
-            lines.push(section("Memory"));
-            lines.push(kv("Est.", format!("{mem_mb:.1} MB")));
-            frame.render_widget(Paragraph::new(lines), inner);
+            " TOML ".to_string()
+        };
+        let block = Block::bordered()
+            .title(scroll_info)
+            .title_bottom(" [/] scroll ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines: Vec<Line> = self
+            .config_lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| !line.trim().starts_with('#'))
+            .map(|(i, line)| {
+                let num = Span::styled(format!("{:>3} ", i + 1), Style::default().fg(theme.dim));
+                let trimmed = line.trim();
+                if trimmed.starts_with('[') {
+                    Line::from(vec![
+                        num,
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(theme.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])
+                } else if let Some(eq_idx) = line.find(" = ") {
+                    Line::from(vec![
+                        num,
+                        Span::styled(line[..eq_idx].to_string(), Style::default().fg(theme.fg)),
+                        Span::styled(" = ".to_string(), Style::default().fg(theme.dim)),
+                        Span::styled(
+                            line[eq_idx + 3..].to_string(),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                    ])
+                } else {
+                    Line::from(vec![
+                        num,
+                        Span::styled(line.to_string(), Style::default().fg(theme.fg)),
+                    ])
+                }
+            })
+            .collect();
+
+        frame.render_widget(Paragraph::new(lines).scroll((self.toml_scroll, 0)), inner);
+    }
+
+    fn draw_comment_notes(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let block = Block::bordered()
+            .title(" Notes ")
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let mut lines: Vec<Line> = Vec::new();
+        let mut first_comment = true;
+        let mut last_was_section = false;
+
+        for raw_line in &self.config_lines {
+            let trimmed = raw_line.trim();
+
+            if trimmed.starts_with('[') && !trimmed.starts_with("[[") {
+                last_was_section = true;
+                continue;
+            }
+
+            if !trimmed.starts_with('#') {
+                last_was_section = false;
+                continue;
+            }
+
+            // Strip leading '#' and optional space
+            let text = trimmed
+                .trim_start_matches('#')
+                .strip_prefix(' ')
+                .unwrap_or(trimmed.trim_start_matches('#'));
+
+            // If this comment follows a [section] header, show a section divider
+            if last_was_section {
+                lines.push(Line::from(""));
+            }
+            last_was_section = false;
+
+            if first_comment && !text.is_empty() {
+                // Title line — first non-empty comment
+                lines.push(Line::from(Span::styled(
+                    text.to_string(),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                first_comment = false;
+            } else if text.is_empty() {
+                // Skip blank comment lines before the title
+                if first_comment {
+                    continue;
+                }
+                lines.push(Line::from(""));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    text.to_string(),
+                    Style::default().fg(theme.fg),
+                )));
+            }
         }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No comments in this config.",
+                Style::default().fg(theme.dim),
+            )));
+        }
+
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 }

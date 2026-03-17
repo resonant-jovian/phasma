@@ -10,6 +10,8 @@ use ratatui::{
 use std::collections::VecDeque;
 use tokio::sync::mpsc::UnboundedSender;
 
+use rust_decimal::prelude::ToPrimitive;
+
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
@@ -17,6 +19,7 @@ use crate::{
     themes::ThemeColors,
     tui::{
         action::Action,
+        aspect::AspectCorrection,
         config::Config,
         widgets::{
             heatmap::HeatmapWidget,
@@ -340,6 +343,16 @@ impl RunControlTab {
                 }
             }
             Some(state) => {
+                let cell_ar = data_provider
+                    .config()
+                    .map(|c| c.appearance.cell_aspect_ratio)
+                    .unwrap_or(0.5);
+                let asp = AspectCorrection::new(cell_ar);
+
+                // Spatial domain is symmetric: extent covers half-width
+                let x_extent = state.spatial_extent * 2.0;
+                let y_extent = x_extent;
+
                 frame.render_widget(
                     HeatmapWidget::new(
                         &state.density_xy,
@@ -347,9 +360,19 @@ impl RunControlTab {
                         state.density_ny,
                         " ρ(x,y) density ",
                     )
-                    .colormap(colormap),
+                    .colormap(colormap)
+                    .aspect(asp)
+                    .x_range(x_extent)
+                    .y_range(y_extent),
                     density_area,
                 );
+
+                // Phase-space: x is spatial, y is velocity
+                let v_extent = data_provider
+                    .config()
+                    .map(|c| c.domain.velocity_extent.to_f64().unwrap_or(5.0) * 2.0)
+                    .unwrap_or(state.phase_nv as f64);
+
                 frame.render_widget(
                     HeatmapWidget::new(
                         &state.phase_slice,
@@ -357,7 +380,10 @@ impl RunControlTab {
                         state.phase_nv,
                         " f(x,vx) phase-space ",
                     )
-                    .colormap(colormap),
+                    .colormap(colormap)
+                    .aspect(asp)
+                    .x_range(x_extent)
+                    .y_range(v_extent),
                     phase_area,
                 );
             }
