@@ -1176,6 +1176,9 @@ impl Default for AppearanceConfig {
     }
 }
 
+#[cfg(test)]
+mod config_tests;
+
 // ── I/O helpers ───────────────────────────────────────────────────────────────
 
 /// Load a PhasmaConfig from a TOML file.
