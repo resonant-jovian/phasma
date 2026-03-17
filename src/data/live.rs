@@ -428,6 +428,8 @@ mod tests {
             advection_rank_amplification: None,
             green_function_rank: None,
             exp_sum_terms: None,
+            density_power_spectrum: None,
+            field_energy_spectrum: None,
             log_messages: vec![],
         }
     }
