@@ -145,6 +145,13 @@ pub struct SimState {
     // ── Lagrangian radii L10, L25, L50, L75, L90 (§2.2 F7) ──
     #[serde(default)]
     pub lagrangian_radii: Option<[f64; 5]>,
+    // ── Step-level rank amplification (Phase 1 gap analysis) ──
+    /// Ratio of max rank after Poisson+kick to max rank after drift.
+    #[serde(default)]
+    pub poisson_rank_amplification: Option<f64>,
+    /// Ratio of max rank after drift to max rank before drift.
+    #[serde(default)]
+    pub advection_rank_amplification: Option<f64>,
     // ── Green's function / TensorPoisson diagnostics (§2.2 F9) ──
     #[serde(default)]
     pub green_function_rank: Option<usize>,
@@ -660,6 +667,7 @@ fn build_from_config(
         }
         "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, g, domain.clone())),
         "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, g, domain.clone())),
+        "rkei" => Box::new(caustic::RkeiIntegrator::new(g)),
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 
@@ -1216,6 +1224,8 @@ fn extract_sim_state(
         velocity_extent: sim.domain.velocity.v1.to_f64().unwrap_or(3.0),
         singular_values: None,
         lagrangian_radii: None,
+        poisson_rank_amplification: None,
+        advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
         log_messages: Vec::new(),
@@ -1340,6 +1350,8 @@ fn error_state(msg: String) -> SimState {
         velocity_extent: 0.0,
         singular_values: None,
         lagrangian_radii: None,
+        poisson_rank_amplification: None,
+        advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
         log_messages: vec![format!("ERROR: {msg}")],
@@ -1849,6 +1861,127 @@ mod drift_threshold_tests {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    fn mock_state(t: f64, t_final: f64, total_energy: f64, initial_energy: f64) -> SimState {
+        SimState {
+            t,
+            t_final,
+            step: 0,
+            total_energy,
+            initial_energy,
+            kinetic_energy: 0.0,
+            potential_energy: 0.0,
+            virial_ratio: 0.0,
+            total_mass: 1.0,
+            momentum: [0.0; 3],
+            casimir_c2: 0.0,
+            entropy: 0.0,
+            max_density: 0.0,
+            step_wall_ms: 0.0,
+            has_new_data: false,
+            density_xy: vec![],
+            density_xz: vec![],
+            density_yz: vec![],
+            density_nx: 0,
+            density_ny: 0,
+            density_nz: 0,
+            phase_slices: vec![],
+            phase_slice: vec![],
+            phase_nx: 0,
+            phase_nv: 0,
+            spatial_extent: 10.0,
+            gravitational_constant: 1.0,
+            dt: 0.1,
+            exit_reason: None,
+            rank_per_node: None,
+            rank_total: None,
+            rank_memory_bytes: None,
+            compression_ratio: None,
+            repr_type: String::new(),
+            poisson_type: String::new(),
+            poisson_residual_l2: None,
+            potential_power_spectrum: None,
+            phase_timings: None,
+            truncation_errors: None,
+            svd_count: 0,
+            htaca_evaluations: 0,
+            velocity_extent: 5.0,
+            singular_values: None,
+            lagrangian_radii: None,
+            poisson_rank_amplification: None,
+            advection_rank_amplification: None,
+            green_function_rank: None,
+            exp_sum_terms: None,
+            log_messages: vec![],
+        }
+    }
+
+    #[test]
+    fn progress_at_start() {
+        let s = mock_state(0.0, 10.0, 0.0, 0.0);
+        assert_eq!(s.progress(), 0.0);
+    }
+
+    #[test]
+    fn progress_at_end() {
+        let s = mock_state(10.0, 10.0, 0.0, 0.0);
+        assert_eq!(s.progress(), 1.0);
+    }
+
+    #[test]
+    fn progress_midpoint() {
+        let s = mock_state(5.0, 10.0, 0.0, 0.0);
+        assert!((s.progress() - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn progress_clamps_overshoot() {
+        let s = mock_state(15.0, 10.0, 0.0, 0.0);
+        assert_eq!(s.progress(), 1.0);
+    }
+
+    #[test]
+    fn progress_zero_t_final() {
+        let s = mock_state(5.0, 0.0, 0.0, 0.0);
+        assert_eq!(s.progress(), 0.0);
+    }
+
+    #[test]
+    fn energy_drift_nonzero() {
+        let s = mock_state(1.0, 10.0, 1.01, 1.0);
+        assert!((s.energy_drift() - 0.01).abs() < 1e-12);
+    }
+
+    #[test]
+    fn energy_drift_zero_initial() {
+        let s = mock_state(1.0, 10.0, 1.0, 0.0);
+        assert_eq!(s.energy_drift(), 0.0);
+    }
+
+    #[test]
+    fn exit_reason_display_all() {
+        let variants = [
+            ExitReason::TimeLimitReached,
+            ExitReason::SteadyState,
+            ExitReason::EnergyDrift,
+            ExitReason::MassLoss,
+            ExitReason::CasimirDrift,
+            ExitReason::CflViolation,
+            ExitReason::WallClockLimit,
+            ExitReason::UserStop,
+            ExitReason::CausticFormed,
+            ExitReason::VirialStabilized,
+        ];
+        for v in variants {
+            let s = format!("{v}");
+            assert!(!s.is_empty(), "{v:?} should have non-empty display");
         }
     }
 }

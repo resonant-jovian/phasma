@@ -137,3 +137,68 @@ pub struct ThemeColors {
     /// Chart trace palette — 7 distinguishable colors tuned for the background.
     pub chart: [Color; 7],
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_name_all_variants() {
+        assert_eq!(Theme::from_name("dark"), Theme::Dark);
+        assert_eq!(Theme::from_name("light"), Theme::Light);
+        assert_eq!(Theme::from_name("solarized"), Theme::Solarized);
+        assert_eq!(Theme::from_name("gruvbox"), Theme::Gruvbox);
+    }
+
+    #[test]
+    fn from_name_fallback() {
+        assert_eq!(Theme::from_name("unknown"), Theme::Dark);
+        assert_eq!(Theme::from_name(""), Theme::Dark);
+        assert_eq!(Theme::from_name("DARK"), Theme::Dark);
+    }
+
+    #[test]
+    fn name_round_trip() {
+        for theme in [Theme::Dark, Theme::Light, Theme::Solarized, Theme::Gruvbox] {
+            assert_eq!(Theme::from_name(theme.name()), theme);
+        }
+    }
+
+    #[test]
+    fn next_cycles() {
+        assert_eq!(Theme::Dark.next(), Theme::Light);
+        assert_eq!(Theme::Light.next(), Theme::Solarized);
+        assert_eq!(Theme::Solarized.next(), Theme::Gruvbox);
+        assert_eq!(Theme::Gruvbox.next(), Theme::Dark);
+    }
+
+    #[test]
+    fn next_full_cycle() {
+        let start = Theme::Dark;
+        let end = start.next().next().next().next();
+        assert_eq!(start, end);
+    }
+
+    #[test]
+    fn colors_distinct_bg() {
+        let themes = [Theme::Dark, Theme::Light, Theme::Solarized, Theme::Gruvbox];
+        let bgs: Vec<_> = themes.iter().map(|t| t.colors().bg).collect();
+        for i in 0..bgs.len() {
+            for j in (i + 1)..bgs.len() {
+                assert_ne!(bgs[i], bgs[j], "themes {} and {} have same bg", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn colors_chart_seven() {
+        for theme in [Theme::Dark, Theme::Light, Theme::Solarized, Theme::Gruvbox] {
+            assert_eq!(theme.colors().chart.len(), 7, "{:?} chart len", theme);
+        }
+    }
+
+    #[test]
+    fn default_is_dark() {
+        assert_eq!(Theme::default(), Theme::Dark);
+    }
+}

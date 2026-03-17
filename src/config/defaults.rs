@@ -507,4 +507,130 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn smart_defaults_zeldovich() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "zeldovich".to_string();
+        cfg.model.zeldovich = Some(crate::config::ZeldovichConfig {
+            amplitude: dec(0.01),
+            wave_number: dec(1.0),
+            box_size: dec(100.0),
+            redshift_initial: dec(50.0),
+            cosmology_h: dec(0.7),
+            cosmology_omega_m: dec(0.3),
+            cosmology_omega_lambda: dec(0.7),
+        });
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("periodic"));
+        assert_eq!(cfg.solver.poisson, "fft_periodic");
+        assert_eq!(cfg.time.t_final, dec(1.2));
+    }
+
+    #[test]
+    fn smart_defaults_plummer() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "plummer".to_string();
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("isolated"));
+        assert_eq!(cfg.solver.poisson, "fft_isolated");
+        assert!(cfg.domain.velocity_extent > Decimal::ZERO);
+        assert_eq!(cfg.domain.spatial_extent, cfg.model.scale_radius * dec(10.0));
+    }
+
+    #[test]
+    fn smart_defaults_merger() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "merger".to_string();
+        cfg.model.merger = Some(crate::config::MergerConfig {
+            separation: dec(10.0),
+            mass_ratio: dec(1.0),
+            relative_velocity: [0.0, 0.0, 0.0],
+            impact_parameter: dec(2.0),
+            model_1: "plummer".to_string(),
+            model_2: "plummer".to_string(),
+            scale_radius_1: dec(1.0),
+            scale_radius_2: dec(1.0),
+        });
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("isolated"));
+        assert_eq!(cfg.solver.poisson, "fft_isolated");
+        assert_eq!(cfg.domain.spatial_extent, dec(10.0) * dec(2.0));
+    }
+
+    #[test]
+    fn smart_defaults_perturbation() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "uniform_perturbation".to_string();
+        cfg.model.uniform_perturbation = Some(crate::config::PerturbationConfig {
+            background_density: dec(1.0),
+            velocity_dispersion: dec(0.5),
+            perturbation_amplitude: dec(0.01),
+            perturbation_wavenumber: [1.0, 0.0, 0.0],
+        });
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("periodic"));
+        assert_eq!(cfg.solver.poisson, "fft_periodic");
+        assert_eq!(cfg.time.t_final, dec(5.0));
+    }
+
+    #[test]
+    fn smart_defaults_disk() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "disk_stability".to_string();
+        cfg.model.disk = Some(crate::config::DiskModelConfig {
+            disk_mass: dec(1.0),
+            disk_scale_length: dec(3.0),
+            disk_scale_height: dec(0.3),
+            radial_velocity_dispersion: dec(0.15),
+            halo_type: "plummer".to_string(),
+            halo_mass: dec(10.0),
+            halo_concentration: dec(10.0),
+            toomre_q: dec(1.5),
+        });
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("isolated"));
+        assert_eq!(cfg.domain.spatial_extent, dec(3.0) * dec(10.0));
+    }
+
+    #[test]
+    fn smart_defaults_tidal() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "tidal".to_string();
+        cfg.model.tidal = Some(crate::config::TidalConfig {
+            progenitor_type: "plummer".to_string(),
+            progenitor_mass: dec(1.0),
+            progenitor_scale_radius: dec(1.0),
+            host_type: "point_mass".to_string(),
+            host_mass: dec(10.0),
+            host_scale_radius: dec(20.0),
+            progenitor_position: [5.0, 0.0, 0.0],
+            progenitor_velocity: [0.0, 0.0, 0.0],
+        });
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.domain.boundary.contains("isolated"));
+        // r = 5.0, spatial_extent = (5.0 * 2.5).max(10.0) = 12.5
+        assert!(cfg.domain.spatial_extent > dec(10.0));
+    }
+
+    #[test]
+    fn smart_defaults_ht_auto() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.solver.representation = "ht".to_string();
+        cfg.solver.ht = None;
+        apply_smart_defaults(&mut cfg);
+        assert!(cfg.solver.ht.is_some());
+        let ht = cfg.solver.ht.unwrap();
+        assert_eq!(ht.max_rank, 100);
+        assert_eq!(ht.initial_rank, 20);
+    }
+
+    #[test]
+    fn smart_defaults_preserves_explicit_t_final() {
+        let mut cfg = PhasmaConfig::default();
+        cfg.model.model_type = "plummer".to_string();
+        cfg.time.t_final = dec(42.0);
+        apply_smart_defaults(&mut cfg);
+        assert_eq!(cfg.time.t_final, dec(42.0));
+    }
 }

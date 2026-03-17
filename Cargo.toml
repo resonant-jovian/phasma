@@ -63,6 +63,7 @@ rustfft = "6.4"
 [dev-dependencies]
 paste = "1.0"
 pretty_assertions = "1.4.1"
+tempfile = "3"
 
 [features]
 default = []
