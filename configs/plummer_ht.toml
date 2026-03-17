@@ -1,0 +1,66 @@
+# Plummer HT — Hierarchical Tucker tensor + SLAR advection + LoMaC
+#
+# Advanced HT tensor decomposition
+# compresses the 6D distribution from O(N^6) to O(dNk^3).
+# SLAR (Semi-Lagrangian Adaptive Rank) advection
+# with rank-adaptive truncation.
+# LoMaC conservation ensures exact mass/momentum/energy preservation
+# despite rank truncation.
+#
+# Watch F6 Rank Monitor for rank evolution and singular value spectra.
+# Memory estimate: ~50 MB (HT, rank 50)
+# vs 134 MB (full 16^6 grid).
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 32.0
+velocity_extent = 16.0
+spatial_resolution = 32
+velocity_resolution = 24
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "hierarchical_tucker"
+poisson = "fft_isolated"
+advection = "slar"
+integrator = "strang"
+conservation = "lomac"
+
+[solver.ht]
+max_rank = 50
+initial_rank = 10
+tolerance = 1e-6
+rank_adaptation = "tolerance"
+dimension_tree = "balanced_xv"
+
+[solver.slar]
+reconstruction_order = 3
+aca_tolerance = 1e-8
+max_aca_iterations = 500
+oversampling_factor = 2.0
+
+[solver.lomac]
+flux_scheme = "kfvs"
+projection_tolerance = 1e-12
+
+[time]
+t_final = 1000.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/plummer_ht"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5
+virial_equilibrium = true
+virial_tolerance = 0.01

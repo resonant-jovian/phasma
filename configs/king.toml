@@ -1,0 +1,51 @@
+# King — Tidally truncated W0=6 globular cluster model
+#
+# 16^3 x 16^3 uniform grid.
+# Phase-space ~ 134 MB.
+# King models have a finite escape energy.
+# The DF is zero beyond the tidal radius.
+# W0=6 gives a moderately concentrated
+# globular-cluster profile.
+# DF computed via Poisson-Boltzmann ODE + RK4.
+#
+# velocity_extent=1.5 is narrow because of low escape speed.
+# If particles are kicked beyond the velocity box
+# the mass leaks.
+# Watch dM/M0 on F5 Energy.
+
+[model]
+type = "king"
+total_mass = 1.0
+scale_radius = 1.0
+
+[model.king]
+w0 = 6.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 1.5
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 200.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/king"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

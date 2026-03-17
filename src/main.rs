@@ -93,7 +93,7 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     // Default: interactive TUI
-    let mut app = App::new(4.0, 60.0, args.config, args.run)?;
+    let mut app = App::new(4.0, 30.0, args.config, args.run)?;
     app.run().await?;
     Ok(())
 }
@@ -123,7 +123,7 @@ async fn run_playback(dir: &str) -> color_eyre::Result<()> {
     };
 
     let provider = data::playback::PlaybackDataProvider::new(snapshots, cfg);
-    let mut app = App::new_with_playback(4.0, 60.0, provider)?;
+    let mut app = App::new_with_playback(4.0, 30.0, provider)?;
     app.run().await?;
     Ok(())
 }
@@ -158,7 +158,7 @@ async fn run_compare(dir_a: &str, dir_b: &str) -> color_eyre::Result<()> {
     let prov_b = data::playback::PlaybackDataProvider::new(snaps_b, cfg_b);
     let provider = data::comparison::ComparisonDataProvider::new(prov_a, prov_b);
 
-    let mut app = App::new_with_comparison(4.0, 60.0, provider)?;
+    let mut app = App::new_with_comparison(4.0, 30.0, provider)?;
     app.run().await?;
     Ok(())
 }
@@ -168,7 +168,7 @@ async fn run_monitor(dir: &str) -> color_eyre::Result<()> {
     eprintln!("phasma monitor: watching {dir} for new snapshots...");
     let monitor = runner::monitor::MonitorHandle::spawn(std::path::PathBuf::from(dir));
 
-    let mut app = App::new(4.0, 60.0, None, false)?;
+    let mut app = App::new(4.0, 30.0, None, false)?;
     app.set_monitor_handle(monitor);
     app.run().await?;
     Ok(())
@@ -178,7 +178,7 @@ async fn run_monitor(dir: &str) -> color_eyre::Result<()> {
 async fn run_tail(dir: &str) -> color_eyre::Result<()> {
     eprintln!("phasma tail: watching {dir} (auto-advance)...");
     let monitor = runner::monitor::MonitorHandle::spawn(std::path::PathBuf::from(dir));
-    let mut app = App::new(4.0, 60.0, None, false)?;
+    let mut app = App::new(4.0, 30.0, None, false)?;
     app.set_monitor_handle(monitor);
     app.run().await?;
     Ok(())

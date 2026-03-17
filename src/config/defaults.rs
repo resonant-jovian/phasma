@@ -1,4 +1,12 @@
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+
 use super::PhasmaConfig;
+
+/// Helper: create Decimal from f64 literal.
+fn dec(f: f64) -> Decimal {
+    Decimal::from_f64_retain(f).unwrap_or(Decimal::ZERO)
+}
 
 /// Itemized memory breakdown for display and validation.
 #[derive(Debug, Clone, Default)]
@@ -156,11 +164,13 @@ pub fn estimate_memory_breakdown(cfg: &PhasmaConfig) -> MemoryBreakdown {
 }
 
 /// Estimate total memory usage in megabytes for the current config.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn estimate_memory_mb(cfg: &PhasmaConfig) -> f64 {
     estimate_memory_breakdown(cfg).total_mb()
 }
 
 /// Estimate peak memory at max rank for HT representation.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn estimate_peak_memory_mb(cfg: &PhasmaConfig) -> f64 {
     if !matches!(
         cfg.solver.representation.as_str(),
@@ -177,6 +187,7 @@ pub fn estimate_peak_memory_mb(cfg: &PhasmaConfig) -> f64 {
 }
 
 /// Full-grid equivalent memory for comparison display.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn full_grid_memory_mb(cfg: &PhasmaConfig) -> f64 {
     let nx = cfg.domain.spatial_resolution as f64;
     let nv = cfg.domain.velocity_resolution as f64;
@@ -193,33 +204,44 @@ pub fn full_grid_memory_mb(cfg: &PhasmaConfig) -> f64 {
 ///   - "uniform_perturbation" → periodic + fft_periodic
 ///   - "hierarchical_tucker" representation → adds default HT params
 pub fn apply_smart_defaults(cfg: &mut PhasmaConfig) {
+    // Only override t_final if the user didn't set it explicitly in TOML
+    // (i.e. it still has the serde default value of 10.0).
+    let t_final_is_default = cfg.time.t_final == super::TimeConfig::default().t_final;
+
     match cfg.model.model_type.as_str() {
         "zeldovich" => {
             cfg.domain.boundary = "periodic|truncated".to_string();
             cfg.solver.poisson = "fft_periodic".to_string();
             if let Some(ref z) = cfg.model.zeldovich {
-                cfg.domain.spatial_extent = z.box_size / 2.0;
+                cfg.domain.spatial_extent = z.box_size / dec(2.0);
             }
-            cfg.time.t_final = 1.2;
+            if t_final_is_default {
+                cfg.time.t_final = dec(1.2);
+            }
         }
         "plummer" | "hernquist" | "king" | "nfw" => {
             cfg.domain.boundary = "isolated|truncated".to_string();
             cfg.solver.poisson = "fft_isolated".to_string();
             // Velocity extent ~ escape velocity estimate: v_esc = sqrt(2GM/a)
-            let v_esc = (2.0 * cfg.domain.gravitational_constant * cfg.model.total_mass
-                / cfg.model.scale_radius)
-                .sqrt();
-            cfg.domain.velocity_extent = (v_esc * 1.5).max(3.0);
-            cfg.domain.spatial_extent = cfg.model.scale_radius * 10.0;
-            cfg.time.t_final = 50.0;
+            let g = cfg.domain.gravitational_constant.to_f64().unwrap_or(1.0);
+            let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
+            let a = cfg.model.scale_radius.to_f64().unwrap_or(1.0);
+            let v_esc = (2.0 * g * m / a).sqrt();
+            cfg.domain.velocity_extent = dec((v_esc * 1.5).max(3.0));
+            cfg.domain.spatial_extent = cfg.model.scale_radius * dec(10.0);
+            if t_final_is_default {
+                cfg.time.t_final = dec(50.0);
+            }
         }
         "merger" | "two_body_merger" => {
             cfg.domain.boundary = "isolated|truncated".to_string();
             cfg.solver.poisson = "fft_isolated".to_string();
             if let Some(ref merger) = cfg.model.merger {
-                cfg.domain.spatial_extent = merger.separation * 2.0;
+                cfg.domain.spatial_extent = merger.separation * dec(2.0);
             }
-            cfg.time.t_final = 100.0;
+            if t_final_is_default {
+                cfg.time.t_final = dec(100.0);
+            }
         }
         "tidal" => {
             cfg.domain.boundary = "isolated|truncated".to_string();
@@ -230,27 +252,33 @@ pub fn apply_smart_defaults(cfg: &mut PhasmaConfig) {
                     + tc.progenitor_position[1].powi(2)
                     + tc.progenitor_position[2].powi(2))
                 .sqrt();
-                cfg.domain.spatial_extent = (r * 2.5).max(10.0);
+                cfg.domain.spatial_extent = dec((r * 2.5).max(10.0));
                 let v = (tc.progenitor_velocity[0].powi(2)
                     + tc.progenitor_velocity[1].powi(2)
                     + tc.progenitor_velocity[2].powi(2))
                 .sqrt();
-                cfg.domain.velocity_extent = (v * 3.0).max(3.0);
+                cfg.domain.velocity_extent = dec((v * 3.0).max(3.0));
             }
-            cfg.time.t_final = 50.0;
+            if t_final_is_default {
+                cfg.time.t_final = dec(50.0);
+            }
         }
         "uniform_perturbation" => {
             cfg.domain.boundary = "periodic|open".to_string();
             cfg.solver.poisson = "fft_periodic".to_string();
-            cfg.time.t_final = 5.0;
+            if t_final_is_default {
+                cfg.time.t_final = dec(5.0);
+            }
         }
         "disk_exponential" | "disk_stability" => {
             cfg.domain.boundary = "isolated|truncated".to_string();
             cfg.solver.poisson = "fft_isolated".to_string();
             if let Some(ref disk) = cfg.model.disk {
-                cfg.domain.spatial_extent = disk.disk_scale_length * 10.0;
+                cfg.domain.spatial_extent = disk.disk_scale_length * dec(10.0);
             }
-            cfg.time.t_final = 100.0;
+            if t_final_is_default {
+                cfg.time.t_final = dec(100.0);
+            }
         }
         _ => {}
     }
@@ -285,7 +313,7 @@ mod tests {
 
     #[test]
     fn breakdown_default_uniform_plummer() {
-        let cfg = load_config("default");
+        let cfg = load_config("plummer");
         let b = estimate_memory_breakdown(&cfg);
 
         // Phase space: 16^6 * 8 bytes ≈ 134 MB
@@ -350,7 +378,7 @@ mod tests {
 
     #[test]
     fn breakdown_ht_plummer_with_lomac() {
-        let cfg = load_config("ht_plummer");
+        let cfg = load_config("plummer_ht");
         let b = estimate_memory_breakdown(&cfg);
 
         // HT at rank 10, N=16: 6*16*10*8 + 5*10³*8
@@ -389,7 +417,7 @@ mod tests {
 
     #[test]
     fn breakdown_isolated_plummer_fft_isolated() {
-        let cfg = load_config("isolated_plummer");
+        let cfg = load_config("plummer");
         let b = estimate_memory_breakdown(&cfg);
 
         // FftIsolated: (2N)³*8 + (2N)²*(N+1)*16 + same for Green's
@@ -408,7 +436,7 @@ mod tests {
 
     #[test]
     fn peak_memory_exceeds_initial_for_ht() {
-        let cfg = load_config("ht_plummer");
+        let cfg = load_config("plummer_ht");
         let initial = estimate_memory_mb(&cfg);
         let peak = estimate_peak_memory_mb(&cfg);
 
@@ -421,7 +449,7 @@ mod tests {
 
     #[test]
     fn full_grid_much_larger_than_ht() {
-        let cfg = load_config("ht_plummer");
+        let cfg = load_config("plummer_ht");
         let ht_mem = estimate_memory_mb(&cfg);
         let full = full_grid_memory_mb(&cfg);
 

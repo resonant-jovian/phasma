@@ -1,11 +1,13 @@
-# Tree NFW — Barnes-Hut tree Poisson solver with NFW dark matter halo
+# NFW Tree — Barnes-Hut octree Poisson solver on NFW halo
 #
-# Uses the octree-based Barnes-Hut gravity solver with opening angle
-# theta=0.5. The tree solver scales as O(N³ log N³) and handles
-# isolated boundary conditions naturally without zero-padding.
-#
-# Combined with an NFW dark matter halo profile for a realistic
-# cuspy dark matter distribution.
+# 16^3 x 16^3 uniform grid.
+# Phase-space ~ 134 MB.
+# Uses the octree-based Barnes-Hut gravity solver (theta=0.5)
+# instead of FFT.
+# O(N^3 log N^3) scaling with natural isolated BC.
+# No zero-padding needed.
+# Combined with NFW c=10
+# for a realistic cuspy dark matter distribution.
 
 [model]
 type = "nfw"
@@ -33,15 +35,15 @@ advection = "semi_lagrangian"
 integrator = "strang"
 
 [time]
-t_final = 20.0
+t_final = 200.0
 dt_mode = "adaptive"
-cfl_factor = 0.3
+cfl_factor = 0.01
 
 [output]
-directory = "output/tree_nfw"
+directory = "output/nfw_tree"
 prefix = "run"
-snapshot_interval = 1.0
+snapshot_interval = 0.5
 
 [exit]
-energy_drift_tolerance = 5.0
+energy_drift_tolerance = 100.0
 mass_drift_tolerance = 0.5

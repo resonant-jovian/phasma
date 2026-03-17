@@ -30,7 +30,6 @@ use crossterm::{
     },
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures::{FutureExt, StreamExt};
 use ratatui::backend::CrosstermBackend as Backend;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -38,6 +37,7 @@ use tokio::{
     task::JoinHandle,
     time::interval,
 };
+use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -78,7 +78,7 @@ impl Tui {
             cancellation_token: CancellationToken::new(),
             event_rx,
             event_tx,
-            frame_rate: 60.0,
+            frame_rate: 30.0,
             tick_rate: 4.0,
             mouse: false,
             paste: false,
@@ -140,7 +140,7 @@ impl Tui {
                 }
                 _ = tick_interval.tick() => Event::Tick,
                 _ = render_interval.tick() => Event::Render,
-                crossterm_event = event_stream.next().fuse() => match crossterm_event {
+                crossterm_event = event_stream.next() => match crossterm_event {
                     Some(Ok(event)) => match event {
                         CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => Event::Key(key),
                         CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),

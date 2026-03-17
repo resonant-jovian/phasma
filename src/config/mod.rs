@@ -6,7 +6,29 @@ pub mod history;
 pub mod presets;
 pub mod validate;
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+/// Custom serde for Decimal that reads/writes as f64 in TOML/JSON.
+mod decimal_serde {
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(val: &Decimal, s: S) -> Result<S::Ok, S::Error> {
+        use rust_decimal::prelude::ToPrimitive;
+        val.to_f64().unwrap_or(0.0).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Decimal, D::Error> {
+        let f = f64::deserialize(d)?;
+        Decimal::from_f64_retain(f).ok_or_else(|| serde::de::Error::custom("invalid decimal"))
+    }
+}
+
+/// Helper: create Decimal from f64 literal.
+fn dec(f: f64) -> Decimal {
+    Decimal::from_f64_retain(f).unwrap_or(Decimal::ZERO)
+}
 
 // ── Top-level ────────────────────────────────────────────────────────────────
 
@@ -38,27 +60,30 @@ pub struct PhasmaConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DomainConfig {
-    pub spatial_extent: f64,
-    pub velocity_extent: f64,
+    #[serde(with = "decimal_serde")]
+    pub spatial_extent: Decimal,
+    #[serde(with = "decimal_serde")]
+    pub velocity_extent: Decimal,
     pub spatial_resolution: u32,
     pub velocity_resolution: u32,
     /// "periodic", "isolated", "reflecting"
     pub boundary: String,
     /// "cartesian", "spherical" (future)
     pub coordinates: String,
-    pub gravitational_constant: f64,
+    #[serde(with = "decimal_serde")]
+    pub gravitational_constant: Decimal,
 }
 
 impl Default for DomainConfig {
     fn default() -> Self {
         Self {
-            spatial_extent: 10.0,
-            velocity_extent: 5.0,
+            spatial_extent: dec(10.0),
+            velocity_extent: dec(5.0),
             spatial_resolution: 8,
             velocity_resolution: 8,
             boundary: "periodic".to_string(),
             coordinates: "cartesian".to_string(),
-            gravitational_constant: 1.0,
+            gravitational_constant: dec(1.0),
         }
     }
 }
@@ -69,10 +94,10 @@ impl Default for DomainConfig {
 pub struct ModelConfig {
     #[serde(rename = "type", default = "default_model_type")]
     pub model_type: String,
-    #[serde(default = "default_mass", alias = "mass")]
-    pub total_mass: f64,
-    #[serde(default = "default_scale_radius")]
-    pub scale_radius: f64,
+    #[serde(default = "default_mass", alias = "mass", with = "decimal_serde")]
+    pub total_mass: Decimal,
+    #[serde(default = "default_scale_radius", with = "decimal_serde")]
+    pub scale_radius: Decimal,
     // Optional sub-models
     #[serde(default)]
     pub king: Option<KingModelConfig>,
@@ -97,11 +122,11 @@ pub struct ModelConfig {
 fn default_model_type() -> String {
     "plummer".to_string()
 }
-fn default_mass() -> f64 {
-    1.0
+fn default_mass() -> Decimal {
+    dec(1.0)
 }
-fn default_scale_radius() -> f64 {
-    1.0
+fn default_scale_radius() -> Decimal {
+    dec(1.0)
 }
 
 impl Default for ModelConfig {
@@ -125,31 +150,35 @@ impl Default for ModelConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KingModelConfig {
-    #[serde(default = "default_king_w0", alias = "concentration")]
-    pub w0: f64,
-    #[serde(default)]
-    pub anisotropy: f64,
+    #[serde(
+        default = "default_king_w0",
+        alias = "concentration",
+        with = "decimal_serde"
+    )]
+    pub w0: Decimal,
+    #[serde(default, with = "decimal_serde")]
+    pub anisotropy: Decimal,
 }
 
-fn default_king_w0() -> f64 {
-    7.0
+fn default_king_w0() -> Decimal {
+    dec(7.0)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NfwModelConfig {
-    #[serde(default = "default_nfw_concentration")]
-    pub concentration: f64,
-    #[serde(default = "default_mass")]
-    pub virial_mass: f64,
+    #[serde(default = "default_nfw_concentration", with = "decimal_serde")]
+    pub concentration: Decimal,
+    #[serde(default = "default_mass", with = "decimal_serde")]
+    pub virial_mass: Decimal,
     /// "isotropic", "osipkov_merritt", "constant_beta"
     #[serde(default = "default_isotropic")]
     pub velocity_anisotropy: String,
-    #[serde(default)]
-    pub beta: f64,
+    #[serde(default, with = "decimal_serde")]
+    pub beta: Decimal,
 }
 
-fn default_nfw_concentration() -> f64 {
-    10.0
+fn default_nfw_concentration() -> Decimal {
+    dec(10.0)
 }
 fn default_isotropic() -> String {
     "isotropic".to_string()
@@ -157,124 +186,132 @@ fn default_isotropic() -> String {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZeldovichConfig {
-    #[serde(default = "default_zel_amplitude", alias = "perturbation_amplitude")]
-    pub amplitude: f64,
-    #[serde(default = "default_zel_wave_number")]
-    pub wave_number: f64,
-    #[serde(default = "default_zel_box_size")]
-    pub box_size: f64,
-    #[serde(default = "default_zel_redshift")]
-    pub redshift_initial: f64,
-    #[serde(default = "default_cosmology_h")]
-    pub cosmology_h: f64,
-    #[serde(default = "default_cosmology_omega_m")]
-    pub cosmology_omega_m: f64,
-    #[serde(default = "default_cosmology_omega_lambda")]
-    pub cosmology_omega_lambda: f64,
+    #[serde(
+        default = "default_zel_amplitude",
+        alias = "perturbation_amplitude",
+        with = "decimal_serde"
+    )]
+    pub amplitude: Decimal,
+    #[serde(default = "default_zel_wave_number", with = "decimal_serde")]
+    pub wave_number: Decimal,
+    #[serde(default = "default_zel_box_size", with = "decimal_serde")]
+    pub box_size: Decimal,
+    #[serde(default = "default_zel_redshift", with = "decimal_serde")]
+    pub redshift_initial: Decimal,
+    #[serde(default = "default_cosmology_h", with = "decimal_serde")]
+    pub cosmology_h: Decimal,
+    #[serde(default = "default_cosmology_omega_m", with = "decimal_serde")]
+    pub cosmology_omega_m: Decimal,
+    #[serde(default = "default_cosmology_omega_lambda", with = "decimal_serde")]
+    pub cosmology_omega_lambda: Decimal,
 }
 
-fn default_zel_amplitude() -> f64 {
-    0.01
+fn default_zel_amplitude() -> Decimal {
+    dec(0.01)
 }
-fn default_zel_wave_number() -> f64 {
-    1.0
+fn default_zel_wave_number() -> Decimal {
+    dec(1.0)
 }
-fn default_zel_box_size() -> f64 {
-    100.0
+fn default_zel_box_size() -> Decimal {
+    dec(100.0)
 }
-fn default_zel_redshift() -> f64 {
-    50.0
+fn default_zel_redshift() -> Decimal {
+    dec(50.0)
 }
-fn default_cosmology_h() -> f64 {
-    0.7
+fn default_cosmology_h() -> Decimal {
+    dec(0.7)
 }
-fn default_cosmology_omega_m() -> f64 {
-    0.3
+fn default_cosmology_omega_m() -> Decimal {
+    dec(0.3)
 }
-fn default_cosmology_omega_lambda() -> f64 {
-    0.7
+fn default_cosmology_omega_lambda() -> Decimal {
+    dec(0.7)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergerConfig {
-    #[serde(default = "default_merger_separation")]
-    pub separation: f64,
-    #[serde(default = "default_mass_ratio")]
-    pub mass_ratio: f64,
+    #[serde(default = "default_merger_separation", with = "decimal_serde")]
+    pub separation: Decimal,
+    #[serde(default = "default_mass_ratio", with = "decimal_serde")]
+    pub mass_ratio: Decimal,
     #[serde(default)]
     pub relative_velocity: [f64; 3],
-    #[serde(default = "default_impact_parameter")]
-    pub impact_parameter: f64,
+    #[serde(default = "default_impact_parameter", with = "decimal_serde")]
+    pub impact_parameter: Decimal,
     #[serde(default = "default_model_type")]
     pub model_1: String,
     #[serde(default = "default_model_type")]
     pub model_2: String,
-    #[serde(default = "default_scale_radius")]
-    pub scale_radius_1: f64,
-    #[serde(default = "default_scale_radius")]
-    pub scale_radius_2: f64,
+    #[serde(default = "default_scale_radius", with = "decimal_serde")]
+    pub scale_radius_1: Decimal,
+    #[serde(default = "default_scale_radius", with = "decimal_serde")]
+    pub scale_radius_2: Decimal,
 }
 
-fn default_merger_separation() -> f64 {
-    10.0
+fn default_merger_separation() -> Decimal {
+    dec(10.0)
 }
-fn default_mass_ratio() -> f64 {
-    1.0
+fn default_mass_ratio() -> Decimal {
+    dec(1.0)
 }
-fn default_impact_parameter() -> f64 {
-    2.0
+fn default_impact_parameter() -> Decimal {
+    dec(2.0)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PerturbationConfig {
-    #[serde(default = "default_mass", alias = "mode_m")]
-    pub background_density: f64,
-    #[serde(default = "default_pert_dispersion")]
-    pub velocity_dispersion: f64,
-    #[serde(default = "default_zel_amplitude", alias = "amplitude")]
-    pub perturbation_amplitude: f64,
+    #[serde(default = "default_mass", alias = "mode_m", with = "decimal_serde")]
+    pub background_density: Decimal,
+    #[serde(default = "default_pert_dispersion", with = "decimal_serde")]
+    pub velocity_dispersion: Decimal,
+    #[serde(
+        default = "default_zel_amplitude",
+        alias = "amplitude",
+        with = "decimal_serde"
+    )]
+    pub perturbation_amplitude: Decimal,
     #[serde(default)]
     pub perturbation_wavenumber: [f64; 3],
 }
 
-fn default_pert_dispersion() -> f64 {
-    0.5
+fn default_pert_dispersion() -> Decimal {
+    dec(0.5)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DiskModelConfig {
-    #[serde(default = "default_mass")]
-    pub disk_mass: f64,
-    #[serde(default = "default_disk_scale_length")]
-    pub disk_scale_length: f64,
-    #[serde(default = "default_disk_scale_height")]
-    pub disk_scale_height: f64,
-    #[serde(default = "default_disk_sigma_r")]
-    pub radial_velocity_dispersion: f64,
+    #[serde(default = "default_mass", with = "decimal_serde")]
+    pub disk_mass: Decimal,
+    #[serde(default = "default_disk_scale_length", with = "decimal_serde")]
+    pub disk_scale_length: Decimal,
+    #[serde(default = "default_disk_scale_height", with = "decimal_serde")]
+    pub disk_scale_height: Decimal,
+    #[serde(default = "default_disk_sigma_r", with = "decimal_serde")]
+    pub radial_velocity_dispersion: Decimal,
     #[serde(default = "default_model_type")]
     pub halo_type: String,
-    #[serde(default = "default_halo_mass")]
-    pub halo_mass: f64,
-    #[serde(default = "default_nfw_concentration")]
-    pub halo_concentration: f64,
-    #[serde(default = "default_toomre_q")]
-    pub toomre_q: f64,
+    #[serde(default = "default_halo_mass", with = "decimal_serde")]
+    pub halo_mass: Decimal,
+    #[serde(default = "default_nfw_concentration", with = "decimal_serde")]
+    pub halo_concentration: Decimal,
+    #[serde(default = "default_toomre_q", with = "decimal_serde")]
+    pub toomre_q: Decimal,
 }
 
-fn default_disk_scale_length() -> f64 {
-    3.0
+fn default_disk_scale_length() -> Decimal {
+    dec(3.0)
 }
-fn default_disk_scale_height() -> f64 {
-    0.3
+fn default_disk_scale_height() -> Decimal {
+    dec(0.3)
 }
-fn default_disk_sigma_r() -> f64 {
-    0.15
+fn default_disk_sigma_r() -> Decimal {
+    dec(0.15)
 }
-fn default_halo_mass() -> f64 {
-    10.0
+fn default_halo_mass() -> Decimal {
+    dec(10.0)
 }
-fn default_toomre_q() -> f64 {
-    1.5
+fn default_toomre_q() -> Decimal {
+    dec(1.5)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -282,17 +319,17 @@ pub struct TidalConfig {
     /// Progenitor model: "plummer", "hernquist", "king", "nfw"
     #[serde(default = "default_model_type")]
     pub progenitor_type: String,
-    #[serde(default = "default_mass")]
-    pub progenitor_mass: f64,
-    #[serde(default = "default_scale_radius")]
-    pub progenitor_scale_radius: f64,
+    #[serde(default = "default_mass", with = "decimal_serde")]
+    pub progenitor_mass: Decimal,
+    #[serde(default = "default_scale_radius", with = "decimal_serde")]
+    pub progenitor_scale_radius: Decimal,
     /// Host potential type: "point_mass", "nfw_fixed", "logarithmic"
     #[serde(default = "default_tidal_host")]
     pub host_type: String,
-    #[serde(default = "default_halo_mass")]
-    pub host_mass: f64,
-    #[serde(default = "default_tidal_host_scale")]
-    pub host_scale_radius: f64,
+    #[serde(default = "default_halo_mass", with = "decimal_serde")]
+    pub host_mass: Decimal,
+    #[serde(default = "default_tidal_host_scale", with = "decimal_serde")]
+    pub host_scale_radius: Decimal,
     /// Progenitor initial position [x, y, z]
     #[serde(default = "default_tidal_position")]
     pub progenitor_position: [f64; 3],
@@ -304,8 +341,8 @@ pub struct TidalConfig {
 fn default_tidal_host() -> String {
     "point_mass".to_string()
 }
-fn default_tidal_host_scale() -> f64 {
-    20.0
+fn default_tidal_host_scale() -> Decimal {
+    dec(20.0)
 }
 fn default_tidal_position() -> [f64; 3] {
     [5.0, 0.0, 0.0]
@@ -536,38 +573,38 @@ fn default_exp_sum_accuracy() -> f64 {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TimeConfig {
-    #[serde(default = "default_t_final")]
-    pub t_final: f64,
+    #[serde(default = "default_t_final", with = "decimal_serde")]
+    pub t_final: Decimal,
     /// "adaptive" or "fixed"
     #[serde(default = "default_dt_mode", alias = "dt")]
     pub dt_mode: String,
-    #[serde(default = "default_dt_fixed")]
-    pub dt_fixed: f64,
-    #[serde(default = "default_cfl_factor")]
-    pub cfl_factor: f64,
-    #[serde(default = "default_dt_min")]
-    pub dt_min: f64,
-    #[serde(default = "default_dt_max")]
-    pub dt_max: f64,
+    #[serde(default = "default_dt_fixed", with = "decimal_serde")]
+    pub dt_fixed: Decimal,
+    #[serde(default = "default_cfl_factor", with = "decimal_serde")]
+    pub cfl_factor: Decimal,
+    #[serde(default = "default_dt_min", with = "decimal_serde")]
+    pub dt_min: Decimal,
+    #[serde(default = "default_dt_max", with = "decimal_serde")]
+    pub dt_max: Decimal,
 }
 
-fn default_t_final() -> f64 {
-    10.0
+fn default_t_final() -> Decimal {
+    dec(10.0)
 }
 fn default_dt_mode() -> String {
     "adaptive".to_string()
 }
-fn default_dt_fixed() -> f64 {
-    0.1
+fn default_dt_fixed() -> Decimal {
+    dec(0.1)
 }
-fn default_cfl_factor() -> f64 {
-    0.5
+fn default_cfl_factor() -> Decimal {
+    dec(0.5)
 }
-fn default_dt_min() -> f64 {
-    1e-6
+fn default_dt_min() -> Decimal {
+    dec(1e-6)
 }
-fn default_dt_max() -> f64 {
-    1.0
+fn default_dt_max() -> Decimal {
+    dec(1.0)
 }
 
 impl Default for TimeConfig {
@@ -849,10 +886,10 @@ impl Default for PerformanceOutputConfig {
 pub struct ProfilesOutputConfig {
     #[serde(default = "default_profile_bins")]
     pub num_radial_bins: u32,
-    #[serde(default = "default_profile_rmin")]
-    pub radial_min: f64,
-    #[serde(default = "default_profile_rmax")]
-    pub radial_max: f64,
+    #[serde(default = "default_profile_rmin", with = "decimal_serde")]
+    pub radial_min: Decimal,
+    #[serde(default = "default_profile_rmax", with = "decimal_serde")]
+    pub radial_max: Decimal,
     /// "linear", "log"
     #[serde(default = "default_profile_spacing")]
     pub radial_spacing: String,
@@ -861,11 +898,11 @@ pub struct ProfilesOutputConfig {
 fn default_profile_bins() -> u32 {
     100
 }
-fn default_profile_rmin() -> f64 {
-    0.01
+fn default_profile_rmin() -> Decimal {
+    dec(0.01)
 }
-fn default_profile_rmax() -> f64 {
-    15.0
+fn default_profile_rmax() -> Decimal {
+    dec(15.0)
 }
 fn default_profile_spacing() -> String {
     "log".to_string()

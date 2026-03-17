@@ -1,0 +1,55 @@
+# Tidal Point — Plummer progenitor in a point-mass host potential
+#
+# 32^3 x 32^3 uniform grid.
+# Phase-space ~ 8.6 GB.
+# Requires >= 16 GB RAM.
+# Demonstrates tidal stripping of a small satellite
+# in a host galaxy's gravitational field.
+# Progenitor starts at (5,0,0) with orbital velocity
+# and develops leading/trailing tidal tails.
+# Isolated FFT since the system is not periodic.
+
+[model]
+type = "tidal"
+total_mass = 0.1
+scale_radius = 0.5
+
+[model.tidal]
+progenitor_type = "plummer"
+progenitor_mass = 0.1
+progenitor_scale_radius = 0.5
+host_type = "point_mass"
+host_mass = 10.0
+host_scale_radius = 20.0
+progenitor_position = [5.0, 0.0, 0.0]
+progenitor_velocity = [0.0, 1.0, 0.0]
+
+[domain]
+spatial_extent = 24.0
+velocity_extent = 6.0
+spatial_resolution = 32
+velocity_resolution = 32
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 500.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/tidal_point"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 5.0
+caustic_formation = true

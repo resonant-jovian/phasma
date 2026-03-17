@@ -1,0 +1,47 @@
+# Plummer — Baseline equilibrium sphere
+#
+# 16^3 x 16^3 uniform grid.
+# Phase-space: 16^6 x 8 B ~ 134 MB.
+# Plummer sphere with analytic DF f(E).
+# The safest, most-tested IC.
+# Strang splitting (2nd-order symplectic) + isolated FFT Poisson.
+#
+# The canonical reference run:
+# compare all other configs against this.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_isolated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 200.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/plummer"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5
+
+[performance]
+memory_budget_gb = 2.0

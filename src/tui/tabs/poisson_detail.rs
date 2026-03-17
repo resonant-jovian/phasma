@@ -104,7 +104,7 @@ impl PoissonDetailTab {
         .areas(bottom);
 
         self.draw_power_spectrum(frame, top_left, theme, data_provider);
-        Self::draw_green_rank_stub(frame, top_right, theme);
+        Self::draw_green_rank_panel(frame, top_right, theme, data_provider);
         self.draw_residual_chart(frame, bottom_left, theme);
         self.draw_solver_stats(frame, bottom_mid, theme, data_provider);
         Self::draw_hadamard_stub(frame, bottom_right, theme);
@@ -354,40 +354,61 @@ impl PoissonDetailTab {
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
-    fn draw_green_rank_stub(frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_green_rank_panel(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
         let block = Block::bordered()
             .title(" Green\u{2019}s Fn Rank (Braess-Hackbusch) ")
             .border_style(Style::default().fg(theme.border));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  1/|x| \u{2248} \u{03a3} c\u{2096} exp(-\u{03b1}\u{2096}|x|\u{00b2})",
-                    Style::default().fg(theme.accent),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
+
+        let state = data_provider.current_state();
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  1/|x| \u{2248} \u{03a3} c\u{2096} exp(-\u{03b1}\u{2096}|x|\u{00b2})",
+                Style::default().fg(theme.accent),
+            )),
+            Line::from(""),
+        ];
+
+        if let Some(s) = state {
+            if let Some(rg) = s.green_function_rank {
+                lines.push(Line::from(vec![
+                    Span::styled("  R\u{1d33} terms: ", Style::default().fg(theme.dim)),
+                    Span::styled(
+                        format!("{rg}"),
+                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(Span::styled(
                     "  R\u{1d33} terms: \u{2014}",
                     Style::default().fg(theme.dim),
-                )),
-                Line::from(Span::styled(
-                    "  Approx error: \u{2014}",
-                    Style::default().fg(theme.dim),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  Requires TensorPoisson",
-                    Style::default().fg(theme.dim),
-                )),
-                Line::from(Span::styled(
-                    "  solver diagnostics",
-                    Style::default().fg(theme.dim),
-                )),
-            ]),
-            inner,
-        );
+                )));
+            }
+            if let Some(terms) = s.exp_sum_terms {
+                lines.push(Line::from(vec![
+                    Span::styled("  Exp-sum terms: ", Style::default().fg(theme.dim)),
+                    Span::styled(format!("{terms}"), Style::default().fg(theme.fg)),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  R\u{1d33} terms: \u{2014}",
+                Style::default().fg(theme.dim),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  (no sim data)",
+                Style::default().fg(theme.dim),
+            )));
+        }
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn draw_hadamard_stub(frame: &mut Frame, area: Rect, theme: &ThemeColors) {

@@ -1,12 +1,11 @@
-# Multigrid Plummer — V-cycle multigrid Poisson solver
+# Plummer Multigrid — V-cycle geometric multigrid Poisson solver
 #
-# Uses the geometric multigrid solver instead of FFT for the Poisson
-# equation. Multigrid works with both periodic and isolated BC and
-# can handle non-uniform grids (future). V-cycle with red-black
-# Gauss-Seidel smoother.
-#
-# Good for problems where the boundary conditions are complex or
-# when you want to compare solver accuracy.
+# Uses multigrid instead of FFT for the Poisson equation.
+# V-cycle with red-black Gauss-Seidel smoother.
+# Rayon-parallelized.
+# Works with both periodic and isolated BC
+# and can handle non-uniform grids (future).
+# Compare F9 Poisson Detail against fft_isolated.
 
 [model]
 type = "plummer"
@@ -35,15 +34,15 @@ v_cycles = 3
 omega = 1.5
 
 [time]
-t_final = 20.0
+t_final = 200.0
 dt_mode = "adaptive"
-cfl_factor = 0.3
+cfl_factor = 0.01
 
 [output]
-directory = "output/multigrid_plummer"
+directory = "output/plummer_multigrid"
 prefix = "run"
-snapshot_interval = 1.0
+snapshot_interval = 0.5
 
 [exit]
-energy_drift_tolerance = 5.0
+energy_drift_tolerance = 100.0
 mass_drift_tolerance = 0.5

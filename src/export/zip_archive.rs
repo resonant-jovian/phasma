@@ -52,30 +52,53 @@ pub fn export_zip(
         let _ = std::fs::create_dir_all(tmp.join(d));
     }
 
-    // Export into structured locations
-    let _ = super::csv::export_csv(&tmp.join("diagnostics"), diagnostics, "diagnostics");
-    let _ = super::json::export_json(&tmp.join("snapshots"), diagnostics, state, "final_state");
-    let _ = super::npy::export_npy(&tmp.join("snapshots"), state, "density");
-    let _ = super::report::export_markdown(&tmp.join("report"), diagnostics, state, "report");
-    let _ = super::screenshot::export_screenshot(
-        &tmp.join("screenshots"),
-        diagnostics,
-        state,
-        "screenshot",
-    );
-    let _ =
-        super::parquet::export_parquet(&tmp.join("diagnostics"), diagnostics, state, "diagnostics");
-    let _ = super::vtk::export_vtk(&tmp.join("snapshots"), state, "density");
-
-    // Generate conservation.csv (energy, mass, casimir drift series)
-    export_conservation_csv(&tmp.join("diagnostics"), diagnostics);
-
-    // Generate performance.csv (wall time per step)
-    export_performance_csv(&tmp.join("performance"), state);
-
-    // Generate helper scripts (§4.2)
-    write_load_python(&tmp.join("scripts"));
-    write_load_julia(&tmp.join("scripts"));
+    // Export into structured locations — run independent exports in parallel
+    rayon::scope(|s| {
+        let tmp = &tmp;
+        s.spawn(|_| {
+            let _ = super::csv::export_csv(&tmp.join("diagnostics"), diagnostics, "diagnostics");
+        });
+        s.spawn(|_| {
+            let _ =
+                super::json::export_json(&tmp.join("snapshots"), diagnostics, state, "final_state");
+        });
+        s.spawn(|_| {
+            let _ = super::npy::export_npy(&tmp.join("snapshots"), state, "density");
+        });
+        s.spawn(|_| {
+            let _ =
+                super::report::export_markdown(&tmp.join("report"), diagnostics, state, "report");
+        });
+        s.spawn(|_| {
+            let _ = super::screenshot::export_screenshot(
+                &tmp.join("screenshots"),
+                diagnostics,
+                state,
+                "screenshot",
+            );
+        });
+        s.spawn(|_| {
+            let _ = super::parquet::export_parquet(
+                &tmp.join("diagnostics"),
+                diagnostics,
+                state,
+                "diagnostics",
+            );
+        });
+        s.spawn(|_| {
+            let _ = super::vtk::export_vtk(&tmp.join("snapshots"), state, "density");
+        });
+        s.spawn(|_| {
+            export_conservation_csv(&tmp.join("diagnostics"), diagnostics);
+        });
+        s.spawn(|_| {
+            export_performance_csv(&tmp.join("performance"), state);
+        });
+        s.spawn(|_| {
+            write_load_python(&tmp.join("scripts"));
+            write_load_julia(&tmp.join("scripts"));
+        });
+    });
 
     // Generate README.txt manifest
     write_readme(&tmp);

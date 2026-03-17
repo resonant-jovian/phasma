@@ -270,7 +270,10 @@ impl PhaseSpaceTab {
         if self.physical_aspect {
             let x_extent = state.map(|s| s.spatial_extent * 2.0).unwrap_or(vnx as f64);
             let v_extent = cfg
-                .map(|c| c.domain.velocity_extent * 2.0)
+                .map(|c| {
+                    use rust_decimal::prelude::ToPrimitive;
+                    c.domain.velocity_extent.to_f64().unwrap_or(5.0) * 2.0
+                })
                 .unwrap_or(vnv as f64);
             widget = widget.x_range(x_extent).y_range(v_extent);
         }

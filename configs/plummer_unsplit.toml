@@ -1,0 +1,46 @@
+# Plummer Unsplit RK4 — Method-of-lines on full Vlasov PDE
+#
+# 8^3 x 8^3 uniform grid.
+# Phase-space ~ 2 MB (+ 4 RK stage copies ~ 8 MB).
+# No operator splitting.
+# Discretizes the full 6D Vlasov RHS
+# and advances with classical RK4.
+# No splitting error,
+# but CFL-constrained in both x and v simultaneously.
+# Uses upwind finite-difference spatial derivatives.
+# Compare energy conservation on F5
+# against Strang and Yoshida presets.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "unsplit_rk4"
+
+[time]
+t_final = 200.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/plummer_unsplit"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

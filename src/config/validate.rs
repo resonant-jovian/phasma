@@ -1,6 +1,7 @@
 //! Config validation — checks PhasmaConfig for common mistakes before running.
 
 use crate::config::PhasmaConfig;
+use rust_decimal::Decimal;
 
 #[derive(Debug)]
 pub struct ValidationWarning {
@@ -31,13 +32,13 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
             message: "must be > 0".into(),
         });
     }
-    if cfg.domain.spatial_extent <= 0.0 {
+    if cfg.domain.spatial_extent <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "domain.spatial_extent".into(),
             message: "must be > 0".into(),
         });
     }
-    if cfg.domain.velocity_extent <= 0.0 {
+    if cfg.domain.velocity_extent <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "domain.velocity_extent".into(),
             message: "must be > 0".into(),
@@ -268,13 +269,13 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
     }
 
     // Time checks
-    if cfg.time.t_final <= 0.0 {
+    if cfg.time.t_final <= Decimal::ZERO {
         warnings.push(ValidationWarning {
             field: "time.t_final".into(),
             message: "must be > 0".into(),
         });
     }
-    if cfg.time.cfl_factor <= 0.0 || cfg.time.cfl_factor > 1.0 {
+    if cfg.time.cfl_factor <= Decimal::ZERO || cfg.time.cfl_factor > Decimal::ONE {
         warnings.push(ValidationWarning {
             field: "time.cfl_factor".into(),
             message: "should be in (0, 1]".into(),

@@ -520,14 +520,38 @@ impl RankTab {
         ]));
 
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Decay slope: \u{2014}",
-            Style::default().fg(theme.dim),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  (requires per-node SV data)",
-            Style::default().fg(theme.dim),
-        )));
+        // Compute SV decay slope if singular values available
+        if let Some(ref svs) = state.singular_values {
+            if let Some(sv_vec) = svs.get(node) {
+                if sv_vec.len() >= 2 {
+                    let first = sv_vec[0].max(1e-300).ln();
+                    let last = sv_vec[sv_vec.len() - 1].max(1e-300).ln();
+                    let slope = (last - first) / (sv_vec.len() as f64 - 1.0);
+                    lines.push(Line::from(vec![
+                        Span::styled("  Decay slope: ", Style::default().fg(theme.dim)),
+                        Span::styled(
+                            format!("{slope:.2}"),
+                            Style::default().fg(if slope < -0.5 { theme.ok } else { theme.warn }),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "  Decay slope: (too few SVs)",
+                        Style::default().fg(theme.dim),
+                    )));
+                }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  Decay slope: \u{2014}",
+                    Style::default().fg(theme.dim),
+                )));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  Decay slope: \u{2014}",
+                Style::default().fg(theme.dim),
+            )));
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Moment-carrying: \u{2014}/k",

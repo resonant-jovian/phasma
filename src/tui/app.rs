@@ -58,6 +58,7 @@ pub struct App {
     sim_paused: bool,
     command_palette: CommandPalette,
     annotations: AnnotationStore,
+    needs_redraw: bool,
 }
 
 /// Alternative data provider modes.
@@ -155,6 +156,7 @@ impl App {
             sim_paused: false,
             command_palette: CommandPalette::default(),
             annotations: AnnotationStore::new(),
+            needs_redraw: true,
         })
     }
 
@@ -246,21 +248,35 @@ impl App {
             Event::Tick => action_tx.send(Action::Tick)?,
             Event::Render => action_tx.send(Action::Render)?,
             Event::Resize(x, y) => action_tx.send(Action::Resize(x, y))?,
-            Event::Key(key) => self.handle_key_event(key)?,
-            Event::Mouse(mouse) => self.handle_mouse_event(mouse)?,
+            Event::Key(key) => {
+                self.handle_key_event(key)?;
+                self.needs_redraw = true;
+            }
+            Event::Mouse(mouse) => {
+                self.handle_mouse_event(mouse)?;
+                self.needs_redraw = true;
+            }
             _ => {}
         }
 
-        // Drain sim state updates (non-blocking)
+        // Drain sim state updates to latest (non-blocking)
         if let Some(ref mut handle) = self.sim_handle {
+            let mut latest = None;
             while let Ok(state) = handle.state_rx.try_recv() {
+                latest = Some(state);
+            }
+            if let Some(state) = latest {
                 self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
             }
         }
 
-        // Drain monitor handle updates (non-blocking)
+        // Drain monitor handle updates to latest (non-blocking)
         if let Some(ref mut handle) = self.monitor_handle {
+            let mut latest = None;
             while let Ok(state) = handle.state_rx.try_recv() {
+                latest = Some(state);
+            }
+            if let Some(state) = latest {
                 self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
             }
         }
@@ -631,9 +647,14 @@ impl App {
                 Action::ClearScreen => tui.terminal.clear()?,
                 Action::Resize(w, h) => {
                     tui.resize(ratatui::prelude::Rect::new(0, 0, *w, *h))?;
-                    self.render(tui)?;
+                    self.needs_redraw = true;
                 }
-                Action::Render => self.render(tui)?,
+                Action::Render => {
+                    if self.needs_redraw {
+                        self.render(tui)?;
+                        self.needs_redraw = false;
+                    }
+                }
                 Action::ConfigLoaded(path) => {
                     self.config_path = Some(path.clone());
                     let name = path.rsplit('/').next().unwrap_or(path).to_string();
@@ -699,6 +720,7 @@ impl App {
                 Action::SimUpdate(state) => {
                     self.data_provider.update(state);
                     self.status_bar.on_state_update(state);
+                    self.needs_redraw = true;
                     // Notify on sim completion and clear handle so re-run is possible
                     if let Some(ref reason) = state.exit_reason {
                         let msg = format!("Exit: {reason} at t={:.4}", state.t);
