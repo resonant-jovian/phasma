@@ -352,10 +352,7 @@ mod tests {
             .iter()
             .filter(|w| w.field != "performance.memory_budget_gb")
             .collect();
-        assert!(
-            non_memory.is_empty(),
-            "unexpected warnings: {non_memory:?}"
-        );
+        assert!(non_memory.is_empty(), "unexpected warnings: {non_memory:?}");
     }
 
     #[test]
@@ -517,7 +514,9 @@ mod tests {
         cfg.model.king = None;
         let warnings = validate(&cfg);
         assert!(
-            warnings.iter().any(|w| w.field == "model" && w.message.contains("king")),
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("king")),
             "should warn about missing king section"
         );
     }
@@ -529,7 +528,9 @@ mod tests {
         cfg.model.nfw = None;
         let warnings = validate(&cfg);
         assert!(
-            warnings.iter().any(|w| w.field == "model" && w.message.contains("nfw")),
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("nfw")),
             "should warn about missing nfw section"
         );
     }
@@ -541,7 +542,9 @@ mod tests {
         cfg.model.zeldovich = None;
         let warnings = validate(&cfg);
         assert!(
-            warnings.iter().any(|w| w.field == "model" && w.message.contains("zeldovich")),
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("zeldovich")),
             "should warn about missing zeldovich section"
         );
     }
@@ -553,7 +556,9 @@ mod tests {
         cfg.model.merger = None;
         let warnings = validate(&cfg);
         assert!(
-            warnings.iter().any(|w| w.field == "model" && w.message.contains("merger")),
+            warnings
+                .iter()
+                .any(|w| w.field == "model" && w.message.contains("merger")),
             "should warn about missing merger section"
         );
     }

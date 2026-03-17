@@ -279,7 +279,8 @@ impl RankTab {
             .iter()
             .map(|&(t, a)| (t, a * y_max / 2.0)) // scale amplification into chart range
             .collect();
-        let dense_poisson_amp = densify(&poisson_amp_data, area.width.saturating_sub(2) as usize * 2);
+        let dense_poisson_amp =
+            densify(&poisson_amp_data, area.width.saturating_sub(2) as usize * 2);
 
         if dense_poisson_amp.len() >= 2 {
             datasets.push(
@@ -297,7 +298,10 @@ impl RankTab {
             .iter()
             .map(|&(t, a)| (t, a * y_max / 2.0))
             .collect();
-        let dense_advection_amp = densify(&advection_amp_data, area.width.saturating_sub(2) as usize * 2);
+        let dense_advection_amp = densify(
+            &advection_amp_data,
+            area.width.saturating_sub(2) as usize * 2,
+        );
 
         if dense_advection_amp.len() >= 2 {
             datasets.push(

@@ -535,7 +535,10 @@ mod tests {
         assert!(cfg.domain.boundary.contains("isolated"));
         assert_eq!(cfg.solver.poisson, "fft_isolated");
         assert!(cfg.domain.velocity_extent > Decimal::ZERO);
-        assert_eq!(cfg.domain.spatial_extent, cfg.model.scale_radius * dec(10.0));
+        assert_eq!(
+            cfg.domain.spatial_extent,
+            cfg.model.scale_radius * dec(10.0)
+        );
     }
 
     #[test]

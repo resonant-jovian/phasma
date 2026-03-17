@@ -219,11 +219,17 @@ mod tests {
         assert_eq!(ExportFormat::from_name("csv"), ExportFormat::Csv);
         assert_eq!(ExportFormat::from_name("json"), ExportFormat::Json);
         assert_eq!(ExportFormat::from_name("parquet"), ExportFormat::Parquet);
-        assert_eq!(ExportFormat::from_name("screenshot"), ExportFormat::Screenshot);
+        assert_eq!(
+            ExportFormat::from_name("screenshot"),
+            ExportFormat::Screenshot
+        );
         assert_eq!(ExportFormat::from_name("vtk"), ExportFormat::Vtk);
         assert_eq!(ExportFormat::from_name("npy"), ExportFormat::Npy);
         assert_eq!(ExportFormat::from_name("markdown"), ExportFormat::Markdown);
-        assert_eq!(ExportFormat::from_name("animation"), ExportFormat::Animation);
+        assert_eq!(
+            ExportFormat::from_name("animation"),
+            ExportFormat::Animation
+        );
         assert_eq!(ExportFormat::from_name("zip"), ExportFormat::Zip);
     }
 
@@ -236,10 +242,22 @@ mod tests {
         assert_eq!(ExportFormat::from_name("anim"), ExportFormat::Animation);
         assert_eq!(ExportFormat::from_name("toml"), ExportFormat::ConfigToml);
         assert_eq!(ExportFormat::from_name("config"), ExportFormat::ConfigToml);
-        assert_eq!(ExportFormat::from_name("radial"), ExportFormat::RadialProfilesCsv);
-        assert_eq!(ExportFormat::from_name("profiles"), ExportFormat::RadialProfilesCsv);
-        assert_eq!(ExportFormat::from_name("performance"), ExportFormat::PerformanceParquet);
-        assert_eq!(ExportFormat::from_name("perf"), ExportFormat::PerformanceParquet);
+        assert_eq!(
+            ExportFormat::from_name("radial"),
+            ExportFormat::RadialProfilesCsv
+        );
+        assert_eq!(
+            ExportFormat::from_name("profiles"),
+            ExportFormat::RadialProfilesCsv
+        );
+        assert_eq!(
+            ExportFormat::from_name("performance"),
+            ExportFormat::PerformanceParquet
+        );
+        assert_eq!(
+            ExportFormat::from_name("perf"),
+            ExportFormat::PerformanceParquet
+        );
     }
 
     #[test]
@@ -313,17 +331,33 @@ mod tests {
             ExportFormat::Zip,
         ];
         for f in all {
-            assert!(!f.shortcut().is_empty(), "{f:?} should have non-empty shortcut");
+            assert!(
+                !f.shortcut().is_empty(),
+                "{f:?} should have non-empty shortcut"
+            );
         }
     }
 
     #[test]
     fn all_variants_reachable() {
         let names = [
-            "screenshot", "csv", "json", "parquet", "config", "vtk",
-            "npy", "markdown", "animation", "radial", "performance", "zip",
+            "screenshot",
+            "csv",
+            "json",
+            "parquet",
+            "config",
+            "vtk",
+            "npy",
+            "markdown",
+            "animation",
+            "radial",
+            "performance",
+            "zip",
         ];
-        let reached: HashSet<_> = names.iter().map(|n| std::mem::discriminant(&ExportFormat::from_name(n))).collect();
+        let reached: HashSet<_> = names
+            .iter()
+            .map(|n| std::mem::discriminant(&ExportFormat::from_name(n)))
+            .collect();
         assert_eq!(reached.len(), 12);
     }
 }

@@ -265,12 +265,18 @@ mod tests {
 
     #[test]
     fn lookup_clamps_negative() {
-        assert_eq!(lookup(Colormap::Viridis, -1.0), lookup(Colormap::Viridis, 0.0));
+        assert_eq!(
+            lookup(Colormap::Viridis, -1.0),
+            lookup(Colormap::Viridis, 0.0)
+        );
     }
 
     #[test]
     fn lookup_clamps_above_one() {
-        assert_eq!(lookup(Colormap::Viridis, 2.0), lookup(Colormap::Viridis, 1.0));
+        assert_eq!(
+            lookup(Colormap::Viridis, 2.0),
+            lookup(Colormap::Viridis, 1.0)
+        );
     }
 
     #[test]
