@@ -145,6 +145,13 @@ pub struct SimState {
     // ── Lagrangian radii L10, L25, L50, L75, L90 (§2.2 F7) ──
     #[serde(default)]
     pub lagrangian_radii: Option<[f64; 5]>,
+    // ── Spectral diagnostics (Phase 5 gap analysis) ──
+    /// Density power spectrum P(k) = |ρ̂(k)|² binned by |k|.
+    #[serde(default)]
+    pub density_power_spectrum: Option<Vec<(f64, f64)>>,
+    /// Field energy spectrum E(k) = |k|² |Φ̂(k)|² binned by |k|.
+    #[serde(default)]
+    pub field_energy_spectrum: Option<Vec<(f64, f64)>>,
     // ── Step-level rank amplification (Phase 1 gap analysis) ──
     /// Ratio of max rank after Poisson+kick to max rank after drift.
     #[serde(default)]
@@ -1148,6 +1155,15 @@ fn extract_sim_state(
         None
     };
 
+    // Spectral diagnostics (Phase 5 gap analysis)
+    let (density_ps, field_es) = if density.shape.iter().all(|&n| n <= 32) {
+        let dps = caustic::PhaseSpaceDiagnostics::power_spectrum(&density);
+        let fes = caustic::field_energy_spectrum(&potential, [dx[0], dx[1], dx[2]]);
+        (Some(dps), Some(fes))
+    } else {
+        (None, None)
+    };
+
     // Phase-space projections f(x_i, v_j) for all 9 (dim_x, dim_v) combinations.
     let snap = sim.repr.to_snapshot(sim.time);
     let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
@@ -1216,6 +1232,8 @@ fn extract_sim_state(
         poisson_type: poisson_type.to_string(),
         poisson_residual_l2: Some(residual),
         potential_power_spectrum: spectrum,
+        density_power_spectrum: density_ps,
+        field_energy_spectrum: field_es,
         // Phase timings: estimated split (actual instrumented timings would come from caustic tracing)
         phase_timings: None,
         truncation_errors: None,
@@ -1343,6 +1361,8 @@ fn error_state(msg: String) -> SimState {
         poisson_type: String::new(),
         poisson_residual_l2: None,
         potential_power_spectrum: None,
+        density_power_spectrum: None,
+        field_energy_spectrum: None,
         phase_timings: None,
         truncation_errors: None,
         svd_count: 0,
@@ -1908,6 +1928,8 @@ mod unit_tests {
             poisson_type: String::new(),
             poisson_residual_l2: None,
             potential_power_spectrum: None,
+            density_power_spectrum: None,
+            field_energy_spectrum: None,
             phase_timings: None,
             truncation_errors: None,
             svd_count: 0,

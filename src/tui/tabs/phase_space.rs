@@ -51,7 +51,7 @@ impl Default for PhaseSpaceTab {
             show_info: true,
             zoom: 1.0,
             slice_offsets: [0.0; 4],
-            physical_aspect: false,
+            physical_aspect: true,
             show_stream_count: false,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),

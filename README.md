@@ -155,9 +155,9 @@ This directory is the input for `--playback`, `--monitor`, `--compare`, `--regre
 | Tab | Key | Content |
 |---|---|---|
 | Setup | F1 | Config browser, structured config summary, memory estimate, preset selector (Ctrl+P) |
-| Run Control | F2 | Progress gauge, density/phase-space thumbnails, energy chart, diagnostics sidebar, log stream |
-| Density | F3 | 2D projected density heatmap with axis selection (x/y/z), zoom, log scale, contour overlay |
-| Phase Space | F4 | f(x_i, v_j) marginal projections for all 9 dimension pairs, data cursor |
+| Run Control | F2 | Progress gauge, aspect-corrected density/phase-space thumbnails, energy chart, diagnostics sidebar, log stream |
+| Density | F3 | 2D projected density heatmap with aspect correction, axis selection (x/y/z), zoom, log scale, contour overlay |
+| Phase Space | F4 | f(x_i, v_j) marginal projections for all 9 dimension pairs, physical aspect ratio (default on, `p` to toggle), data cursor |
 | Energy | F5 | Conservation time series: E(t), T(t), W(t), drift, mass, Casimir, entropy — 4 panels |
 | Rank | F6 | HT/TT rank evolution, per-node table, singular value spectrum, truncation error (dimmed when repr=uniform) |
 | Profiles | F7 | Radial density, velocity dispersion, enclosed mass, circular velocity, anisotropy, Lagrangian radii, analytic overlays |
@@ -218,6 +218,8 @@ This directory is the input for `--playback`, `--monitor`, `--compare`, `--regre
 | `r` / `0` | Reset zoom |
 | `l` | Toggle log scale |
 | `c` | Cycle colormap / comparison view |
+| `p` | Toggle physical aspect ratio (default on) |
+| `s` | Toggle stream-count overlay |
 | `i` | Toggle info bar |
 
 ### Energy (F5)
@@ -494,7 +496,7 @@ The simulation exits when **any** enabled condition triggers.
 | `colormap_default` | string | `"viridis"` | `"viridis"`, `"inferno"`, `"plasma"`, `"magma"`, `"grayscale"`, `"cubehelix"`, `"coolwarm"` |
 | `braille_density` | bool | `true` | Braille-based density rendering |
 | `border_style` | string | `"rounded"` | `"rounded"`, `"plain"`, `"double"` |
-| `square_pixels` | bool | `true` | Compensate for non-square terminal cells |
+| `square_pixels` | bool | `true` | Compensate for non-square terminal cells in all heatmaps (F2, F3, F4) |
 | `min_columns` | integer | `80` | Minimum terminal width |
 | `min_rows` | integer | `24` | Minimum terminal height |
 
