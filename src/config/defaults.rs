@@ -381,8 +381,8 @@ mod tests {
         let cfg = load_config("plummer_ht");
         let b = estimate_memory_breakdown(&cfg);
 
-        // HT at rank 10, N=16: 6*16*10*8 + 5*10³*8
-        let n = 16.0_f64;
+        // HT at rank 10, N=32: 6*32*10*8 + 5*10³*8
+        let n = 32.0_f64;
         let r = 10.0;
         let leaf_mem = 6.0 * n * r * 8.0;
         let transfer_mem = 5.0 * r.powi(3) * 8.0;
