@@ -1,0 +1,65 @@
+# Plummer 64³ HT — Mid-resolution Hierarchical Tucker
+#
+# 64³ spatial × 64³ velocity with HT tensor compression.
+# Lighter than the 128³ variant — fits under 4 GB RAM.
+#
+# SLAR advection with rank-adaptive truncation.
+# LoMaC conservation for exact mass/momentum/energy preservation.
+# FFT isolated Poisson solver (Hockney-Eastwood) for isolated BC.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 64
+velocity_resolution = 64
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "hierarchical_tucker"
+poisson = "fft_isolated"
+advection = "slar"
+integrator = "strang"
+conservation = "lomac"
+
+[solver.ht]
+max_rank = 50
+initial_rank = 10
+tolerance = 1e-6
+rank_adaptation = "tolerance"
+dimension_tree = "balanced_xv"
+
+[solver.slar]
+reconstruction_order = 3
+aca_tolerance = 1e-8
+max_aca_iterations = 500
+oversampling_factor = 2.0
+
+[solver.lomac]
+flux_scheme = "kfvs"
+projection_tolerance = 1e-12
+
+[time]
+t_final = 200.0
+dt_mode = "adaptive"
+cfl_factor = 0.005
+
+[output]
+directory = "output/plummer_64"
+prefix = "run"
+snapshot_interval = 1.0
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5
+virial_equilibrium = true
+virial_tolerance = 0.01
+
+[performance]
+memory_budget_gb = 4.0

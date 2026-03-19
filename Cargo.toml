@@ -1,6 +1,6 @@
 [package]
 name = "phasma"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 description = "Terminal interface for the caustic Vlasov-Poisson solver"
 authors = ["Albin <albin@sjoegren.se>"]

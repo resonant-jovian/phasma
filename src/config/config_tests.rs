@@ -36,6 +36,7 @@ load_test!(merger_unequal);
 load_test!(nfw);
 load_test!(nfw_tree);
 load_test!(plummer);
+load_test!(plummer_64);
 load_test!(plummer_128);
 load_test!(plummer_hires);
 load_test!(plummer_ht);
@@ -87,6 +88,7 @@ validate_test!(merger_unequal);
 validate_test!(nfw);
 validate_test!(nfw_tree);
 validate_test!(plummer);
+validate_test!(plummer_64);
 validate_test!(plummer_128);
 validate_test!(plummer_hires);
 validate_test!(plummer_ht);
@@ -226,6 +228,7 @@ round_trip_test!(merger_unequal);
 round_trip_test!(nfw);
 round_trip_test!(nfw_tree);
 round_trip_test!(plummer);
+round_trip_test!(plummer_64);
 round_trip_test!(plummer_128);
 round_trip_test!(plummer_hires);
 round_trip_test!(plummer_ht);
@@ -411,6 +414,16 @@ field_test!(
     "strang",
     16,
     16,
+    "isolated|truncated"
+);
+field_test!(
+    plummer_64,
+    "plummer",
+    "hierarchical_tucker",
+    "fft_isolated",
+    "strang",
+    64,
+    64,
     "isolated|truncated"
 );
 field_test!(
@@ -676,6 +689,23 @@ fn jeans_unstable_has_perturbation_subconfig() {
     assert!(
         cfg.model.uniform_perturbation.is_some(),
         "jeans_unstable.toml must have [model.uniform_perturbation]"
+    );
+}
+
+#[test]
+fn plummer_64_has_solver_subconfigs() {
+    let cfg = load_config("plummer_64");
+    assert!(
+        cfg.solver.ht.is_some(),
+        "plummer_64.toml must have [solver.ht]"
+    );
+    assert!(
+        cfg.solver.slar.is_some(),
+        "plummer_64.toml must have [solver.slar]"
+    );
+    assert!(
+        cfg.solver.lomac.is_some(),
+        "plummer_64.toml must have [solver.lomac]"
     );
 }
 
