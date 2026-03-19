@@ -514,35 +514,27 @@ fn build_from_config(
         ));
     }
 
-    // Build initial conditions based on model type
+    // Build phase-space representation from IC
+    //
+    // For HT representation with isolated equilibrium models (plummer, hernquist,
+    // king, nfw), we use HtTensor::from_function_aca which samples O(dNk) fibers
+    // instead of materializing the full N^6 grid. This is critical at high
+    // resolution (e.g. 128^3) where the full grid would be ~35 TB.
+    //
+    // All other representations first sample the full grid via build_ic().
+
     if verbose {
         logs.push(format!(
-            "Building IC: model={}, M={}, a={}",
-            cfg.model.model_type, cfg.model.total_mass, cfg.model.scale_radius
-        ));
-    }
-    let t0 = Instant::now();
-    let snap = build_ic(cfg, &domain, g)?;
-    if verbose {
-        let nonzero = snap.data.iter().filter(|&&v| v > 0.0).count();
-        logs.push(format!(
-            "IC sampled in {:.1} ms — {} non-zero cells out of {}",
-            t0.elapsed().as_secs_f64() * 1000.0,
-            nonzero,
-            snap.data.len()
+            "Building IC + representation: model={}, repr={}, M={}, a={}",
+            cfg.model.model_type,
+            cfg.solver.representation,
+            cfg.model.total_mass,
+            cfg.model.scale_radius
         ));
     }
 
-    // Build phase-space representation from IC snapshot
-    if verbose {
-        logs.push(format!(
-            "Building phase-space representation: {}",
-            cfg.solver.representation
-        ));
-    }
     let t0 = Instant::now();
     let repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
-        "uniform" | "uniform_grid" => Box::new(UniformGrid6D::from_snapshot(snap, domain.clone())),
         "hierarchical_tucker" | "ht" => {
             let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
             let max_rank = cfg
@@ -551,14 +543,21 @@ fn build_from_config(
                 .as_ref()
                 .map(|h| h.max_rank as usize)
                 .unwrap_or(100);
-            if verbose {
-                logs.push(format!(
-                    "  HT params: tolerance={tolerance:.1e}, max_rank={max_rank}"
-                ));
-                logs.push("  Running HSVD decomposition...".to_string());
-            }
-            let ht = HtTensor::from_full(&snap.data, snap.shape, &domain, tolerance);
-            let mut ht = ht;
+
+            // Try the ACA path for isolated equilibrium models (no full grid needed)
+            let ht_opt = build_ht_from_ic_aca(cfg, &domain, g, tolerance, max_rank, verbose, logs);
+
+            let mut ht = match ht_opt {
+                Some(ht) => ht,
+                None => {
+                    // Fallback: model not supported by ACA path, use full grid
+                    if verbose {
+                        logs.push("  Falling back to full-grid IC + HSVD...".to_string());
+                    }
+                    let snap = build_ic(cfg, &domain, g)?;
+                    HtTensor::from_full(&snap.data, snap.shape, &domain, tolerance)
+                }
+            };
             ht.max_rank = max_rank;
             ht.tolerance = tolerance;
             if verbose {
@@ -570,38 +569,78 @@ fn build_from_config(
             }
             Box::new(ht)
         }
-        "tensor_train" => {
-            let max_rank = cfg
-                .solver
-                .ht
-                .as_ref()
-                .map(|h| h.max_rank as usize)
-                .unwrap_or(50);
-            let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
-            if verbose {
-                logs.push(format!(
-                    "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
-                ));
-            }
-            Box::new(TensorTrain::from_snapshot(
-                &snap, max_rank, tolerance, &domain,
-            ))
-        }
+        // Representations that don't need the full IC grid
         "sheet_tracker" => Box::new(SheetTracker::new(domain.clone())),
-        "spectral" | "velocity_ht" => {
-            let n_modes = cfg
-                .solver
-                .ht
-                .as_ref()
-                .map(|h| h.initial_rank as usize)
-                .unwrap_or(16);
-            if verbose {
-                logs.push(format!("  Spectral n_modes={n_modes}"));
-            }
-            Box::new(SpectralV::from_snapshot(&snap, n_modes, &domain))
-        }
         "amr" => Box::new(AmrGrid::new(domain.clone(), 0.1, 3)),
         "hybrid" => Box::new(HybridRepr::new(domain.clone())),
+
+        // Representations that require the full N^6 grid in memory
+        "uniform" | "uniform_grid" | "tensor_train" | "spectral" | "velocity_ht" => {
+            let n = cfg.domain.spatial_resolution as u64;
+            let nv = cfg.domain.velocity_resolution as u64;
+            let grid_bytes = n.pow(3) * nv.pow(3) * 8;
+            let grid_gb = grid_bytes as f64 / 1_073_741_824.0;
+            let budget = cfg.performance.memory_budget_gb;
+            if grid_gb > budget {
+                anyhow::bail!(
+                    "Full {n}³×{nv}³ grid requires {grid_gb:.1} GB, exceeds memory budget \
+                     ({budget:.1} GB). Use representation = \"hierarchical_tucker\" for \
+                     high-resolution runs."
+                );
+            }
+            if grid_bytes > 64 * 1_073_741_824 {
+                anyhow::bail!(
+                    "Full {n}³×{nv}³ grid requires {grid_gb:.0} GB — too large to allocate. \
+                     Use representation = \"hierarchical_tucker\" for high-resolution runs."
+                );
+            }
+
+            let snap = build_ic(cfg, &domain, g)?;
+            if verbose {
+                let nonzero = snap.data.iter().filter(|&&v| v > 0.0).count();
+                logs.push(format!(
+                    "IC sampled in {:.1} ms — {} non-zero cells out of {}",
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    nonzero,
+                    snap.data.len()
+                ));
+            }
+            match cfg.solver.representation.as_str() {
+                "uniform" | "uniform_grid" => {
+                    Box::new(UniformGrid6D::from_snapshot(snap, domain.clone()))
+                }
+                "tensor_train" => {
+                    let max_rank = cfg
+                        .solver
+                        .ht
+                        .as_ref()
+                        .map(|h| h.max_rank as usize)
+                        .unwrap_or(50);
+                    let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
+                    if verbose {
+                        logs.push(format!(
+                            "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
+                        ));
+                    }
+                    Box::new(TensorTrain::from_snapshot(
+                        &snap, max_rank, tolerance, &domain,
+                    ))
+                }
+                "spectral" | "velocity_ht" => {
+                    let n_modes = cfg
+                        .solver
+                        .ht
+                        .as_ref()
+                        .map(|h| h.initial_rank as usize)
+                        .unwrap_or(16);
+                    if verbose {
+                        logs.push(format!("  Spectral n_modes={n_modes}"));
+                    }
+                    Box::new(SpectralV::from_snapshot(&snap, n_modes, &domain))
+                }
+                _ => unreachable!(),
+            }
+        }
         other => anyhow::bail!("unsupported representation '{other}'"),
     };
     if verbose {
@@ -764,6 +803,66 @@ fn build_from_config(
     }
 
     Ok(sim)
+}
+
+/// Build an HtTensor directly from an IC model via ACA (no full grid allocation).
+///
+/// Returns `Some(HtTensor)` for isolated equilibrium models (plummer, hernquist, king, nfw).
+/// Returns `None` for models that don't support this path (caller should fall back).
+fn build_ht_from_ic_aca(
+    cfg: &crate::config::PhasmaConfig,
+    domain: &caustic::Domain,
+    g: f64,
+    tolerance: f64,
+    max_rank: usize,
+    verbose: bool,
+    logs: &mut Vec<String>,
+) -> Option<caustic::HtTensor> {
+    use caustic::{HernquistIC, HtTensor, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC};
+    use rust_decimal::prelude::ToPrimitive;
+
+    let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
+    let a = cfg.model.scale_radius.to_f64().unwrap_or(1.0);
+
+    let ic: Box<dyn IsolatedEquilibrium + Sync> = match cfg.model.model_type.as_str() {
+        "plummer" => Box::new(PlummerIC::new(m, a, g)),
+        "hernquist" => Box::new(HernquistIC::new(m, a, g)),
+        "king" => {
+            let king = cfg.model.king.as_ref()?;
+            let w0 = king.w0.to_f64().unwrap_or(7.0);
+            Box::new(KingIC::new(m, w0, a, g))
+        }
+        "nfw" => {
+            let nfw = cfg.model.nfw.as_ref()?;
+            let c = nfw.concentration.to_f64().unwrap_or(10.0);
+            Box::new(NfwIC::new(m, a, c, g))
+        }
+        _ => return None,
+    };
+
+    if verbose {
+        logs.push(format!(
+            "  HT ACA path: tolerance={tolerance:.1e}, max_rank={max_rank}"
+        ));
+        logs.push("  Building HT via fiber sampling (no full grid)...".to_string());
+    }
+
+    let ht = HtTensor::from_function_aca(
+        |x, v| {
+            let r = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+            let phi = ic.potential(r);
+            let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            let energy = 0.5 * v2 + phi;
+            ic.distribution_function(energy, 0.0).max(0.0)
+        },
+        domain,
+        tolerance,
+        max_rank,
+        None,
+        None,
+    );
+
+    Some(ht)
 }
 
 fn build_ic(
@@ -1171,7 +1270,10 @@ fn extract_sim_state(
     let phase_slices = compute_all_phase_slices(&snap.data, s);
     let phase_slice = phase_slices[0].clone(); // x1-v1 for backward compat
 
-    // HT rank diagnostics (attempt downcast)
+    // Repr memory via trait method (works for all representations)
+    let repr_mem = sim.repr.memory_bytes();
+
+    // HT rank diagnostics (attempt downcast for HT-specific fields)
     let (rank_per_node, rank_total, rank_memory_bytes, compression_ratio, repr_type) =
         if let Some(ht) = sim.repr.as_any().downcast_ref::<caustic::HtTensor>() {
             let per_node: Vec<usize> = (0..11).map(|i| ht.rank_at(i)).collect();
@@ -1191,7 +1293,9 @@ fn extract_sim_state(
                 "ht".to_string(),
             )
         } else {
-            (None, None, None, None, "uniform".to_string())
+            // For non-HT representations, use the trait method for memory
+            let mem = if repr_mem > 0 { Some(repr_mem) } else { None };
+            (None, None, mem, None, "uniform".to_string())
         };
 
     SimState {
@@ -1234,8 +1338,18 @@ fn extract_sim_state(
         potential_power_spectrum: spectrum,
         density_power_spectrum: density_ps,
         field_energy_spectrum: field_es,
-        // Phase timings: estimated split (actual instrumented timings would come from caustic tracing)
-        phase_timings: None,
+        // Phase timings from caustic instrumentation
+        phase_timings: {
+            let t = &sim.last_step_timings;
+            let sum = t.drift_ms
+                + t.poisson_ms
+                + t.kick_ms
+                + t.density_ms
+                + t.diagnostics_ms
+                + t.io_ms
+                + t.other_ms;
+            if sum > 0.0 { Some(t.to_array()) } else { None }
+        },
         truncation_errors: None,
         svd_count: 0,
         htaca_evaluations: 0,
@@ -1716,6 +1830,89 @@ mod memory_tests {
             }
         }
         eprintln!();
+    }
+}
+
+#[cfg(test)]
+mod heavy_tests {
+    use super::*;
+    use rust_decimal::prelude::FromPrimitive;
+
+    /// Read current process RSS in MB from /proc/self/statm.
+    fn read_rss_mb() -> f64 {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
+                let rss_pages: u64 = content
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
+                return rss_pages as f64 * page_size / 1_000_000.0;
+            }
+        }
+        0.0
+    }
+
+    /// Run plummer_128 config to t=1 and assert RSS stays under 16 GB.
+    ///
+    /// This is a heavy test (~1–1.5 GB RAM, minutes of wall time).
+    /// It does NOT run with `cargo test` — you must opt in:
+    ///
+    /// ```sh
+    /// cargo test --release plummer_128_fits_16gb -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn plummer_128_fits_16gb() {
+        const RSS_LIMIT_MB: f64 = 16_000.0; // 16 GB
+
+        let config_path = format!("{}/configs/plummer_128.toml", env!("CARGO_MANIFEST_DIR"));
+        let mut cfg = crate::config::load(&config_path).expect("plummer_128.toml should load");
+
+        // Override t_final to 1.0 for the test
+        cfg.time.t_final = rust_decimal::Decimal::from_f64(1.0).unwrap();
+
+        let mut sim =
+            build_from_config(&cfg, false, &mut Vec::new()).expect("plummer_128 should build");
+
+        let rss_after_build = read_rss_mb();
+        eprintln!("RSS after build: {rss_after_build:.0} MB");
+        assert!(
+            rss_after_build < RSS_LIMIT_MB,
+            "RSS after build ({rss_after_build:.0} MB) exceeds 16 GB limit"
+        );
+
+        let mut step = 0u64;
+        loop {
+            match sim.step() {
+                Ok(None) => {}
+                Ok(Some(_reason)) => {
+                    eprintln!("Simulation exited at step {step}: {_reason:?}");
+                    break;
+                }
+                Err(e) => panic!("Step {step} failed: {e}"),
+            }
+            step += 1;
+
+            // Check RSS every 10 steps to avoid /proc overhead
+            if step % 10 == 0 {
+                let rss = read_rss_mb();
+                eprintln!("Step {step}: RSS = {rss:.0} MB");
+                assert!(
+                    rss < RSS_LIMIT_MB,
+                    "RSS at step {step} ({rss:.0} MB) exceeds 16 GB limit"
+                );
+            }
+        }
+
+        let rss_final = read_rss_mb();
+        eprintln!("Final RSS after {step} steps: {rss_final:.0} MB");
+        assert!(
+            rss_final < RSS_LIMIT_MB,
+            "Final RSS ({rss_final:.0} MB) exceeds 16 GB limit"
+        );
     }
 }
 
