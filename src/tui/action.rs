@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
@@ -27,7 +29,7 @@ pub enum Action {
     SimStop,
     SimRestart,
     #[strum(to_string = "SimUpdate")]
-    SimUpdate(Box<SimState>),
+    SimUpdate(Arc<SimState>),
     StatusMsg(String),
     // Scrubbing (time navigation)
     ScrubBackward,

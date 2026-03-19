@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use ratatui::{
@@ -17,7 +18,7 @@ use crate::{
 
 #[derive(Default)]
 pub struct ExitTab {
-    sim_state: Option<SimState>,
+    sim_state: Option<Arc<SimState>>,
     start_time: Option<Instant>,
     end_time: Option<Instant>,
     command_tx: Option<UnboundedSender<Action>>,
@@ -45,7 +46,7 @@ impl Component for ExitTab {
                 if state.exit_reason.is_some() {
                     self.end_time = Some(Instant::now());
                 }
-                self.sim_state = Some(*state);
+                self.sim_state = Some(state);
             }
             Action::SimStop => {
                 self.end_time = Some(Instant::now());

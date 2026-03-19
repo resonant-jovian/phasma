@@ -266,7 +266,7 @@ impl App {
                 latest = Some(state);
             }
             if let Some(state) = latest {
-                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
+                self.action_tx.send(Action::SimUpdate(state))?;
             }
         }
 
@@ -277,7 +277,7 @@ impl App {
                 latest = Some(state);
             }
             if let Some(state) = latest {
-                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
+                self.action_tx.send(Action::SimUpdate(state))?;
             }
         }
 
@@ -674,6 +674,9 @@ impl App {
                     self.data_provider.reset();
                     if let Some(ref path) = self.config_path {
                         self.sim_handle = Some(SimHandle::spawn(path.clone()));
+                        if let Some(ref handle) = self.sim_handle {
+                            self.tab_view.set_step_progress(handle.progress.clone());
+                        }
                         self.sim_paused = false;
                         self.status_bar.on_sim_start();
                     }
@@ -684,6 +687,7 @@ impl App {
                     }
                     self.sim_handle = None;
                     self.sim_paused = false;
+                    self.tab_view.clear_step_progress();
                     self.status_bar.on_sim_stop();
                 }
                 Action::SimPause => {
@@ -713,6 +717,9 @@ impl App {
                     // Now start
                     if let Some(ref path) = self.config_path {
                         self.sim_handle = Some(SimHandle::spawn(path.clone()));
+                        if let Some(ref handle) = self.sim_handle {
+                            self.tab_view.set_step_progress(handle.progress.clone());
+                        }
                         self.sim_paused = false;
                         self.status_bar.on_sim_start();
                     }

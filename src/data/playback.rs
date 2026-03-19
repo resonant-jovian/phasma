@@ -162,10 +162,10 @@ impl DataProvider for PlaybackDataProvider {
             if !slice.is_empty() {
                 Some((slice.clone(), s.phase_nx, s.phase_nv))
             } else {
-                Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+                None
             }
         } else {
-            Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+            None
         }
     }
 

@@ -1,6 +1,7 @@
 //! Filesystem watcher for monitoring running batch jobs (--monitor / --tail).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::sim::{SimState, StateReceiver};
 
@@ -19,7 +20,7 @@ impl MonitorHandle {
     /// Watch a batch output directory for new snapshot files.
     /// Loads existing snapshots for catch-up, then watches for new files.
     pub fn spawn(dir: PathBuf) -> Self {
-        let (state_tx, state_rx) = crossbeam_channel::bounded::<SimState>(2);
+        let (state_tx, state_rx) = crossbeam_channel::bounded::<Arc<SimState>>(2);
 
         let task = tokio::task::spawn_blocking(move || {
             watch_directory(&dir, &state_tx);
@@ -32,7 +33,7 @@ impl MonitorHandle {
     }
 }
 
-fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
+fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<Arc<SimState>>) {
     let snap_dir = dir.join("snapshots");
 
     // Phase 1: catch-up — load existing snapshots
@@ -53,7 +54,7 @@ fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
         for entry in entries {
             if let Ok(json) = std::fs::read_to_string(entry.path())
                 && let Ok(state) = serde_json::from_str::<SimState>(&json)
-                && state_tx.send(state).is_err()
+                && state_tx.send(Arc::new(state)).is_err()
             {
                 return;
             }
@@ -61,7 +62,9 @@ fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
     }
 
     // Phase 2: poll for new files
-    let mut seen_count = count_snapshots(&snap_dir);
+    let mut seen_count = read_snapshot_entries(&snap_dir)
+        .map(|v| v.len())
+        .unwrap_or(0);
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -73,21 +76,20 @@ fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
             false
         };
 
-        let current_count = count_snapshots(&snap_dir);
-        if current_count > seen_count {
-            // Load new snapshots
-            if let Ok(mut entries) = read_snapshot_entries(&snap_dir) {
-                entries.sort_by_key(|e| e.file_name());
-                for entry in entries.into_iter().skip(seen_count) {
-                    if let Ok(json) = std::fs::read_to_string(entry.path())
-                        && let Ok(state) = serde_json::from_str::<SimState>(&json)
-                        && state_tx.send(state).is_err()
-                    {
-                        return;
-                    }
+        // Single directory read: get entries, check count, load new ones
+        if let Ok(mut entries) = read_snapshot_entries(&snap_dir)
+            && entries.len() > seen_count
+        {
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries.iter().skip(seen_count) {
+                if let Ok(json) = std::fs::read_to_string(entry.path())
+                    && let Ok(state) = serde_json::from_str::<SimState>(&json)
+                    && state_tx.send(Arc::new(state)).is_err()
+                {
+                    return;
                 }
             }
-            seen_count = current_count;
+            seen_count = entries.len();
         }
 
         if run_complete {
@@ -97,17 +99,11 @@ fn watch_directory(dir: &Path, state_tx: &crossbeam_channel::Sender<SimState>) {
                 && let Ok(json) = std::fs::read_to_string(&final_path)
                 && let Ok(state) = serde_json::from_str::<SimState>(&json)
             {
-                let _ = state_tx.send(state);
+                let _ = state_tx.send(Arc::new(state));
             }
             break;
         }
     }
-}
-
-fn count_snapshots(snap_dir: &Path) -> usize {
-    read_snapshot_entries(snap_dir)
-        .map(|v| v.len())
-        .unwrap_or(0)
 }
 
 fn read_snapshot_entries(snap_dir: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
