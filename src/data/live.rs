@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::DataProvider;
 use crate::{config::PhasmaConfig, sim::SimState};
@@ -16,6 +18,8 @@ pub struct TimeSeriesStore {
     /// The very first value ever pushed (for drift calculations)
     initial: Option<(f64, f64)>,
     subsample_count: usize,
+    /// Dirty flag for cache invalidation (AtomicBool for Sync compatibility).
+    dirty: AtomicBool,
 }
 
 impl Default for TimeSeriesStore {
@@ -25,6 +29,7 @@ impl Default for TimeSeriesStore {
             history: Vec::new(),
             initial: None,
             subsample_count: 0,
+            dirty: AtomicBool::new(false),
         }
     }
 }
@@ -45,6 +50,7 @@ impl TimeSeriesStore {
             self.history.push((t, v));
             self.subsample_count = 0;
         }
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Chart data covering the full simulation from t=0 to now.
@@ -66,6 +72,7 @@ impl TimeSeriesStore {
 
         // Then append the full recent window
         data.extend(self.recent.iter().copied());
+        self.dirty.store(false, Ordering::Relaxed);
         data
     }
 
@@ -174,11 +181,11 @@ impl DiagnosticsStore {
 const SNAPSHOT_HISTORY_CAP: usize = 100;
 
 pub struct LiveDataProvider {
-    current: Option<SimState>,
+    current: Option<Arc<SimState>>,
     pub diagnostics: DiagnosticsStore,
     config: Option<PhasmaConfig>,
     /// Ring buffer of recent SimState snapshots for scrubbing.
-    snapshot_history: VecDeque<SimState>,
+    snapshot_history: VecDeque<Arc<SimState>>,
     /// Index into snapshot_history for scrubbing. None = live (latest).
     scrub_index: Option<usize>,
     /// Subsample counter to avoid storing every single step.
@@ -214,7 +221,7 @@ impl LiveDataProvider {
     }
 
     /// Ingest a new SimState (called from App when SimUpdate arrives).
-    pub fn update(&mut self, state: &SimState) {
+    pub fn update(&mut self, state: &Arc<SimState>) {
         self.diagnostics.push_state(state);
 
         // Store snapshots for scrubbing (every 5th step to limit memory)
@@ -231,11 +238,11 @@ impl LiveDataProvider {
                     }
                 }
             }
-            self.snapshot_history.push_back(state.clone());
+            self.snapshot_history.push_back(Arc::clone(state));
             self.snap_subsample = 0;
         }
 
-        self.current = Some(state.clone());
+        self.current = Some(Arc::clone(state));
     }
 
     /// Scrub backward one snapshot in history.
@@ -292,9 +299,9 @@ impl LiveDataProvider {
     /// Get the effective state (scrubbed or live).
     fn effective_state(&self) -> Option<&SimState> {
         if let Some(idx) = self.scrub_index {
-            self.snapshot_history.get(idx)
+            self.snapshot_history.get(idx).map(|s| s.as_ref())
         } else {
-            self.current.as_ref()
+            self.current.as_deref()
         }
     }
 }
@@ -323,15 +330,12 @@ impl DataProvider for LiveDataProvider {
         let idx = dim_x.min(2) * 3 + dim_v.min(2);
         if let Some(slice) = s.phase_slices.get(idx) {
             if !slice.is_empty() {
-                // Infer nx/nv from the slice: phase_nx/phase_nv are for dim 0.
-                // All spatial dims have same resolution and all velocity dims have same resolution.
                 Some((slice.clone(), s.phase_nx, s.phase_nv))
             } else {
-                // Fallback to legacy single slice
-                Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+                None
             }
         } else {
-            Some((s.phase_slice.clone(), s.phase_nx, s.phase_nv))
+            None
         }
     }
 

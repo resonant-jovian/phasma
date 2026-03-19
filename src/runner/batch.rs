@@ -37,7 +37,7 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
 
     // Open diagnostics CSV
     let csv_path = output_dir.join("diagnostics.csv");
-    let mut csv_file = std::fs::File::create(&csv_path)?;
+    let mut csv_file = std::io::BufWriter::new(std::fs::File::create(&csv_path)?);
     writeln!(
         csv_file,
         "time,step,total_energy,kinetic_energy,potential_energy,total_mass,\
@@ -49,7 +49,7 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
     let mut snapshot_count: usize = 0;
     let mut last_snapshot_t: f64 = f64::NEG_INFINITY;
     let snapshot_interval = cfg.output.snapshot_interval;
-    let mut final_state: Option<SimState> = None;
+    let mut final_state: Option<std::sync::Arc<SimState>> = None;
 
     while let Some(state) = handle.state_rx.recv_async().await {
         // Append to diagnostics CSV
@@ -87,7 +87,7 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
         // Periodic snapshots
         if state.t - last_snapshot_t >= snapshot_interval {
             let snap_path = snap_dir.join(format!("state_{:06}.json", snapshot_count));
-            if let Ok(json) = serde_json::to_string_pretty(&state) {
+            if let Ok(json) = serde_json::to_string(&*state) {
                 let _ = std::fs::write(&snap_path, json);
             }
             snapshot_count += 1;
@@ -111,7 +111,7 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
     // Write final snapshot
     if let Some(ref state) = final_state {
         let final_path = snap_dir.join("state_final.json");
-        if let Ok(json) = serde_json::to_string_pretty(state) {
+        if let Ok(json) = serde_json::to_string_pretty(&**state) {
             let _ = std::fs::write(&final_path, json);
         }
     }

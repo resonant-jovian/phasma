@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -19,7 +21,7 @@ const MAX_HISTORY: usize = 500;
 
 #[derive(Default)]
 pub struct RunTab {
-    sim_state: Option<SimState>,
+    sim_state: Option<Arc<SimState>>,
     /// Accumulated (t, E/E₀) pairs for the energy chart.
     energy_history: Vec<(f64, f64)>,
     paused: bool,
@@ -70,7 +72,7 @@ impl Component for RunTab {
                     }
                     self.energy_history.push((state.t, e_ratio));
                 }
-                self.sim_state = Some(*state);
+                self.sim_state = Some(state);
             }
             Action::SimPause => self.paused = true,
             Action::SimResume => self.paused = false,
@@ -197,8 +199,13 @@ impl RunTab {
                 );
                 frame.render_widget(density, density_area);
 
+                let ps_data = state
+                    .phase_slices
+                    .first()
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
                 let phase = DensityMap::new(
-                    &state.phase_slice,
+                    ps_data,
                     state.phase_nx,
                     state.phase_nv,
                     " f(x,vx) phase-space slice ",

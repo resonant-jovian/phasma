@@ -45,12 +45,14 @@ pub fn export_vtk(dir: &Path, state: Option<&SimState>, stem: &str) -> Result<St
         "density_yz",
     )?;
 
-    // Also export phase-space slice
-    if !state.phase_slice.is_empty() {
+    // Also export phase-space slice (x1-v1 projection)
+    if let Some(ps) = state.phase_slices.first()
+        && !ps.is_empty()
+    {
         export_vtk_2d(
             dir,
             &format!("{stem}_phase_xvx.vtk"),
-            &state.phase_slice,
+            ps,
             state.phase_nx,
             state.phase_nv,
             "phase_xvx",

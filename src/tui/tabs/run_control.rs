@@ -366,9 +366,14 @@ impl RunControlTab {
                 );
 
                 // Phase-space: use 1:1 aspect (equal ranges → visually square)
+                let ps_data = state
+                    .phase_slices
+                    .first()
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
                 frame.render_widget(
                     HeatmapWidget::new(
-                        &state.phase_slice,
+                        ps_data,
                         state.phase_nx,
                         state.phase_nv,
                         " f(x,vx) phase-space ",

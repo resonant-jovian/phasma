@@ -49,13 +49,14 @@ pub fn export_animation_frames(
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;
     }
 
-    // Export phase-space slice
-    if state.phase_nx > 0 && state.phase_nv > 0 {
-        let arr = ndarray::Array2::from_shape_vec(
-            (state.phase_nv, state.phase_nx),
-            state.phase_slice.clone(),
-        )
-        .map_err(|e| format!("array shape phase: {e}"))?;
+    // Export phase-space slice (x1-v1 projection)
+    if state.phase_nx > 0
+        && state.phase_nv > 0
+        && let Some(ps) = state.phase_slices.first()
+        && !ps.is_empty()
+    {
+        let arr = ndarray::Array2::from_shape_vec((state.phase_nv, state.phase_nx), ps.clone())
+            .map_err(|e| format!("array shape phase: {e}"))?;
         let path = frames_dir.join(format!("{stem}_phase_xvx_t{:.4}.npy", state.t));
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;
     }

@@ -266,7 +266,7 @@ impl App {
                 latest = Some(state);
             }
             if let Some(state) = latest {
-                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
+                self.action_tx.send(Action::SimUpdate(state))?;
             }
         }
 
@@ -277,7 +277,7 @@ impl App {
                 latest = Some(state);
             }
             if let Some(state) = latest {
-                self.action_tx.send(Action::SimUpdate(Box::new(state)))?;
+                self.action_tx.send(Action::SimUpdate(state))?;
             }
         }
 

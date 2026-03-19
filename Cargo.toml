@@ -38,12 +38,12 @@ directories = "6.0.0"
 libc = "1.0.0-alpha.3"
 rayon = "1.11.0"
 ratatui = { version = "0.30.0", features = ["serde", "macros"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 signal-hook = "0.4.3"
 strip-ansi-escapes = "0.2.1"
 strum = { version = "0.28.0", features = ["derive"] }
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = "0.1.18"
 tokio-util = "0.7.18"
 tracing = "0.1.44"

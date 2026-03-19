@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -9,13 +10,13 @@ use tokio::task::JoinHandle;
 /// Dual-mode receiver: bounded crossbeam for TUI (back-pressure tolerant),
 /// unbounded tokio for runners (need every state for CSV output).
 pub enum StateReceiver {
-    Bounded(crossbeam_channel::Receiver<SimState>),
-    Unbounded(mpsc::UnboundedReceiver<SimState>),
+    Bounded(crossbeam_channel::Receiver<Arc<SimState>>),
+    Unbounded(mpsc::UnboundedReceiver<Arc<SimState>>),
 }
 
 impl StateReceiver {
     /// Non-blocking try_recv — drains to latest in TUI event loop.
-    pub fn try_recv(&mut self) -> Result<SimState, ()> {
+    pub fn try_recv(&mut self) -> Result<Arc<SimState>, ()> {
         match self {
             StateReceiver::Bounded(rx) => rx.try_recv().map_err(|_| ()),
             StateReceiver::Unbounded(rx) => rx.try_recv().map_err(|_| ()),
@@ -23,7 +24,7 @@ impl StateReceiver {
     }
 
     /// Async recv — used by runners (batch, sweep, convergence).
-    pub async fn recv_async(&mut self) -> Option<SimState> {
+    pub async fn recv_async(&mut self) -> Option<Arc<SimState>> {
         match self {
             StateReceiver::Bounded(rx) => {
                 let rx = rx.clone();
@@ -38,12 +39,12 @@ impl StateReceiver {
 }
 
 enum StateSender {
-    Bounded(crossbeam_channel::Sender<SimState>),
-    Unbounded(mpsc::UnboundedSender<SimState>),
+    Bounded(crossbeam_channel::Sender<Arc<SimState>>),
+    Unbounded(mpsc::UnboundedSender<Arc<SimState>>),
 }
 
 impl StateSender {
-    fn send(&self, state: SimState) -> Result<(), ()> {
+    fn send(&self, state: Arc<SimState>) -> Result<(), ()> {
         match self {
             StateSender::Bounded(tx) => {
                 // try_send: drop if full — TUI only needs latest
@@ -236,7 +237,7 @@ impl SimHandle {
     /// Spawn with bounded(2) channel — for TUI mode (back-pressure tolerant).
     pub fn spawn(config_path: String) -> Self {
         let verbose = VERBOSE.load(std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = crossbeam_channel::bounded::<SimState>(2);
+        let (tx, rx) = crossbeam_channel::bounded::<Arc<SimState>>(2);
         Self::spawn_inner(
             config_path,
             StateSender::Bounded(tx),
@@ -248,7 +249,7 @@ impl SimHandle {
     /// Spawn with unbounded channel — for runners that need every state (batch, sweep, etc.).
     pub fn spawn_unbounded(config_path: String) -> Self {
         let verbose = VERBOSE.load(std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = mpsc::unbounded_channel::<SimState>();
+        let (tx, rx) = mpsc::unbounded_channel::<Arc<SimState>>();
         Self::spawn_inner(
             config_path,
             StateSender::Unbounded(tx),
@@ -259,7 +260,7 @@ impl SimHandle {
 
     #[allow(dead_code)]
     pub fn spawn_with_verbose(config_path: String, verbose: bool) -> Self {
-        let (tx, rx) = crossbeam_channel::bounded::<SimState>(2);
+        let (tx, rx) = crossbeam_channel::bounded::<Arc<SimState>>(2);
         Self::spawn_inner(
             config_path,
             StateSender::Bounded(tx),
@@ -314,7 +315,7 @@ fn run_caustic_sim(
         Ok(s) => s,
         Err(e) => {
             eprintln!("phasma: sim build error: {e:#}");
-            let _ = state_tx.send(error_state(e.to_string()));
+            let _ = state_tx.send(Arc::new(error_state(e.to_string())));
             return;
         }
     };
@@ -340,6 +341,8 @@ fn run_caustic_sim(
         .unwrap_or_else(|_| "fft_periodic".to_string());
     let mut paused = false;
     let mut first_state = true;
+    let mut diag_step: u64 = 0;
+    const POISSON_DIAG_INTERVAL: u64 = 10;
 
     if verbose {
         build_logs.push(format!(
@@ -364,6 +367,8 @@ fn run_caustic_sim(
         match sim.step() {
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+                let compute_poisson_diag = diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
+                diag_step += 1;
                 let mut state = extract_sim_state(
                     &sim,
                     initial_energy,
@@ -373,6 +378,7 @@ fn run_caustic_sim(
                     spatial_extent,
                     grav_const,
                     &poisson_type,
+                    compute_poisson_diag,
                 );
                 // Attach build logs to first state, per-step verbose to subsequent
                 if first_state {
@@ -388,7 +394,7 @@ fn run_caustic_sim(
                         state.energy_drift()
                     ));
                 }
-                if state_tx.send(state).is_err() {
+                if state_tx.send(Arc::new(state)).is_err() {
                     return;
                 }
             }
@@ -404,6 +410,7 @@ fn run_caustic_sim(
                     spatial_extent,
                     grav_const,
                     &poisson_type,
+                    true, // always compute diagnostics on exit
                 );
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
@@ -414,11 +421,11 @@ fn run_caustic_sim(
                         state.step, state.t
                     ));
                 }
-                let _ = state_tx.send(state);
+                let _ = state_tx.send(Arc::new(state));
                 return;
             }
             Err(_e) => {
-                let _ = state_tx.send(error_state(format!("step error: {_e}")));
+                let _ = state_tx.send(Arc::new(error_state(format!("step error: {_e}"))));
                 return;
             }
         }
@@ -1203,6 +1210,7 @@ fn extract_sim_state(
     spatial_extent: f64,
     grav_const: f64,
     poisson_type: &str,
+    compute_poisson_diag: bool,
 ) -> SimState {
     let diag = sim
         .diagnostics
@@ -1234,41 +1242,52 @@ fn extract_sim_state(
         }
     }
 
-    // Poisson diagnostics: residual and power spectrum
-    let potential = sim.poisson.solve(&density, sim.g);
-    let dx = sim.domain.dx();
-    let residual = compute_poisson_residual_l2(
-        &density.data,
-        &potential.data,
-        density.shape,
-        sim.g,
-        [dx[0], dx[1], dx[2]],
-    );
-    let spectrum = if density.shape.iter().all(|&n| n <= 32) {
-        Some(compute_potential_power_spectrum(
+    // Poisson diagnostics: residual and power spectrum (only every Nth step)
+    let (residual, spectrum, density_ps, field_es) = if compute_poisson_diag {
+        let potential = sim.poisson.solve(&density, sim.g);
+        let dx = sim.domain.dx();
+        let r = compute_poisson_residual_l2(
+            &density.data,
             &potential.data,
-            potential.shape,
+            density.shape,
+            sim.g,
             [dx[0], dx[1], dx[2]],
-        ))
+        );
+        let sp = if density.shape.iter().all(|&n| n <= 32) {
+            Some(compute_potential_power_spectrum(
+                &potential.data,
+                potential.shape,
+                [dx[0], dx[1], dx[2]],
+            ))
+        } else {
+            None
+        };
+        // Spectral diagnostics (Phase 5 gap analysis)
+        let (dps, fes) = if density.shape.iter().all(|&n| n <= 32) {
+            let dps = caustic::PhaseSpaceDiagnostics::power_spectrum(&density);
+            let fes = caustic::field_energy_spectrum(&potential, [dx[0], dx[1], dx[2]]);
+            (Some(dps), Some(fes))
+        } else {
+            (None, None)
+        };
+        (Some(r), sp, dps, fes)
     } else {
-        None
-    };
-
-    // Spectral diagnostics (Phase 5 gap analysis)
-    let (density_ps, field_es) = if density.shape.iter().all(|&n| n <= 32) {
-        let dps = caustic::PhaseSpaceDiagnostics::power_spectrum(&density);
-        let fes = caustic::field_energy_spectrum(&potential, [dx[0], dx[1], dx[2]]);
-        (Some(dps), Some(fes))
-    } else {
-        (None, None)
+        (None, None, None, None)
     };
 
     // Phase-space projections f(x_i, v_j) for all 9 (dim_x, dim_v) combinations.
-    let snap = sim.repr.to_snapshot(sim.time);
-    let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
-    let s = [sx1, sx2, sx3, sv1, sv2, sv3];
-    let phase_slices = compute_all_phase_slices(&snap.data, s);
-    let phase_slice = phase_slices[0].clone(); // x1-v1 for backward compat
+    // Skip materialization for large grids (threshold: 64^6 ≈ 68B elements).
+    const PHASE_SNAPSHOT_THRESHOLD: usize = 64 * 64 * 64 * 64 * 64 * 64;
+    let total_elements = sim.domain.total_cells();
+    let (phase_slices, phase_nx, phase_nv) = if total_elements <= PHASE_SNAPSHOT_THRESHOLD {
+        let snap = sim.repr.to_snapshot(sim.time);
+        let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
+        let s = [sx1, sx2, sx3, sv1, sv2, sv3];
+        let slices = compute_all_phase_slices(&snap.data, s);
+        (slices, sx1, sv1)
+    } else {
+        (vec![vec![]; 9], 0, 0)
+    };
 
     // Repr memory via trait method (works for all representations)
     let repr_mem = sim.repr.memory_bytes();
@@ -1321,9 +1340,9 @@ fn extract_sim_state(
         density_ny: nx2,
         density_nz: nx3,
         phase_slices,
-        phase_slice,
-        phase_nx: sx1,
-        phase_nv: sv1,
+        phase_slice: vec![],
+        phase_nx,
+        phase_nv,
         spatial_extent,
         gravitational_constant: grav_const,
         dt: 0.0, // computed by consumer from time differences
@@ -1334,7 +1353,7 @@ fn extract_sim_state(
         compression_ratio,
         repr_type,
         poisson_type: poisson_type.to_string(),
-        poisson_residual_l2: Some(residual),
+        poisson_residual_l2: residual,
         potential_power_spectrum: spectrum,
         density_power_spectrum: density_ps,
         field_energy_spectrum: field_es,
@@ -1395,45 +1414,71 @@ fn zero_diag() -> caustic::GlobalDiagnostics {
     }
 }
 
-/// Compute all 9 phase-space 2D projections f(x_i, v_j) from 6D data.
+/// Compute all 9 phase-space 2D projections f(x_i, v_j) from 6D data in a single pass.
 /// Returns Vec of 9 flat arrays, indexed by dim_x * 3 + dim_v.
 fn compute_all_phase_slices(data: &[f64], shape: [usize; 6]) -> Vec<Vec<f64>> {
+    use rayon::prelude::*;
+
     let [sx1, sx2, sx3, sv1, sv2, sv3] = shape;
     let spatial = [sx1, sx2, sx3];
     let velocity = [sv1, sv2, sv3];
 
-    (0..9)
-        .map(|idx| {
-            let dim_x = idx / 3;
-            let dim_v = idx % 3;
-            let nx = spatial[dim_x];
-            let nv = velocity[dim_v];
-            let mut out = vec![0.0f64; nx * nv];
+    // Pre-compute output sizes
+    let sizes: Vec<(usize, usize)> = (0..9)
+        .map(|idx| (spatial[idx / 3], velocity[idx % 3]))
+        .collect();
 
-            for i1 in 0..sx1 {
-                for i2 in 0..sx2 {
-                    for i3 in 0..sx3 {
-                        for j1 in 0..sv1 {
-                            for j2 in 0..sv2 {
-                                for j3 in 0..sv3 {
-                                    let flat = i1 * sx2 * sx3 * sv1 * sv2 * sv3
-                                        + i2 * sx3 * sv1 * sv2 * sv3
-                                        + i3 * sv1 * sv2 * sv3
-                                        + j1 * sv2 * sv3
-                                        + j2 * sv3
-                                        + j3;
-                                    let ix = [i1, i2, i3][dim_x];
-                                    let iv = [j1, j2, j3][dim_v];
-                                    out[ix * nv + iv] += data[flat];
+    // Pre-compute strides
+    let stride2 = sx3 * sv1 * sv2 * sv3;
+    let stride3 = sv1 * sv2 * sv3;
+    let stride_v1 = sv2 * sv3;
+    let stride_v2 = sv3;
+
+    // Parallel over outermost spatial dimension, single pass accumulating all 9 projections.
+    let per_slab: Vec<Vec<Vec<f64>>> = (0..sx1)
+        .into_par_iter()
+        .map(|i1| {
+            let mut slices: Vec<Vec<f64>> =
+                sizes.iter().map(|&(nx, nv)| vec![0.0; nx * nv]).collect();
+            let base1 = i1 * sx2 * stride2;
+            for i2 in 0..sx2 {
+                let base2 = base1 + i2 * stride2;
+                for i3 in 0..sx3 {
+                    let base3 = base2 + i3 * stride3;
+                    let si = [i1, i2, i3];
+                    for j1 in 0..sv1 {
+                        let base_v1 = base3 + j1 * stride_v1;
+                        for j2 in 0..sv2 {
+                            let base_v2 = base_v1 + j2 * stride_v2;
+                            for j3 in 0..sv3 {
+                                let val = data[base_v2 + j3];
+                                let vj = [j1, j2, j3];
+                                for idx in 0..9 {
+                                    let dim_x = idx / 3;
+                                    let dim_v = idx % 3;
+                                    let ix = si[dim_x];
+                                    let iv = vj[dim_v];
+                                    slices[idx][ix * sizes[idx].1 + iv] += val;
                                 }
                             }
                         }
                     }
                 }
             }
-            out
+            slices
         })
-        .collect()
+        .collect();
+
+    // Reduce: sum per-slab results
+    let mut result: Vec<Vec<f64>> = sizes.iter().map(|&(nx, nv)| vec![0.0; nx * nv]).collect();
+    for slab in per_slab {
+        for (idx, slab_slice) in slab.into_iter().enumerate() {
+            for (dst, src) in result[idx].iter_mut().zip(slab_slice.iter()) {
+                *dst += src;
+            }
+        }
+    }
+    result
 }
 
 fn error_state(msg: String) -> SimState {
