@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -27,6 +29,7 @@ pub struct DensityTab {
     last_data: Vec<f64>,
     last_nx: usize,
     last_ny: usize,
+    last_state_step: u64,
 }
 
 impl Default for DensityTab {
@@ -43,6 +46,7 @@ impl Default for DensityTab {
             last_data: Vec::new(),
             last_nx: 0,
             last_ny: 0,
+            last_state_step: u64::MAX,
         }
     }
 }
@@ -231,15 +235,20 @@ impl DensityTab {
         };
         let hm_draw = asp.letterbox(hm_draw, x_extent, y_extent).rect;
 
-        // Store data for mouse cursor lookups
+        // Store data for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = hm_draw;
-        self.last_data = view_data.clone();
-        self.last_nx = vnx;
-        self.last_ny = vny;
+        if let Some(s) = state
+            && (s.step != self.last_state_step || vnx != self.last_nx || vny != self.last_ny)
+        {
+            self.last_data = view_data.into_owned();
+            self.last_state_step = s.step;
+            self.last_nx = vnx;
+            self.last_ny = vny;
+        }
 
-        // Contour overlay
-        if self.show_contours && !view_data.is_empty() && vnx > 0 && vny > 0 {
-            overlay_contours(frame, hm_draw, &view_data, vnx, vny, self.log_scale);
+        // Contour overlay (uses cached data)
+        if self.show_contours && !self.last_data.is_empty() && vnx > 0 && vny > 0 {
+            overlay_contours(frame, hm_draw, &self.last_data, vnx, vny, self.log_scale);
         }
 
         if self.show_info && info_area.width > 0 {
@@ -379,9 +388,15 @@ fn data_range(data: &[f64], log_scale: bool) -> (f64, f64) {
 }
 
 /// Crop data to a centered sub-region defined by zoom level.
-fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32) -> (Vec<f64>, usize, usize) {
+/// Returns `Cow::Borrowed` at zoom ≤ 1.0 (zero-copy), `Cow::Owned` when zoomed.
+fn crop_data<'a>(
+    data: &'a [f64],
+    nx: usize,
+    ny: usize,
+    zoom: f32,
+) -> (Cow<'a, [f64]>, usize, usize) {
     if zoom <= 1.0 {
-        return (data.to_vec(), nx, ny);
+        return (Cow::Borrowed(data), nx, ny);
     }
     let view_w = (nx as f32 / zoom).ceil().max(1.0) as usize;
     let view_h = (ny as f32 / zoom).ceil().max(1.0) as usize;
@@ -399,5 +414,5 @@ fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32) -> (Vec<f64>, usize,
             out.push(data[iy * nx + ix]);
         }
     }
-    (out, view_w, view_h)
+    (Cow::Owned(out), view_w, view_h)
 }

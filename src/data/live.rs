@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::borrow::Cow;
+
 use super::DataProvider;
 use crate::{config::PhasmaConfig, sim::SimState};
 
@@ -291,6 +293,8 @@ impl LiveDataProvider {
             if dist < best_dist {
                 best_dist = dist;
                 best_idx = i;
+            } else {
+                break; // times are monotonically increasing; past the closest match
             }
         }
         self.scrub_index = Some(best_idx);
@@ -311,12 +315,12 @@ impl DataProvider for LiveDataProvider {
         self.effective_state()
     }
 
-    fn density_projection(&self, axis: usize) -> Option<(Vec<f64>, usize, usize)> {
+    fn density_projection(&self, axis: usize) -> Option<(Cow<'_, [f64]>, usize, usize)> {
         let s = self.effective_state()?;
         match axis {
-            0 => Some((s.density_yz.clone(), s.density_ny, s.density_nz)),
-            1 => Some((s.density_xz.clone(), s.density_nx, s.density_nz)),
-            _ => Some((s.density_xy.clone(), s.density_nx, s.density_ny)),
+            0 => Some((Cow::Borrowed(&s.density_yz), s.density_ny, s.density_nz)),
+            1 => Some((Cow::Borrowed(&s.density_xz), s.density_nx, s.density_nz)),
+            _ => Some((Cow::Borrowed(&s.density_xy), s.density_nx, s.density_ny)),
         }
     }
 
@@ -325,12 +329,12 @@ impl DataProvider for LiveDataProvider {
         dim_x: usize,
         dim_v: usize,
         _fixed: &[(usize, f64)],
-    ) -> Option<(Vec<f64>, usize, usize)> {
+    ) -> Option<(Cow<'_, [f64]>, usize, usize)> {
         let s = self.effective_state()?;
         let idx = dim_x.min(2) * 3 + dim_v.min(2);
         if let Some(slice) = s.phase_slices.get(idx) {
             if !slice.is_empty() {
-                Some((slice.clone(), s.phase_nx, s.phase_nv))
+                Some((Cow::Borrowed(slice), s.phase_nx, s.phase_nv))
             } else {
                 None
             }

@@ -357,6 +357,10 @@ fn run_caustic_sim(
     let mut first_state = true;
     let mut diag_step: u64 = 0;
     const POISSON_DIAG_INTERVAL: u64 = 10;
+    const PHASE_DIAG_INTERVAL: u64 = 5;
+    let mut cached_phase_slices: Vec<Vec<f64>> = vec![vec![]; 9];
+    let mut cached_phase_nx: usize = 0;
+    let mut cached_phase_nv: usize = 0;
 
     if verbose {
         build_logs.push(format!(
@@ -382,6 +386,7 @@ fn run_caustic_sim(
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
                 let compute_poisson_diag = diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
+                let compute_phase = diag_step.is_multiple_of(PHASE_DIAG_INTERVAL);
                 diag_step += 1;
                 let mut state = extract_sim_state(
                     &sim,
@@ -393,7 +398,18 @@ fn run_caustic_sim(
                     grav_const,
                     &poisson_type,
                     compute_poisson_diag,
+                    compute_phase,
                 );
+                // Cache or reuse phase-space projections
+                if compute_phase && state.phase_nx > 0 {
+                    cached_phase_slices.clone_from(&state.phase_slices);
+                    cached_phase_nx = state.phase_nx;
+                    cached_phase_nv = state.phase_nv;
+                } else if cached_phase_nx > 0 {
+                    state.phase_slices.clone_from(&cached_phase_slices);
+                    state.phase_nx = cached_phase_nx;
+                    state.phase_nv = cached_phase_nv;
+                }
                 // Attach build logs to first state, per-step verbose to subsequent
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
@@ -425,6 +441,7 @@ fn run_caustic_sim(
                     grav_const,
                     &poisson_type,
                     true, // always compute diagnostics on exit
+                    true, // always compute phase slices on exit
                 );
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
@@ -1234,6 +1251,7 @@ fn extract_sim_state(
     grav_const: f64,
     poisson_type: &str,
     compute_poisson_diag: bool,
+    compute_phase: bool,
 ) -> SimState {
     let diag = sim
         .diagnostics
@@ -1251,16 +1269,26 @@ fn extract_sim_state(
     let mut density_yz = vec![0.0f64; nx2 * nx3];
     let mut max_density = 0.0f64;
 
+    // Pass 1: density_xy and density_xz (ix1 outer — sequential writes for both)
     for ix1 in 0..nx1 {
         for ix2 in 0..nx2 {
             for ix3 in 0..nx3 {
                 let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
                 density_xy[ix1 * nx2 + ix2] += v;
                 density_xz[ix1 * nx3 + ix3] += v;
-                density_yz[ix2 * nx3 + ix3] += v;
                 if v > max_density {
                     max_density = v;
                 }
+            }
+        }
+    }
+
+    // Pass 2: density_yz (ix2 outer — sequential writes to density_yz[ix2 * nx3 + ix3])
+    for ix2 in 0..nx2 {
+        for ix1 in 0..nx1 {
+            for ix3 in 0..nx3 {
+                let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                density_yz[ix2 * nx3 + ix3] += v;
             }
         }
     }
@@ -1300,17 +1328,19 @@ fn extract_sim_state(
 
     // Phase-space projections f(x_i, v_j) for all 9 (dim_x, dim_v) combinations.
     // Skip materialization for large grids (threshold: 64^6 ≈ 68B elements).
+    // Only compute every Nth step (controlled by compute_phase flag); caller reuses cached slices.
     const PHASE_SNAPSHOT_THRESHOLD: usize = 64 * 64 * 64 * 64 * 64 * 64;
     let total_elements = sim.domain.total_cells();
-    let (phase_slices, phase_nx, phase_nv) = if total_elements <= PHASE_SNAPSHOT_THRESHOLD {
-        let snap = sim.repr.to_snapshot(sim.time);
-        let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
-        let s = [sx1, sx2, sx3, sv1, sv2, sv3];
-        let slices = compute_all_phase_slices(&snap.data, s);
-        (slices, sx1, sv1)
-    } else {
-        (vec![vec![]; 9], 0, 0)
-    };
+    let (phase_slices, phase_nx, phase_nv) =
+        if compute_phase && total_elements <= PHASE_SNAPSHOT_THRESHOLD {
+            let snap = sim.repr.to_snapshot(sim.time);
+            let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
+            let s = [sx1, sx2, sx3, sv1, sv2, sv3];
+            let slices = compute_all_phase_slices(&snap.data, s);
+            (slices, sx1, sv1)
+        } else {
+            (vec![vec![]; 9], 0, 0)
+        };
 
     // Repr memory via trait method (works for all representations)
     let repr_mem = sim.repr.memory_bytes();
@@ -2272,6 +2302,124 @@ mod unit_tests {
         for v in variants {
             let s = format!("{v}");
             assert!(!s.is_empty(), "{v:?} should have non-empty display");
+        }
+    }
+}
+
+#[cfg(test)]
+mod smoke_tests {
+    use super::*;
+
+    /// Maximum full-grid size (MB) for quick smoke tests.
+    /// 10 MB covers 8^6 grids (2 MB) but skips 16^6+ (134+ MB).
+    /// Uses the full N^3×N_v^3 grid size, not the compressed representation size,
+    /// since build time scales with grid dimensions even for HT/TT.
+    /// Large configs are tested via `smoke_all_full` (--ignored --release).
+    const MAX_GRID_MB: f64 = 10.0;
+
+    /// Build a simulation from a preset config and run one step.
+    /// Skips configs whose full grid exceeds the size threshold
+    /// (those are too slow in debug mode — test them via smoke_all_full).
+    macro_rules! smoke_test {
+        ($name:ident, $config:expr) => {
+            #[test]
+            fn $name() {
+                let path = format!("{}/configs/{}.toml", env!("CARGO_MANIFEST_DIR"), $config);
+                let cfg = crate::config::load(&path)
+                    .unwrap_or_else(|e| panic!("failed to load {}: {e}", $config));
+                let n = cfg.domain.spatial_resolution as u64;
+                let nv = cfg.domain.velocity_resolution as u64;
+                let grid_mb = (n.pow(3) * nv.pow(3) * 8) as f64 / 1_048_576.0;
+                if grid_mb > MAX_GRID_MB {
+                    eprintln!(
+                        "smoke_{}: skipped (grid={:.0} MB > {:.0} MB). \
+                         Use: cargo test --release smoke_all_full -- --ignored",
+                        $config, grid_mb, MAX_GRID_MB
+                    );
+                    return;
+                }
+                let progress = caustic::StepProgress::new();
+                let mut sim = build_from_config(&cfg, false, &mut Vec::new(), &progress)
+                    .unwrap_or_else(|e| panic!("failed to build {}: {e}", $config));
+                let result = sim.step();
+                assert!(
+                    result.is_ok(),
+                    "{} step failed: {:?}",
+                    $config,
+                    result.err()
+                );
+            }
+        };
+    }
+
+    smoke_test!(smoke_debug, "debug");
+    smoke_test!(smoke_disk_bar, "disk_bar");
+    smoke_test!(smoke_hernquist, "hernquist");
+    smoke_test!(smoke_jeans_stable, "jeans_stable");
+    smoke_test!(smoke_jeans_unstable, "jeans_unstable");
+    smoke_test!(smoke_king, "king");
+    smoke_test!(smoke_merger_equal, "merger_equal");
+    smoke_test!(smoke_merger_unequal, "merger_unequal");
+    smoke_test!(smoke_nfw, "nfw");
+    smoke_test!(smoke_nfw_tree, "nfw_tree");
+    smoke_test!(smoke_plummer, "plummer");
+    smoke_test!(smoke_plummer_hires, "plummer_hires");
+    smoke_test!(smoke_plummer_ht, "plummer_ht");
+    smoke_test!(smoke_plummer_lomac, "plummer_lomac");
+    smoke_test!(smoke_plummer_multigrid, "plummer_multigrid");
+    smoke_test!(smoke_plummer_spectral, "plummer_spectral");
+    smoke_test!(smoke_plummer_spherical, "plummer_spherical");
+    smoke_test!(smoke_plummer_tensor_poisson, "plummer_tensor_poisson");
+    smoke_test!(smoke_plummer_tt, "plummer_tt");
+    smoke_test!(smoke_plummer_unsplit, "plummer_unsplit");
+    smoke_test!(smoke_plummer_yoshida, "plummer_yoshida");
+    smoke_test!(smoke_tidal_nfw, "tidal_nfw");
+    smoke_test!(smoke_tidal_point, "tidal_point");
+    smoke_test!(smoke_zeldovich, "zeldovich");
+    smoke_test!(smoke_plummer_128, "plummer_128");
+
+    /// Full smoke test — builds and steps every config without memory limit.
+    /// Run with: `cargo test --release smoke_all_full -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn smoke_all_full() {
+        let configs = [
+            "debug",
+            "disk_bar",
+            "hernquist",
+            "jeans_stable",
+            "jeans_unstable",
+            "king",
+            "merger_equal",
+            "merger_unequal",
+            "nfw",
+            "nfw_tree",
+            "plummer",
+            "plummer_hires",
+            "plummer_ht",
+            "plummer_lomac",
+            "plummer_multigrid",
+            "plummer_spectral",
+            "plummer_spherical",
+            "plummer_tensor_poisson",
+            "plummer_tt",
+            "plummer_unsplit",
+            "plummer_yoshida",
+            "tidal_nfw",
+            "tidal_point",
+            "zeldovich",
+            // plummer_128 excluded — requires ~35 GB
+        ];
+        for config in configs {
+            let path = format!("{}/configs/{config}.toml", env!("CARGO_MANIFEST_DIR"));
+            let cfg = crate::config::load(&path)
+                .unwrap_or_else(|e| panic!("failed to load {config}: {e}"));
+            let progress = caustic::StepProgress::new();
+            let mut sim = build_from_config(&cfg, false, &mut Vec::new(), &progress)
+                .unwrap_or_else(|e| panic!("failed to build {config}: {e}"));
+            let result = sim.step();
+            assert!(result.is_ok(), "{config} step failed: {:?}", result.err());
+            eprintln!("  {config}: OK");
         }
     }
 }

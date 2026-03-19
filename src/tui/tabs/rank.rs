@@ -13,6 +13,7 @@ use ratatui::{
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
 use crate::tui::action::Action;
+use crate::tui::chart_utils::{data_bounds, densify};
 
 const NODE_LABELS: [&str; 11] = [
     "x\u{2081}",
@@ -30,6 +31,35 @@ const NODE_LABELS: [&str; 11] = [
 
 const MAX_HISTORY: usize = 500;
 
+/// Cached chart data derived from VecDeque histories (rebuilt when length changes).
+struct CachedRankData {
+    chart_data: Vec<(f64, f64)>,
+    trunc_data: Vec<(f64, f64)>,
+    poisson_amp: Vec<(f64, f64)>,
+    advection_amp: Vec<(f64, f64)>,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    at_len: usize,
+}
+
+impl Default for CachedRankData {
+    fn default() -> Self {
+        Self {
+            chart_data: Vec::new(),
+            trunc_data: Vec::new(),
+            poisson_amp: Vec::new(),
+            advection_amp: Vec::new(),
+            x_min: 0.0,
+            x_max: 1.0,
+            y_min: 0.0,
+            y_max: 1.0,
+            at_len: usize::MAX,
+        }
+    }
+}
+
 /// F6 Rank Monitor — visualises HT tensor rank evolution and per-node ranks.
 pub struct RankTab {
     /// Time-series of (sim_time, total_rank).
@@ -44,6 +74,8 @@ pub struct RankTab {
     last_step: u64,
     /// Selected node index for SV spectrum (0–10, cycles with j/k or n/N).
     selected_node: usize,
+    /// Cached chart data (rebuilt when history length changes).
+    cached_rank: CachedRankData,
 }
 
 impl Default for RankTab {
@@ -55,6 +87,7 @@ impl Default for RankTab {
             advection_amp_history: VecDeque::with_capacity(MAX_HISTORY),
             last_step: u64::MAX,
             selected_node: 0,
+            cached_rank: CachedRankData::default(),
         }
     }
 }
@@ -141,6 +174,48 @@ impl RankTab {
             self.last_step = state.step;
         }
 
+        // Rebuild cached chart data when history length changes
+        let current_len = self.rank_history.len();
+        if current_len != self.cached_rank.at_len {
+            let chart_data: Vec<(f64, f64)> = self
+                .rank_history
+                .iter()
+                .map(|&(t, r)| (t, r as f64))
+                .collect();
+            let (x_min, x_max, y_min, y_max) = if chart_data.len() >= 2 {
+                data_bounds(&chart_data)
+            } else {
+                (0.0, 1.0, 0.0, 1.0)
+            };
+            let trunc_data: Vec<(f64, f64)> = self
+                .trunc_error_history
+                .iter()
+                .filter(|&&(_, e)| e > 0.0)
+                .map(|&(t, e)| (t, e.log10() * 10.0 + y_max))
+                .collect();
+            let poisson_amp: Vec<(f64, f64)> = self
+                .poisson_amp_history
+                .iter()
+                .map(|&(t, a)| (t, a * y_max / 2.0))
+                .collect();
+            let advection_amp: Vec<(f64, f64)> = self
+                .advection_amp_history
+                .iter()
+                .map(|&(t, a)| (t, a * y_max / 2.0))
+                .collect();
+            self.cached_rank = CachedRankData {
+                chart_data,
+                trunc_data,
+                poisson_amp,
+                advection_amp,
+                x_min,
+                x_max,
+                y_min,
+                y_max,
+                at_len: current_len,
+            };
+        }
+
         // Compact mode: show only rank evolution chart
         if area.width < 76 {
             self.draw_rank_evolution(frame, area, theme);
@@ -224,7 +299,7 @@ impl RankTab {
             .title(" Rank Evolution ")
             .border_style(Style::default().fg(theme.border));
 
-        if self.rank_history.len() < 2 {
+        if self.cached_rank.chart_data.len() < 2 {
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -237,23 +312,16 @@ impl RankTab {
             return;
         }
 
-        let chart_data: Vec<(f64, f64)> = self
-            .rank_history
-            .iter()
-            .map(|&(t, r)| (t, r as f64))
-            .collect();
+        let (x_min, x_max, y_min, y_max) = (
+            self.cached_rank.x_min,
+            self.cached_rank.x_max,
+            self.cached_rank.y_min,
+            self.cached_rank.y_max,
+        );
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(&chart_data);
-
-        let dense = densify(&chart_data, area.width.saturating_sub(2) as usize * 2);
-
-        let trunc_data: Vec<(f64, f64)> = self
-            .trunc_error_history
-            .iter()
-            .filter(|&&(_, e)| e > 0.0)
-            .map(|&(t, e)| (t, e.log10() * 10.0 + y_max)) // scale log error into rank y-range
-            .collect();
-        let dense_trunc = densify(&trunc_data, area.width.saturating_sub(2) as usize * 2);
+        let target = area.width.saturating_sub(2) as usize * 2;
+        let dense = densify(&self.cached_rank.chart_data, target);
+        let dense_trunc = densify(&self.cached_rank.trunc_data, target);
 
         let mut datasets = vec![
             Dataset::default()
@@ -273,14 +341,7 @@ impl RankTab {
             );
         }
 
-        // Poisson rank amplification (scaled into rank y-range)
-        let poisson_amp_data: Vec<(f64, f64)> = self
-            .poisson_amp_history
-            .iter()
-            .map(|&(t, a)| (t, a * y_max / 2.0)) // scale amplification into chart range
-            .collect();
-        let dense_poisson_amp =
-            densify(&poisson_amp_data, area.width.saturating_sub(2) as usize * 2);
+        let dense_poisson_amp = densify(&self.cached_rank.poisson_amp, target);
 
         if dense_poisson_amp.len() >= 2 {
             datasets.push(
@@ -292,16 +353,7 @@ impl RankTab {
             );
         }
 
-        // Advection rank amplification
-        let advection_amp_data: Vec<(f64, f64)> = self
-            .advection_amp_history
-            .iter()
-            .map(|&(t, a)| (t, a * y_max / 2.0))
-            .collect();
-        let dense_advection_amp = densify(
-            &advection_amp_data,
-            area.width.saturating_sub(2) as usize * 2,
-        );
+        let dense_advection_amp = densify(&self.cached_rank.advection_amp, target);
 
         if dense_advection_amp.len() >= 2 {
             datasets.push(
@@ -642,60 +694,4 @@ fn format_bytes(bytes: usize) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
-    let mut x_min = f64::INFINITY;
-    let mut x_max = f64::NEG_INFINITY;
-    let mut y_min = f64::INFINITY;
-    let mut y_max = f64::NEG_INFINITY;
-    for &(x, y) in data {
-        if x < x_min {
-            x_min = x;
-        }
-        if x > x_max {
-            x_max = x;
-        }
-        if y < y_min {
-            y_min = y;
-        }
-        if y > y_max {
-            y_max = y;
-        }
-    }
-    if x_min >= x_max {
-        x_max = x_min + 1.0;
-    }
-    if y_min >= y_max {
-        y_max = y_min + 1.0;
-    }
-    let ypad = (y_max - y_min) * 0.05;
-    (x_min, x_max, y_min - ypad, y_max + ypad)
-}
-
-/// Linearly interpolate sparse data so braille line charts look solid.
-fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
-    if data.len() >= target || data.len() < 2 {
-        return data.to_vec();
-    }
-    let mut out = Vec::with_capacity(target);
-    let n_segments = data.len() - 1;
-    let points_per_seg = (target / n_segments).max(2);
-    for i in 0..n_segments {
-        let (x0, y0) = data[i];
-        let (x1, y1) = data[i + 1];
-        let steps = if i < n_segments - 1 {
-            points_per_seg
-        } else {
-            target.saturating_sub(out.len()).max(2)
-        };
-        for j in 0..steps {
-            let frac = j as f64 / steps as f64;
-            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
-        }
-    }
-    if let Some(&last) = data.last() {
-        out.push(last);
-    }
-    out
 }

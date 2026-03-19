@@ -20,6 +20,7 @@ use crate::{
     tui::{
         action::Action,
         aspect::AspectCorrection,
+        chart_utils::densify,
         config::Config,
         widgets::{
             heatmap::HeatmapWidget,
@@ -48,6 +49,8 @@ pub struct RunControlTab {
     sim_start_time: Option<std::time::Instant>,
     /// Shared atomic progress state from the sim thread.
     progress: Option<Arc<caustic::StepProgress>>,
+    /// Cached integrator type detection (persists across post-advance phases).
+    detected_integrator: DetectedIntegrator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +65,15 @@ enum LogFilter {
     All,
     WarnPlus,
     ErrorOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetectedIntegrator {
+    Strang,
+    Yoshida,
+    Lie,
+    Rkei,
+    Unsplit(u8),
 }
 
 impl Default for RunControlTab {
@@ -80,6 +92,7 @@ impl Default for RunControlTab {
             command_tx: None,
             sim_start_time: None,
             progress: None,
+            detected_integrator: DetectedIntegrator::Strang,
         }
     }
 }
@@ -400,7 +413,7 @@ impl RunControlTab {
     }
 
     fn draw_bottom(
-        &self,
+        &mut self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
@@ -534,7 +547,10 @@ impl RunControlTab {
         ])
         .areas(right_area);
 
-        self.draw_step_progress(frame, progress_area, theme);
+        let has_lomac = data_provider
+            .config()
+            .is_some_and(|c| c.solver.conservation == "lomac");
+        self.draw_step_progress(frame, progress_area, theme, has_lomac);
 
         // Diagnostics sidebar (top-right) — uses scrub-aware state
         match data_provider.current_state() {
@@ -627,7 +643,13 @@ impl RunControlTab {
         self.draw_config_summary(frame, summary_area, theme, data_provider);
     }
 
-    fn draw_step_progress(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_step_progress(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        has_lomac: bool,
+    ) {
         let snap = match &self.progress {
             Some(p) => p.read(),
             None => {
@@ -643,7 +665,47 @@ impl RunControlTab {
 
         let phase = snap.phase;
 
-        // Determine ordered list of sub-step phases and labels
+        // Update integrator detection from integrator-specific phases.
+        // This is cached so post-advance phases still know which integrator was used.
+        match phase {
+            caustic::StepPhase::YoshidaDrift1
+            | caustic::StepPhase::YoshidaKick1
+            | caustic::StepPhase::YoshidaDrift2
+            | caustic::StepPhase::YoshidaKick2
+            | caustic::StepPhase::YoshidaDrift3
+            | caustic::StepPhase::YoshidaKick3
+            | caustic::StepPhase::YoshidaDrift4 => {
+                self.detected_integrator = DetectedIntegrator::Yoshida;
+            }
+            caustic::StepPhase::RkeiStage1
+            | caustic::StepPhase::RkeiStage2
+            | caustic::StepPhase::RkeiStage3 => {
+                self.detected_integrator = DetectedIntegrator::Rkei;
+            }
+            caustic::StepPhase::UnsplitStage1
+            | caustic::StepPhase::UnsplitStage2
+            | caustic::StepPhase::UnsplitStage3
+            | caustic::StepPhase::UnsplitStage4 => {
+                self.detected_integrator = DetectedIntegrator::Unsplit(snap.sub_step_total);
+            }
+            caustic::StepPhase::DriftHalf1 | caustic::StepPhase::Kick => {
+                if snap.sub_step_total == 2 {
+                    self.detected_integrator = DetectedIntegrator::Lie;
+                } else {
+                    self.detected_integrator = DetectedIntegrator::Strang;
+                }
+            }
+            caustic::StepPhase::PoissonSolve
+            | caustic::StepPhase::ComputeDensity
+            | caustic::StepPhase::ComputeAcceleration
+            | caustic::StepPhase::DriftHalf2 => {
+                self.detected_integrator = DetectedIntegrator::Strang;
+            }
+            _ => {} // build, post-advance, idle — keep cached value
+        }
+
+        // Build unified step list: integrator phases + post-advance phases.
+        // The list is fixed-length per integrator type (no jumping).
         let (title, steps): (&str, Vec<(caustic::StepPhase, &str)>) = if phase.is_build() {
             (
                 " Build Progress ",
@@ -656,94 +718,80 @@ impl RunControlTab {
                     (caustic::StepPhase::BuildAssembly, "Assembly"),
                 ],
             )
-        } else if snap.sub_step_total == 7 {
-            // Yoshida
-            (
-                " Step Progress (Yoshida) ",
-                vec![
-                    (caustic::StepPhase::YoshidaDrift1, "Drift 1"),
-                    (caustic::StepPhase::YoshidaKick1, "Kick 1"),
-                    (caustic::StepPhase::YoshidaDrift2, "Drift 2"),
-                    (caustic::StepPhase::YoshidaKick2, "Kick 2"),
-                    (caustic::StepPhase::YoshidaDrift3, "Drift 3"),
-                    (caustic::StepPhase::YoshidaKick3, "Kick 3"),
-                    (caustic::StepPhase::YoshidaDrift4, "Drift 4"),
-                ],
-            )
-        } else if snap.sub_step_total == 3
-            && matches!(
-                phase,
-                caustic::StepPhase::RkeiStage1
-                    | caustic::StepPhase::RkeiStage2
-                    | caustic::StepPhase::RkeiStage3
-            )
-        {
-            // RKEI
-            (
-                " Step Progress (RKEI) ",
-                vec![
-                    (caustic::StepPhase::RkeiStage1, "Stage 1"),
-                    (caustic::StepPhase::RkeiStage2, "Stage 2"),
-                    (caustic::StepPhase::RkeiStage3, "Stage 3"),
-                ],
-            )
-        } else if matches!(
-            phase,
-            caustic::StepPhase::UnsplitStage1
-                | caustic::StepPhase::UnsplitStage2
-                | caustic::StepPhase::UnsplitStage3
-                | caustic::StepPhase::UnsplitStage4
-        ) {
-            // Unsplit RK
-            let stages: Vec<(caustic::StepPhase, &str)> = (0..snap.sub_step_total)
-                .map(|i| {
-                    let p = caustic::StepPhase::from_u8(40 + i);
-                    let label = match i {
-                        0 => "Stage 1",
-                        1 => "Stage 2",
-                        2 => "Stage 3",
-                        3 => "Stage 4",
-                        _ => "Stage ?",
-                    };
-                    (p, label)
-                })
-                .collect();
-            (" Step Progress (RK) ", stages)
-        } else if snap.sub_step_total == 2
-            && matches!(
-                phase,
-                caustic::StepPhase::DriftHalf1 | caustic::StepPhase::Kick
-            )
-        {
-            // Lie
-            (
-                " Step Progress (Lie) ",
-                vec![
-                    (caustic::StepPhase::DriftHalf1, "Drift"),
-                    (caustic::StepPhase::Kick, "Kick"),
-                ],
-            )
         } else {
-            // Strang (default, also InstrumentedStrang)
-            (
-                " Step Progress ",
-                vec![
-                    (caustic::StepPhase::DriftHalf1, "Drift \u{00bd}"),
-                    (caustic::StepPhase::PoissonSolve, "Poisson solve"),
-                    (caustic::StepPhase::Kick, "Kick"),
-                    (caustic::StepPhase::DriftHalf2, "Drift \u{00bd}"),
-                    (caustic::StepPhase::StepComplete, "Complete"),
-                ],
-            )
+            let (t, mut s): (&str, Vec<(caustic::StepPhase, &str)>) = match self.detected_integrator
+            {
+                DetectedIntegrator::Yoshida => (
+                    " Step Progress (Yoshida) ",
+                    vec![
+                        (caustic::StepPhase::YoshidaDrift1, "Drift 1"),
+                        (caustic::StepPhase::YoshidaKick1, "Kick 1"),
+                        (caustic::StepPhase::YoshidaDrift2, "Drift 2"),
+                        (caustic::StepPhase::YoshidaKick2, "Kick 2"),
+                        (caustic::StepPhase::YoshidaDrift3, "Drift 3"),
+                        (caustic::StepPhase::YoshidaKick3, "Kick 3"),
+                        (caustic::StepPhase::YoshidaDrift4, "Drift 4"),
+                    ],
+                ),
+                DetectedIntegrator::Rkei => (
+                    " Step Progress (RKEI) ",
+                    vec![
+                        (caustic::StepPhase::RkeiStage1, "Stage 1"),
+                        (caustic::StepPhase::RkeiStage2, "Stage 2"),
+                        (caustic::StepPhase::RkeiStage3, "Stage 3"),
+                    ],
+                ),
+                DetectedIntegrator::Unsplit(n) => {
+                    let stages: Vec<_> = (0..n)
+                        .map(|i| {
+                            let p = caustic::StepPhase::from_u8(40 + i);
+                            let label: &str = match i {
+                                0 => "Stage 1",
+                                1 => "Stage 2",
+                                2 => "Stage 3",
+                                3 => "Stage 4",
+                                _ => "Stage ?",
+                            };
+                            (p, label)
+                        })
+                        .collect();
+                    (" Step Progress (RK) ", stages)
+                }
+                DetectedIntegrator::Lie => (
+                    " Step Progress (Lie) ",
+                    vec![
+                        (caustic::StepPhase::DriftHalf1, "Drift"),
+                        (caustic::StepPhase::Kick, "Kick"),
+                    ],
+                ),
+                DetectedIntegrator::Strang => (
+                    " Step Progress ",
+                    vec![
+                        (caustic::StepPhase::DriftHalf1, "Drift \u{00bd}"),
+                        (caustic::StepPhase::PoissonSolve, "Poisson solve"),
+                        (caustic::StepPhase::Kick, "Kick"),
+                        (caustic::StepPhase::DriftHalf2, "Drift \u{00bd}"),
+                    ],
+                ),
+            };
+            // Append post-advance phases (always present, fixed-length)
+            if has_lomac {
+                s.push((caustic::StepPhase::LoMaC, "LoMaC"));
+            }
+            s.push((caustic::StepPhase::PostDensity, "Post density"));
+            s.push((caustic::StepPhase::Diagnostics, "Diagnostics"));
+            (t, s)
         };
 
-        // Also show post-advance phases if we're past the integrator
-        let post_phases = [
-            (caustic::StepPhase::LoMaC, "LoMaC"),
-            (caustic::StepPhase::PostDensity, "Post density"),
-            (caustic::StepPhase::Diagnostics, "Diagnostics"),
-            (caustic::StepPhase::StepComplete, "Complete"),
-        ];
+        // Find active step index by matching current phase against the ordered list.
+        // StepComplete means all steps are done; Idle means none started.
+        let active_idx: Option<usize> = if phase == caustic::StepPhase::StepComplete {
+            Some(steps.len()) // all done
+        } else if phase == caustic::StepPhase::Idle {
+            None
+        } else {
+            steps.iter().position(|(p, _)| *p == phase)
+        };
 
         let block = Block::bordered()
             .title(title)
@@ -754,33 +802,22 @@ impl RunControlTab {
         let max_lines = inner.height as usize;
         let mut lines: Vec<Line> = Vec::new();
 
-        // Which step index is currently active?
-        let current_idx = snap.sub_step;
-
         for (i, (_step_phase, label)) in steps.iter().enumerate() {
             if lines.len() >= max_lines.saturating_sub(1) {
                 break;
             }
-            let (marker, style) = if (i as u8) < current_idx {
-                // Done
-                (
+            let (marker, style) = match active_idx {
+                Some(idx) if i < idx => (
                     "\u{2713}", // ✓
                     Style::default().fg(theme.ok),
-                )
-            } else if i as u8 == current_idx
-                && phase != caustic::StepPhase::StepComplete
-                && phase != caustic::StepPhase::Idle
-            {
-                // Active
-                (
+                ),
+                Some(idx) if i == idx => (
                     "\u{25b8}", // ▸
                     Style::default()
                         .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                // Pending
-                (" ", Style::default().fg(theme.dim))
+                ),
+                _ => (" ", Style::default().fg(theme.dim)),
             };
 
             lines.push(Line::from(vec![
@@ -789,48 +826,24 @@ impl RunControlTab {
             ]));
         }
 
-        // Show post-advance phases when integrator is done but step isn't
-        if !phase.is_build()
-            && matches!(
-                phase,
-                caustic::StepPhase::LoMaC
-                    | caustic::StepPhase::PostDensity
-                    | caustic::StepPhase::Diagnostics
-            )
-        {
-            for (_pp, plabel) in &post_phases {
-                if lines.len() >= max_lines.saturating_sub(1) {
-                    break;
-                }
-                let (marker, style) = if phase as u8 > *_pp as u8 {
-                    ("\u{2713}", Style::default().fg(theme.ok))
-                } else if phase == *_pp {
-                    (
-                        "\u{25b8}",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    (" ", Style::default().fg(theme.dim))
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(format!(" {marker} "), style),
-                    Span::styled(format!("{:<18}", plabel), style),
-                ]));
-            }
-        }
-
-        // Footer line: elapsed time + step info
+        // Footer: step number + N/M fraction + elapsed time
         if lines.len() < max_lines {
             let step_info = if let Some(ref state) = self.sim_state {
                 if phase.is_build() {
                     String::new()
                 } else {
-                    format!("Step {} ", state.step)
+                    format!("Step {}", state.step)
                 }
             } else {
                 String::new()
+            };
+
+            let fraction = match active_idx {
+                Some(idx) if !phase.is_build() => {
+                    let current = (idx + 1).min(steps.len());
+                    format!("  {current}/{}", steps.len())
+                }
+                _ => String::new(),
             };
 
             let elapsed_str = if snap.elapsed_ms < 1000.0 {
@@ -840,7 +853,7 @@ impl RunControlTab {
             };
 
             lines.push(Line::from(vec![Span::styled(
-                format!("  {step_info:>20}{elapsed_str:>8}"),
+                format!("  {step_info:>14}{fraction:>6}{elapsed_str:>8}"),
                 Style::default().fg(theme.dim),
             )]));
         }
@@ -924,31 +937,4 @@ fn format_eta(secs: f64) -> String {
     } else {
         format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
     }
-}
-
-/// Linearly interpolate sparse data so there are at least `target` points.
-fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
-    if data.len() >= target || data.len() < 2 {
-        return data.to_vec();
-    }
-    let mut out = Vec::with_capacity(target);
-    let n_segments = data.len() - 1;
-    let points_per_seg = (target / n_segments).max(2);
-    for i in 0..n_segments {
-        let (x0, y0) = data[i];
-        let (x1, y1) = data[i + 1];
-        let steps = if i < n_segments - 1 {
-            points_per_seg
-        } else {
-            target.saturating_sub(out.len()).max(2)
-        };
-        for j in 0..steps {
-            let frac = j as f64 / steps as f64;
-            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
-        }
-    }
-    if let Some(&last) = data.last() {
-        out.push(last);
-    }
-    out
 }

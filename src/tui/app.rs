@@ -650,6 +650,10 @@ impl App {
                     self.needs_redraw = true;
                 }
                 Action::Render => {
+                    // Force continuous redraws while sim is running (progress panel polls atomics)
+                    if self.sim_handle.is_some() {
+                        self.needs_redraw = true;
+                    }
                     if self.needs_redraw {
                         self.render(tui)?;
                         self.needs_redraw = false;

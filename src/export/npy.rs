@@ -11,7 +11,7 @@ pub fn export_npy(dir: &Path, state: Option<&SimState>, stem: &str) -> Result<St
     let nx = state.density_nx;
     let ny = state.density_ny;
 
-    let arr = ndarray::Array2::from_shape_vec((ny, nx), state.density_xy.clone())
+    let arr = ndarray::ArrayView2::from_shape((ny, nx), &state.density_xy)
         .map_err(|e| format!("array shape: {e}"))?;
 
     ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;

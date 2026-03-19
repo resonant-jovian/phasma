@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -39,6 +41,7 @@ pub struct PhaseSpaceTab {
     last_data: Vec<f64>,
     last_nx: usize,
     last_ny: usize,
+    last_state_step: u64,
 }
 
 impl Default for PhaseSpaceTab {
@@ -58,6 +61,7 @@ impl Default for PhaseSpaceTab {
             last_data: Vec::new(),
             last_nx: 0,
             last_ny: 0,
+            last_state_step: u64::MAX,
         }
     }
 }
@@ -197,16 +201,26 @@ impl PhaseSpaceTab {
         // (dim_x, 3+dim_v). The remaining 4 are "hidden" and can be sliced.
         let visible_x = self.dim_x;
         let visible_v = 3 + self.dim_v;
-        let hidden: Vec<usize> = (0..6)
-            .filter(|&d| d != visible_x && d != visible_v)
-            .collect();
-        let fixed: Vec<(usize, f64)> = hidden
-            .iter()
-            .zip(self.slice_offsets.iter())
-            .filter(|(_, off)| off.abs() > 0.001)
-            .map(|(&dim, &off)| (dim, off))
-            .collect();
-        let Some((data, nx, nv)) = data_provider.phase_slice(self.dim_x, self.dim_v, &fixed) else {
+        let mut hidden = [0usize; 4];
+        let mut n_hidden = 0;
+        for d in 0..6 {
+            if d != visible_x && d != visible_v {
+                hidden[n_hidden] = d;
+                n_hidden += 1;
+            }
+        }
+        let mut fixed = [(0usize, 0.0f64); 4];
+        let mut n_fixed = 0;
+        for (i, &dim) in hidden[..n_hidden].iter().enumerate() {
+            let off = self.slice_offsets[i];
+            if off.abs() > 0.001 {
+                fixed[n_fixed] = (dim, off);
+                n_fixed += 1;
+            }
+        }
+        let Some((data, nx, nv)) =
+            data_provider.phase_slice(self.dim_x, self.dim_v, &fixed[..n_fixed])
+        else {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(
@@ -280,11 +294,16 @@ impl PhaseSpaceTab {
 
         frame.render_widget(widget, heatmap_area);
 
-        // Cache data for mouse cursor lookups
+        // Cache data for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = heatmap_area;
-        self.last_data = view_data;
-        self.last_nx = vnx;
-        self.last_ny = vnv;
+        if let Some(s) = state
+            && (s.step != self.last_state_step || vnx != self.last_nx || vnv != self.last_ny)
+        {
+            self.last_data = view_data.into_owned();
+            self.last_state_step = s.step;
+            self.last_nx = vnx;
+            self.last_ny = vnv;
+        }
 
         if self.show_info && info_area.width > 0 {
             let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
@@ -339,9 +358,14 @@ impl PhaseSpaceTab {
     }
 }
 
-fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32) -> (Vec<f64>, usize, usize) {
+fn crop_data<'a>(
+    data: &'a [f64],
+    nx: usize,
+    ny: usize,
+    zoom: f32,
+) -> (Cow<'a, [f64]>, usize, usize) {
     if zoom <= 1.0 {
-        return (data.to_vec(), nx, ny);
+        return (Cow::Borrowed(data), nx, ny);
     }
     let view_w = (nx as f32 / zoom).ceil().max(1.0) as usize;
     let view_h = (ny as f32 / zoom).ceil().max(1.0) as usize;
@@ -359,5 +383,5 @@ fn crop_data(data: &[f64], nx: usize, ny: usize, zoom: f32) -> (Vec<f64>, usize,
             out.push(data[iy * nx + ix]);
         }
     }
-    (out, view_w, view_h)
+    (Cow::Owned(out), view_w, view_h)
 }

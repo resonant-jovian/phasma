@@ -2,6 +2,7 @@
 pub mod action;
 pub mod app;
 pub mod aspect;
+pub mod chart_utils;
 pub mod cli;
 pub mod command_palette;
 pub mod components;
