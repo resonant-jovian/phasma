@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+use std::sync::Arc;
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -7,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Axis, Block, Chart, Dataset, Gauge, GraphType, Paragraph},
 };
-use std::collections::VecDeque;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
@@ -44,6 +46,8 @@ pub struct RunControlTab {
     paused: bool,
     command_tx: Option<UnboundedSender<Action>>,
     sim_start_time: Option<std::time::Instant>,
+    /// Shared atomic progress state from the sim thread.
+    progress: Option<Arc<caustic::StepProgress>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,11 +79,20 @@ impl Default for RunControlTab {
             paused: false,
             command_tx: None,
             sim_start_time: None,
+            progress: None,
         }
     }
 }
 
 impl RunControlTab {
+    pub fn set_progress(&mut self, p: Arc<caustic::StepProgress>) {
+        self.progress = Some(p);
+    }
+
+    pub fn clear_progress(&mut self) {
+        self.progress = None;
+    }
+
     pub fn register_action_handler(&mut self, tx: UnboundedSender<Action>) {
         self.command_tx = Some(tx);
     }
@@ -513,10 +526,15 @@ impl RunControlTab {
             log_area,
         );
 
-        // Right panel — split into diagnostics + config summary
-        let [diag_area, summary_area] =
-            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .areas(right_area);
+        // Right panel — split into progress + diagnostics + config summary
+        let [progress_area, diag_area, summary_area] = Layout::vertical([
+            Constraint::Length(10),
+            Constraint::Min(6),
+            Constraint::Length(8),
+        ])
+        .areas(right_area);
+
+        self.draw_step_progress(frame, progress_area, theme);
 
         // Diagnostics sidebar (top-right) — uses scrub-aware state
         match data_provider.current_state() {
@@ -607,6 +625,227 @@ impl RunControlTab {
 
         // Config summary panel (bottom-right)
         self.draw_config_summary(frame, summary_area, theme, data_provider);
+    }
+
+    fn draw_step_progress(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let snap = match &self.progress {
+            Some(p) => p.read(),
+            None => {
+                frame.render_widget(
+                    Paragraph::new("No progress data")
+                        .block(Block::bordered().title(" Step Progress "))
+                        .style(Style::default().fg(theme.dim)),
+                    area,
+                );
+                return;
+            }
+        };
+
+        let phase = snap.phase;
+
+        // Determine ordered list of sub-step phases and labels
+        let (title, steps): (&str, Vec<(caustic::StepPhase, &str)>) = if phase.is_build() {
+            (
+                " Build Progress ",
+                vec![
+                    (caustic::StepPhase::BuildDomain, "Domain"),
+                    (caustic::StepPhase::BuildIC, "IC generation"),
+                    (caustic::StepPhase::BuildPoisson, "Poisson solver"),
+                    (caustic::StepPhase::BuildIntegrator, "Integrator"),
+                    (caustic::StepPhase::BuildExitConditions, "Exit conditions"),
+                    (caustic::StepPhase::BuildAssembly, "Assembly"),
+                ],
+            )
+        } else if snap.sub_step_total == 7 {
+            // Yoshida
+            (
+                " Step Progress (Yoshida) ",
+                vec![
+                    (caustic::StepPhase::YoshidaDrift1, "Drift 1"),
+                    (caustic::StepPhase::YoshidaKick1, "Kick 1"),
+                    (caustic::StepPhase::YoshidaDrift2, "Drift 2"),
+                    (caustic::StepPhase::YoshidaKick2, "Kick 2"),
+                    (caustic::StepPhase::YoshidaDrift3, "Drift 3"),
+                    (caustic::StepPhase::YoshidaKick3, "Kick 3"),
+                    (caustic::StepPhase::YoshidaDrift4, "Drift 4"),
+                ],
+            )
+        } else if snap.sub_step_total == 3
+            && matches!(
+                phase,
+                caustic::StepPhase::RkeiStage1
+                    | caustic::StepPhase::RkeiStage2
+                    | caustic::StepPhase::RkeiStage3
+            )
+        {
+            // RKEI
+            (
+                " Step Progress (RKEI) ",
+                vec![
+                    (caustic::StepPhase::RkeiStage1, "Stage 1"),
+                    (caustic::StepPhase::RkeiStage2, "Stage 2"),
+                    (caustic::StepPhase::RkeiStage3, "Stage 3"),
+                ],
+            )
+        } else if matches!(
+            phase,
+            caustic::StepPhase::UnsplitStage1
+                | caustic::StepPhase::UnsplitStage2
+                | caustic::StepPhase::UnsplitStage3
+                | caustic::StepPhase::UnsplitStage4
+        ) {
+            // Unsplit RK
+            let stages: Vec<(caustic::StepPhase, &str)> = (0..snap.sub_step_total)
+                .map(|i| {
+                    let p = caustic::StepPhase::from_u8(40 + i);
+                    let label = match i {
+                        0 => "Stage 1",
+                        1 => "Stage 2",
+                        2 => "Stage 3",
+                        3 => "Stage 4",
+                        _ => "Stage ?",
+                    };
+                    (p, label)
+                })
+                .collect();
+            (" Step Progress (RK) ", stages)
+        } else if snap.sub_step_total == 2
+            && matches!(
+                phase,
+                caustic::StepPhase::DriftHalf1 | caustic::StepPhase::Kick
+            )
+        {
+            // Lie
+            (
+                " Step Progress (Lie) ",
+                vec![
+                    (caustic::StepPhase::DriftHalf1, "Drift"),
+                    (caustic::StepPhase::Kick, "Kick"),
+                ],
+            )
+        } else {
+            // Strang (default, also InstrumentedStrang)
+            (
+                " Step Progress ",
+                vec![
+                    (caustic::StepPhase::DriftHalf1, "Drift \u{00bd}"),
+                    (caustic::StepPhase::PoissonSolve, "Poisson solve"),
+                    (caustic::StepPhase::Kick, "Kick"),
+                    (caustic::StepPhase::DriftHalf2, "Drift \u{00bd}"),
+                    (caustic::StepPhase::StepComplete, "Complete"),
+                ],
+            )
+        };
+
+        // Also show post-advance phases if we're past the integrator
+        let post_phases = [
+            (caustic::StepPhase::LoMaC, "LoMaC"),
+            (caustic::StepPhase::PostDensity, "Post density"),
+            (caustic::StepPhase::Diagnostics, "Diagnostics"),
+            (caustic::StepPhase::StepComplete, "Complete"),
+        ];
+
+        let block = Block::bordered()
+            .title(title)
+            .border_style(Style::default().fg(theme.border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let max_lines = inner.height as usize;
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Which step index is currently active?
+        let current_idx = snap.sub_step;
+
+        for (i, (_step_phase, label)) in steps.iter().enumerate() {
+            if lines.len() >= max_lines.saturating_sub(1) {
+                break;
+            }
+            let (marker, style) = if (i as u8) < current_idx {
+                // Done
+                (
+                    "\u{2713}", // ✓
+                    Style::default().fg(theme.ok),
+                )
+            } else if i as u8 == current_idx
+                && phase != caustic::StepPhase::StepComplete
+                && phase != caustic::StepPhase::Idle
+            {
+                // Active
+                (
+                    "\u{25b8}", // ▸
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                // Pending
+                (" ", Style::default().fg(theme.dim))
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {marker} "), style),
+                Span::styled(format!("{:<18}", label), style),
+            ]));
+        }
+
+        // Show post-advance phases when integrator is done but step isn't
+        if !phase.is_build()
+            && matches!(
+                phase,
+                caustic::StepPhase::LoMaC
+                    | caustic::StepPhase::PostDensity
+                    | caustic::StepPhase::Diagnostics
+            )
+        {
+            for (_pp, plabel) in &post_phases {
+                if lines.len() >= max_lines.saturating_sub(1) {
+                    break;
+                }
+                let (marker, style) = if phase as u8 > *_pp as u8 {
+                    ("\u{2713}", Style::default().fg(theme.ok))
+                } else if phase == *_pp {
+                    (
+                        "\u{25b8}",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    (" ", Style::default().fg(theme.dim))
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {marker} "), style),
+                    Span::styled(format!("{:<18}", plabel), style),
+                ]));
+            }
+        }
+
+        // Footer line: elapsed time + step info
+        if lines.len() < max_lines {
+            let step_info = if let Some(ref state) = self.sim_state {
+                if phase.is_build() {
+                    String::new()
+                } else {
+                    format!("Step {} ", state.step)
+                }
+            } else {
+                String::new()
+            };
+
+            let elapsed_str = if snap.elapsed_ms < 1000.0 {
+                format!("{:.0}ms", snap.elapsed_ms)
+            } else {
+                format!("{:.1}s", snap.elapsed_ms / 1000.0)
+            };
+
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {step_info:>20}{elapsed_str:>8}"),
+                Style::default().fg(theme.dim),
+            )]));
+        }
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn draw_config_summary(

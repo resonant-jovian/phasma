@@ -231,6 +231,7 @@ pub struct SimHandle {
     pub state_rx: StateReceiver,
     pub control_tx: mpsc::UnboundedSender<SimControl>,
     pub task: JoinHandle<()>,
+    pub progress: Arc<caustic::StepProgress>,
 }
 
 impl SimHandle {
@@ -278,9 +279,18 @@ impl SimHandle {
         let (control_tx, mut control_rx) = mpsc::unbounded_channel::<SimControl>();
         let (std_ctrl_tx, std_ctrl_rx) = std::sync::mpsc::channel::<SimControl>();
 
+        let progress = caustic::StepProgress::new();
+        let progress_for_thread = progress.clone();
+
         // Simulation is not Send, so it runs on a dedicated std thread.
         std::thread::spawn(move || {
-            run_caustic_sim(config_path, state_tx, std_ctrl_rx, verbose);
+            run_caustic_sim(
+                config_path,
+                state_tx,
+                std_ctrl_rx,
+                verbose,
+                progress_for_thread,
+            );
         });
 
         // Bridge tokio control channel → std channel.
@@ -296,6 +306,7 @@ impl SimHandle {
             state_rx,
             control_tx,
             task,
+            progress,
         }
     }
 }
@@ -305,13 +316,14 @@ fn run_caustic_sim(
     state_tx: StateSender,
     ctrl_rx: std::sync::mpsc::Receiver<SimControl>,
     verbose: bool,
+    progress: Arc<caustic::StepProgress>,
 ) {
     let mut build_logs: Vec<String> = Vec::new();
     let build_start = Instant::now();
     if verbose {
         build_logs.push(format!("Loading config from: {config_path}"));
     }
-    let mut sim = match build_caustic_sim(&config_path, verbose, &mut build_logs) {
+    let mut sim = match build_caustic_sim(&config_path, verbose, &mut build_logs, &progress) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("phasma: sim build error: {e:#}");
@@ -319,6 +331,8 @@ fn run_caustic_sim(
             return;
         }
     };
+    sim.set_progress(progress);
+
     if verbose {
         build_logs.push(format!(
             "Build complete in {:.1} ms",
@@ -436,6 +450,7 @@ fn build_caustic_sim(
     config_path: &str,
     verbose: bool,
     logs: &mut Vec<String>,
+    progress: &Arc<caustic::StepProgress>,
 ) -> anyhow::Result<caustic::Simulation> {
     // Try new PhasmaConfig format first, fall back to legacy toml.rs
     match crate::config::load(config_path) {
@@ -465,7 +480,7 @@ fn build_caustic_sim(
                     total_cells as f64 * 8.0 / 1_048_576.0
                 ));
             }
-            build_from_config(&cfg, verbose, logs)
+            build_from_config(&cfg, verbose, logs, progress)
         }
         Err(_new_err) => {
             if verbose {
@@ -487,6 +502,7 @@ fn build_from_config(
     cfg: &crate::config::PhasmaConfig,
     verbose: bool,
     logs: &mut Vec<String>,
+    progress: &Arc<caustic::StepProgress>,
 ) -> anyhow::Result<caustic::Simulation> {
     use caustic::{
         AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
@@ -504,6 +520,8 @@ fn build_from_config(
         logs.push("Building domain...".to_string());
     }
 
+    progress.set_phase(caustic::StepPhase::BuildDomain);
+    progress.start_step();
     let t0 = Instant::now();
     let domain = Domain::builder()
         .spatial_extent(cfg.domain.spatial_extent.to_f64().unwrap_or(10.0))
@@ -540,6 +558,7 @@ fn build_from_config(
         ));
     }
 
+    progress.set_phase(caustic::StepPhase::BuildIC);
     let t0 = Instant::now();
     let repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
         "hierarchical_tucker" | "ht" => {
@@ -658,6 +677,7 @@ fn build_from_config(
     }
 
     // Build Poisson solver
+    progress.set_phase(caustic::StepPhase::BuildPoisson);
     if verbose {
         logs.push(format!("Building Poisson solver: {}", cfg.solver.poisson));
     }
@@ -708,6 +728,7 @@ fn build_from_config(
     }
 
     // Build integrator
+    progress.set_phase(caustic::StepPhase::BuildIntegrator);
     if verbose {
         logs.push(format!("Building integrator: {}", cfg.solver.integrator));
     }
@@ -725,6 +746,7 @@ fn build_from_config(
     };
 
     // Build simulation
+    progress.set_phase(caustic::StepPhase::BuildAssembly);
     if verbose {
         logs.push(format!(
             "Assembling simulation: G={g}, t_final={}, cfl={}, conservation={}",
@@ -754,6 +776,7 @@ fn build_from_config(
     }
 
     // Wire exit conditions
+    progress.set_phase(caustic::StepPhase::BuildExitConditions);
     let mut exit_count = 0u32;
     sim.exit_evaluator
         .add_condition(Box::new(MassLossCondition {
@@ -1772,7 +1795,8 @@ mod memory_tests {
             return None;
         }
 
-        let sim_result = build_from_config(&cfg, false, &mut Vec::new());
+        let sim_result =
+            build_from_config(&cfg, false, &mut Vec::new(), &caustic::StepProgress::new());
         match sim_result {
             Ok(mut sim) => {
                 if run_step {
@@ -1920,7 +1944,8 @@ mod heavy_tests {
         cfg.time.t_final = rust_decimal::Decimal::from_f64(1.0).unwrap();
 
         let mut sim =
-            build_from_config(&cfg, false, &mut Vec::new()).expect("plummer_128 should build");
+            build_from_config(&cfg, false, &mut Vec::new(), &caustic::StepProgress::new())
+                .expect("plummer_128 should build");
 
         let rss_after_build = read_rss_mb();
         eprintln!("RSS after build: {rss_after_build:.0} MB");
@@ -1979,13 +2004,14 @@ mod drift_threshold_tests {
         cfg: &crate::config::PhasmaConfig,
         n_steps: u32,
     ) -> Option<(u32, Option<ExitReason>)> {
-        let mut sim = match build_from_config(cfg, false, &mut Vec::new()) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("  skip build: {e}");
-                return None;
-            }
-        };
+        let mut sim =
+            match build_from_config(cfg, false, &mut Vec::new(), &caustic::StepProgress::new()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  skip build: {e}");
+                    return None;
+                }
+            };
 
         for i in 0..n_steps {
             match sim.step() {

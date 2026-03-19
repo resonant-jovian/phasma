@@ -20,6 +20,8 @@ use ratatui::{
 use strum::{Display, EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 use tokio::sync::mpsc::UnboundedSender;
 
+use std::sync::Arc;
+
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
@@ -101,6 +103,14 @@ impl TabView {
             settings: SettingsTab::default(),
             command_tx: None,
         }
+    }
+
+    pub fn set_step_progress(&mut self, p: Arc<caustic::StepProgress>) {
+        self.run_control.set_progress(p);
+    }
+
+    pub fn clear_step_progress(&mut self) {
+        self.run_control.clear_progress();
     }
 
     pub fn restore_tab(&mut self, index: usize) {
