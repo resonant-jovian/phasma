@@ -250,7 +250,7 @@ This directory is the input for `--playback`, `--monitor`, `--compare`, `--regre
 
 ## Config file reference
 
-All sections and fields are optional — sensible defaults are provided. The full config has 9 top-level sections.
+All sections and fields are optional — sensible defaults are provided. The full config has 10 top-level sections.
 
 ### `[domain]` — Simulation domain
 
@@ -402,6 +402,7 @@ gravitational_constant = 1.0
 | `unsplit` / `unsplit_rk4` | 4th | — | Unsplit method-of-lines RK4 |
 | `unsplit_rk2` | 2nd | — | Unsplit RK2 |
 | `unsplit_rk3` | 3rd | — | Unsplit RK3 |
+| `rkei` | 3rd | 3 | SSP-RK3 exponential integrator (unsplit) |
 
 #### HT/TT solver options `[solver.ht]`
 
@@ -485,6 +486,16 @@ The simulation exits when **any** enabled condition triggers.
 | `source_directory` | string | none | Snapshot directory path |
 | `fps` | float | `10.0` | Playback frames per second |
 | `loop_playback` | bool | `false` | Loop at end |
+
+---
+
+### `[logging]` — Logging
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `level` | string | `"info"` | Log level (`"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`) |
+| `file` | string | none | Log file path |
+| `structured` | bool | `false` | Structured JSON logging |
 
 ---
 
@@ -696,7 +707,7 @@ phasma is a **consumer** of the caustic library. It provides no solver logic —
 |---|---|
 | 6D Vlasov-Poisson simulation engine | ratatui TUI with 10 live tabs |
 | 7 phase-space representations | TOML config loading with 30 presets |
-| 6 Poisson solvers | Real-time density/phase-space heatmaps |
+| 7 Poisson solvers | Real-time density/phase-space heatmaps |
 | 6 time integrators | Energy conservation charts and radial profiles |
 | 10 IC generators | History scrubbing, playback, comparison |
 | LoMaC conservation framework | Batch mode, sweeps, convergence studies |
