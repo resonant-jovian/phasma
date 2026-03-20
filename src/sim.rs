@@ -588,16 +588,21 @@ fn build_from_config(
                 .unwrap_or(100);
 
             // Try the ACA path for isolated equilibrium models (no full grid needed)
+            progress.set_phase(caustic::StepPhase::BuildICSampling);
             let ht_opt = build_ht_from_ic_aca(cfg, &domain, g, tolerance, max_rank, verbose, logs);
 
             let mut ht = match ht_opt {
-                Some(ht) => ht,
+                Some(ht) => {
+                    progress.set_phase(caustic::StepPhase::BuildICCompression);
+                    ht
+                }
                 None => {
                     // Fallback: model not supported by ACA path, use full grid
                     if verbose {
                         logs.push("  Falling back to full-grid IC + HSVD...".to_string());
                     }
                     let snap = build_ic(cfg, &domain, g, Some(progress))?;
+                    progress.set_phase(caustic::StepPhase::BuildICCompression);
                     HtTensor::from_full(&snap.data, snap.shape, &domain, tolerance)
                 }
             };
@@ -638,6 +643,7 @@ fn build_from_config(
                 );
             }
 
+            progress.set_phase(caustic::StepPhase::BuildICSampling);
             let snap = build_ic(cfg, &domain, g, Some(progress))?;
             if verbose {
                 let nonzero = snap.data.iter().filter(|&&v| v > 0.0).count();
@@ -648,6 +654,7 @@ fn build_from_config(
                     snap.data.len()
                 ));
             }
+            progress.set_phase(caustic::StepPhase::BuildICCompression);
             match cfg.solver.representation.as_str() {
                 "uniform" | "uniform_grid" => {
                     Box::new(UniformGrid6D::from_snapshot(snap, domain.clone()))
