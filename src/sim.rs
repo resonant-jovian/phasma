@@ -658,7 +658,10 @@ fn build_from_config(
             progress.set_phase(caustic::StepPhase::BuildICCompression);
             match cfg.solver.representation.as_str() {
                 "uniform" | "uniform_grid" => {
-                    let scheme = match cfg.solver.semi_lagrangian.as_ref()
+                    let scheme = match cfg
+                        .solver
+                        .semi_lagrangian
+                        .as_ref()
                         .map(|s| s.interpolation.as_str())
                     {
                         Some("wpfc") => caustic::AdvectionScheme::Wpfc,
@@ -667,7 +670,7 @@ fn build_from_config(
                     };
                     Box::new(
                         UniformGrid6D::from_snapshot(snap, domain.clone())
-                            .with_advection_scheme(scheme)
+                            .with_advection_scheme(scheme),
                     )
                 }
                 "tensor_train" => {
@@ -789,26 +792,42 @@ fn build_from_config(
         "rkei" => Box::new(caustic::RkeiIntegrator::new(g)),
         "bug" => Box::new(caustic::BugIntegrator::new(
             g,
-            caustic::BugConfig { midpoint: false, conservative: false, ..Default::default() },
+            caustic::BugConfig {
+                midpoint: false,
+                conservative: false,
+                ..Default::default()
+            },
         )),
         "midpoint_bug" => Box::new(caustic::BugIntegrator::new(
             g,
-            caustic::BugConfig { midpoint: true, conservative: false, ..Default::default() },
+            caustic::BugConfig {
+                midpoint: true,
+                conservative: false,
+                ..Default::default()
+            },
         )),
         "conservative_bug" => Box::new(caustic::BugIntegrator::new(
             g,
-            caustic::BugConfig { midpoint: false, conservative: true, ..Default::default() },
+            caustic::BugConfig {
+                midpoint: false,
+                conservative: true,
+                ..Default::default()
+            },
         )),
         "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new(g)),
         "rkn6" => Box::new(caustic::Rkn6Splitting::new(g)),
         "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(g, 1e-6)),
         "parallel_bug" | "pbug" => Box::new(caustic::ParallelBugIntegrator::new(
             g,
-            caustic::ParallelBugConfig { ..Default::default() },
+            caustic::ParallelBugConfig {
+                ..Default::default()
+            },
         )),
         "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(
             g,
-            caustic::RkBugConfig { ..Default::default() },
+            caustic::RkBugConfig {
+                ..Default::default()
+            },
         )),
         "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
         other => anyhow::bail!("unsupported integrator '{other}'"),

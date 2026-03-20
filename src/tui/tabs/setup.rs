@@ -239,11 +239,10 @@ impl SetupTab {
         match action {
             Action::SimStart => self.sim_running = true,
             Action::SimStop => self.sim_running = false,
-            Action::SimUpdate(state) => {
-                if state.exit_reason.is_some() {
+            Action::SimUpdate(state)
+                if state.exit_reason.is_some() => {
                     self.sim_running = false;
                 }
-            }
             _ => {}
         }
         None

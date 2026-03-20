@@ -234,7 +234,9 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
     if cfg.solver.poisson == "fft_isolated" {
         warnings.push(ValidationWarning {
             field: "solver.poisson".into(),
-            message: "fft_isolated is deprecated; consider \"vgf\" for spectral-accuracy isolated BC".into(),
+            message:
+                "fft_isolated is deprecated; consider \"vgf\" for spectral-accuracy isolated BC"
+                    .into(),
         });
     }
 

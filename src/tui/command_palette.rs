@@ -67,22 +67,19 @@ impl CommandPalette {
                 self.close();
                 return Ok(cmd);
             }
-            KeyCode::Backspace => {
-                if self.cursor > 0 {
+            KeyCode::Backspace
+                if self.cursor > 0 => {
                     self.cursor -= 1;
                     self.input.remove(self.cursor);
                 }
-            }
-            KeyCode::Left => {
-                if self.cursor > 0 {
+            KeyCode::Left
+                if self.cursor > 0 => {
                     self.cursor -= 1;
                 }
-            }
-            KeyCode::Right => {
-                if self.cursor < self.input.len() {
+            KeyCode::Right
+                if self.cursor < self.input.len() => {
                     self.cursor += 1;
                 }
-            }
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor, c);
                 self.cursor += 1;

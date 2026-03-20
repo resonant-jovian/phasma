@@ -430,7 +430,10 @@ mod tests {
         // VGF uses similar memory to FftIsolated (zero-padded FFT convolution)
         // but the memory estimation currently returns 0 for unknown solvers.
         // At minimum, workspace and phase-space should be non-zero.
-        assert!(b.phase_space_mb > 0.0, "plummer should have phase-space memory");
+        assert!(
+            b.phase_space_mb > 0.0,
+            "plummer should have phase-space memory"
+        );
         assert!(b.workspace_mb > 0.0, "plummer should have workspace memory");
     }
 
