@@ -657,7 +657,17 @@ fn build_from_config(
             progress.set_phase(caustic::StepPhase::BuildICCompression);
             match cfg.solver.representation.as_str() {
                 "uniform" | "uniform_grid" => {
-                    Box::new(UniformGrid6D::from_snapshot(snap, domain.clone()))
+                    let scheme = match cfg.solver.semi_lagrangian.as_ref()
+                        .map(|s| s.interpolation.as_str())
+                    {
+                        Some("wpfc") => caustic::AdvectionScheme::Wpfc,
+                        Some("mp7") => caustic::AdvectionScheme::Mp7,
+                        _ => caustic::AdvectionScheme::CatmullRom,
+                    };
+                    Box::new(
+                        UniformGrid6D::from_snapshot(snap, domain.clone())
+                            .with_advection_scheme(scheme)
+                    )
                 }
                 "tensor_train" => {
                     let max_rank = cfg
@@ -742,6 +752,12 @@ fn build_from_config(
             }
             Box::new(TreePoisson::new(domain.clone(), 0.5))
         }
+        "vgf" | "vgf_isolated" => {
+            if verbose {
+                logs.push("  VGF (spectral-accuracy isolated BC)".to_string());
+            }
+            Box::new(caustic::VgfPoisson::new(&domain))
+        }
         other => anyhow::bail!("unsupported poisson solver '{other}'"),
     };
     if verbose {
@@ -766,6 +782,18 @@ fn build_from_config(
         "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, g, domain.clone())),
         "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, g, domain.clone())),
         "rkei" => Box::new(caustic::RkeiIntegrator::new(g)),
+        "bug" => Box::new(caustic::BugIntegrator::new(
+            g,
+            caustic::BugConfig { midpoint: false, conservative: false, ..Default::default() },
+        )),
+        "midpoint_bug" => Box::new(caustic::BugIntegrator::new(
+            g,
+            caustic::BugConfig { midpoint: true, conservative: false, ..Default::default() },
+        )),
+        "conservative_bug" => Box::new(caustic::BugIntegrator::new(
+            g,
+            caustic::BugConfig { midpoint: false, conservative: true, ..Default::default() },
+        )),
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 
