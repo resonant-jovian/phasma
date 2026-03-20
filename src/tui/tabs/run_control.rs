@@ -898,22 +898,53 @@ impl RunControlTab {
                 Span::styled(format!("{:<18}", label), style),
             ];
 
-            // Inline progress bar for active item with intra-phase data
-            if state == IS::Active && snap.sub_total > 0 {
-                let pct = (snap.sub_done as f64 / snap.sub_total as f64 * 100.0).min(100.0);
-                let bar_width = inner.width.saturating_sub(28) as usize;
-                if bar_width >= 4 {
-                    let filled = (pct / 100.0 * bar_width as f64) as usize;
-                    let empty = bar_width.saturating_sub(filled);
-                    spans.push(Span::styled(
-                        format!(
-                            "[{}{}] {:>3.0}%",
-                            "\u{2588}".repeat(filled),
-                            "\u{2591}".repeat(empty),
-                            pct
-                        ),
-                        Style::default().fg(theme.accent),
-                    ));
+            // Inline progress bar for active item.
+            // Prefer cell-level intra-phase data when available; fall back to
+            // phase-level completion (completed phases / total phases).
+            if state == IS::Active {
+                let bar_pct = if snap.sub_total > 0 {
+                    Some((snap.sub_done as f64 / snap.sub_total as f64 * 100.0).min(100.0))
+                } else if self.build_complete {
+                    // Phase-level: fraction of step phases completed
+                    let completed = step_phases
+                        .iter()
+                        .position(|(p, _)| *p == phase)
+                        .unwrap_or(0);
+                    let tot = step_phases.len();
+                    if tot > 0 {
+                        Some(completed as f64 * 100.0 / tot as f64)
+                    } else {
+                        None
+                    }
+                } else {
+                    // Phase-level: fraction of build phases completed
+                    let completed = build_phases
+                        .iter()
+                        .position(|(p, _)| *p == phase)
+                        .unwrap_or(0);
+                    let tot = build_phases.len();
+                    if tot > 0 {
+                        Some(completed as f64 * 100.0 / tot as f64)
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(pct) = bar_pct {
+                    let bar_width = inner.width.saturating_sub(28) as usize;
+                    if bar_width >= 4 {
+                        let filled = (pct / 100.0 * bar_width as f64) as usize;
+                        let empty = bar_width.saturating_sub(filled);
+                        spans.push(Span::styled(
+                            format!(
+                                "[{}{}] {:>3.0}%",
+                                "\u{2588}".repeat(filled),
+                                "\u{2591}".repeat(empty),
+                                pct
+                            ),
+                            Style::default().fg(theme.accent),
+                        ));
+                    }
                 }
             }
 
@@ -957,7 +988,9 @@ impl RunControlTab {
                     .iter()
                     .position(|(p, _)| *p == phase)
                     .unwrap_or(0);
-                format!("  {completed}/{}", build_phases.len())
+                let tot = build_phases.len();
+                let pct = if tot > 0 { completed * 100 / tot } else { 0 };
+                format!("  {completed}/{tot}  {pct}%")
             };
 
             let elapsed_str = if snap.elapsed_ms < 1000.0 {

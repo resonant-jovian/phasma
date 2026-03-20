@@ -597,7 +597,7 @@ fn build_from_config(
                     if verbose {
                         logs.push("  Falling back to full-grid IC + HSVD...".to_string());
                     }
-                    let snap = build_ic(cfg, &domain, g)?;
+                    let snap = build_ic(cfg, &domain, g, Some(progress))?;
                     HtTensor::from_full(&snap.data, snap.shape, &domain, tolerance)
                 }
             };
@@ -638,7 +638,7 @@ fn build_from_config(
                 );
             }
 
-            let snap = build_ic(cfg, &domain, g)?;
+            let snap = build_ic(cfg, &domain, g, Some(progress))?;
             if verbose {
                 let nonzero = snap.data.iter().filter(|&&v| v > 0.0).count();
                 logs.push(format!(
@@ -916,10 +916,11 @@ fn build_ic(
     cfg: &crate::config::PhasmaConfig,
     domain: &caustic::Domain,
     g: f64,
+    progress: Option<&caustic::StepProgress>,
 ) -> anyhow::Result<caustic::PhaseSpaceSnapshot> {
     use caustic::{
         CustomICArray, HernquistIC, KingIC, MergerIC, NfwIC, PlummerIC, ZeldovichSingleMode,
-        sample_on_grid,
+        sample_on_grid_with_progress,
     };
 
     let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
@@ -928,11 +929,11 @@ fn build_ic(
     match cfg.model.model_type.as_str() {
         "plummer" => {
             let ic = PlummerIC::new(m, a, g);
-            Ok(sample_on_grid(&ic, domain))
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "hernquist" => {
             let ic = HernquistIC::new(m, a, g);
-            Ok(sample_on_grid(&ic, domain))
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "king" => {
             let king = cfg
@@ -941,14 +942,14 @@ fn build_ic(
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("king model requires [model.king] with w0"))?;
             let ic = KingIC::new(m, king.w0.to_f64().unwrap_or(7.0), a, g);
-            Ok(sample_on_grid(&ic, domain))
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "nfw" => {
             let nfw = cfg.model.nfw.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("nfw model requires [model.nfw] with concentration")
             })?;
             let ic = NfwIC::new(m, a, nfw.concentration.to_f64().unwrap_or(10.0), g);
-            Ok(sample_on_grid(&ic, domain))
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "zeldovich" => {
             let z = cfg.model.zeldovich.as_ref().ok_or_else(|| {
@@ -965,7 +966,7 @@ fn build_ic(
                 wavenumber: z.wave_number.to_f64().unwrap_or(1.0),
                 sigma_v,
             };
-            Ok(ic.sample_on_grid(domain))
+            Ok(ic.sample_on_grid(domain, progress))
         }
         "merger" | "two_body_merger" => {
             let merger = cfg.model.merger.as_ref().ok_or_else(|| {
@@ -982,7 +983,7 @@ fn build_ic(
             let vel = merger.relative_velocity;
             let impact = merger.impact_parameter.to_f64().unwrap_or(2.0);
             let ic = MergerIC::new(body1, m1, body2, m2, sep, vel, impact);
-            Ok(ic.sample_on_grid(domain))
+            Ok(ic.sample_on_grid(domain, progress))
         }
         "custom_file" => {
             let cf = cfg.model.custom_file.as_ref().ok_or_else(|| {
@@ -1060,7 +1061,7 @@ fn build_ic(
                 tc.progenitor_position,
                 tc.progenitor_velocity,
             );
-            Ok(ic.sample_on_grid(domain))
+            Ok(ic.sample_on_grid(domain, progress))
         }
         "disk_exponential" | "disk_stability" => {
             let rd = cfg
@@ -1088,7 +1089,7 @@ fn build_ic(
                 0.0,  // pattern speed
                 0.05, // perturbation amplitude
             );
-            Ok(ic.sample_on_grid(domain))
+            Ok(ic.sample_on_grid(domain, progress))
         }
         other => anyhow::bail!("unsupported model type '{other}'"),
     }
