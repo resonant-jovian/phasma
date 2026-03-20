@@ -11,6 +11,8 @@ phasma is a terminal application built with [ratatui](https://ratatui.rs/) for s
 
 It provides real-time density and phase-space heatmaps, energy conservation charts, radial profiles, performance dashboards, history scrubbing, batch execution, parameter sweeps, convergence studies, playback, comparison, and export — all without leaving the terminal.
 
+> **Note:** This application has not yet reached version 0.1.0. The interface and configuration format are unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+
 ## Installation
 
 ### From crates.io
