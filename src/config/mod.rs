@@ -522,7 +522,7 @@ pub struct SemiLagrangianConfig {
 }
 
 fn default_sl_interp() -> String {
-    "cubic".to_string()
+    "wpfc".to_string()
 }
 fn default_sl_limiter() -> String {
     "none".to_string()

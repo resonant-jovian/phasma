@@ -208,6 +208,17 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "bug",
         "midpoint_bug",
         "conservative_bug",
+        "blanes_moan",
+        "bm4",
+        "rkn6",
+        "adaptive",
+        "adaptive_strang",
+        "parallel_bug",
+        "pbug",
+        "rk_bug",
+        "rk_bug3",
+        "lawson",
+        "lawson_rk4",
     ];
     if !valid_integrator.contains(&cfg.solver.integrator.as_str()) {
         warnings.push(ValidationWarning {
@@ -217,6 +228,13 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
                 cfg.solver.integrator,
                 valid_integrator.join(", ")
             ),
+        });
+    }
+
+    if cfg.solver.poisson == "fft_isolated" {
+        warnings.push(ValidationWarning {
+            field: "solver.poisson".into(),
+            message: "fft_isolated is deprecated; consider \"vgf\" for spectral-accuracy isolated BC".into(),
         });
     }
 

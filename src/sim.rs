@@ -521,6 +521,7 @@ fn build_from_config(
     logs: &mut Vec<String>,
     progress: &Arc<caustic::StepProgress>,
 ) -> anyhow::Result<caustic::Simulation> {
+    #[allow(deprecated)]
     use caustic::{
         AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
         FftIsolated, FftPoisson, HtTensor, HybridRepr, LieSplitting, MassLossCondition, Multigrid,
@@ -718,7 +719,11 @@ fn build_from_config(
     let t0 = Instant::now();
     let poisson: Box<dyn caustic::PoissonSolver> = match cfg.solver.poisson.as_str() {
         "fft_periodic" | "fft" => Box::new(FftPoisson::new(&domain)),
-        "fft_isolated" => Box::new(FftIsolated::new(&domain)),
+        "fft_isolated" => {
+            logs.push("  WARNING: fft_isolated is deprecated; consider switching to \"vgf\" for spectral-accuracy isolated BC".to_string());
+            #[allow(deprecated)]
+            Box::new(FftIsolated::new(&domain))
+        }
         "tensor" | "tensor_poisson" => {
             let shape = [
                 cfg.domain.spatial_resolution as usize,
@@ -794,6 +799,18 @@ fn build_from_config(
             g,
             caustic::BugConfig { midpoint: false, conservative: true, ..Default::default() },
         )),
+        "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new(g)),
+        "rkn6" => Box::new(caustic::Rkn6Splitting::new(g)),
+        "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(g, 1e-6)),
+        "parallel_bug" | "pbug" => Box::new(caustic::ParallelBugIntegrator::new(
+            g,
+            caustic::ParallelBugConfig { ..Default::default() },
+        )),
+        "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(
+            g,
+            caustic::RkBugConfig { ..Default::default() },
+        )),
+        "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 

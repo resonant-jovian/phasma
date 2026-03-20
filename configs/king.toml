@@ -32,7 +32,7 @@ gravitational_constant = 1.0
 
 [solver]
 representation = "uniform"
-poisson = "fft_isolated"
+poisson = "vgf"
 advection = "semi_lagrangian"
 integrator = "strang"
 

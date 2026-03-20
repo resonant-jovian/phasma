@@ -23,7 +23,7 @@ gravitational_constant = 1.0
 
 [solver]
 representation = "hierarchical_tucker"
-poisson = "fft_isolated"
+poisson = "vgf"
 advection = "slar"
 integrator = "strang"
 conservation = "lomac"
