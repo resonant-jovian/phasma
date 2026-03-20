@@ -777,9 +777,8 @@ impl RunControlTab {
             Pending,
         }
 
-        let mut items: Vec<(&str, IS, bool)> = Vec::with_capacity(
-            build_phases.len() + 1 + step_phases.len(),
-        );
+        let mut items: Vec<(&str, IS, bool)> =
+            Vec::with_capacity(build_phases.len() + 1 + step_phases.len());
 
         // Build items
         if self.build_complete {
@@ -855,7 +854,9 @@ impl RunControlTab {
             let indicators = above_needed(start) + below_needed(end);
             if indicators > 0 {
                 let item_slots = avail.saturating_sub(indicators);
-                start = focus.saturating_sub(item_slots / 2).min(total.saturating_sub(item_slots));
+                start = focus
+                    .saturating_sub(item_slots / 2)
+                    .min(total.saturating_sub(item_slots));
                 end = (start + item_slots).min(total);
             }
 
@@ -871,8 +872,7 @@ impl RunControlTab {
             )));
         }
 
-        for i in view_start..view_end {
-            let (label, state, is_sep) = items[i];
+        for &(label, state, is_sep) in &items[view_start..view_end] {
             if is_sep {
                 let w = inner.width.saturating_sub(2) as usize;
                 lines.push(Line::from(Span::styled(
@@ -981,7 +981,7 @@ impl RunControlTab {
                         .unwrap_or(0)
                 };
                 let tot = step_phases.len();
-                let pct = if tot > 0 { completed * 100 / tot } else { 0 };
+                let pct = (completed * 100).checked_div(tot).unwrap_or(0);
                 format!("  {completed}/{tot}  {pct}%")
             } else {
                 let completed = build_phases
@@ -989,7 +989,7 @@ impl RunControlTab {
                     .position(|(p, _)| *p == phase)
                     .unwrap_or(0);
                 let tot = build_phases.len();
-                let pct = if tot > 0 { completed * 100 / tot } else { 0 };
+                let pct = (completed * 100).checked_div(tot).unwrap_or(0);
                 format!("  {completed}/{tot}  {pct}%")
             };
 

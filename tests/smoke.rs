@@ -29,14 +29,16 @@ fn run_smoke(name: &str, timeout: Duration) {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    let stderr = child.stderr.take().map(|mut s| {
-                        let mut buf = String::new();
-                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                        buf
-                    }).unwrap_or_default();
-                    panic!(
-                        "phasma exited with {status} for config '{name}':\n{stderr}"
-                    );
+                    let stderr = child
+                        .stderr
+                        .take()
+                        .map(|mut s| {
+                            let mut buf = String::new();
+                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                            buf
+                        })
+                        .unwrap_or_default();
+                    panic!("phasma exited with {status} for config '{name}':\n{stderr}");
                 }
                 return; // exited successfully
             }
