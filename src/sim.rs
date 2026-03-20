@@ -1470,6 +1470,8 @@ fn zero_diag() -> caustic::GlobalDiagnostics {
         total_momentum: [0.0; 3],
         total_angular_momentum: [0.0; 3],
         casimir_c2: 0.0,
+        casimir_c2_pre_lomac: None,
+        casimir_c2_post_lomac: None,
         entropy: 0.0,
         mass_in_box: 0.0,
     }

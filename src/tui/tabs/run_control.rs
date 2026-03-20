@@ -713,14 +713,16 @@ impl RunControlTab {
             self.build_complete = true;
         }
 
-        // Build phases (always 6 items, always first in the list)
-        let build_phases: [(caustic::StepPhase, &str); 6] = [
+        // Build phases (8 items, ordered to match sim.rs execution sequence)
+        let build_phases: [(caustic::StepPhase, &str); 8] = [
             (caustic::StepPhase::BuildDomain, "Domain"),
             (caustic::StepPhase::BuildIC, "IC generation"),
+            (caustic::StepPhase::BuildICSampling, "IC sampling"),
+            (caustic::StepPhase::BuildICCompression, "IC compression"),
             (caustic::StepPhase::BuildPoisson, "Poisson solver"),
             (caustic::StepPhase::BuildIntegrator, "Integrator"),
-            (caustic::StepPhase::BuildExitConditions, "Exit conditions"),
             (caustic::StepPhase::BuildAssembly, "Assembly"),
+            (caustic::StepPhase::BuildExitConditions, "Exit conditions"),
         ];
 
         // Step phases (depends on detected integrator)
