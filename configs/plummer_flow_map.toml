@@ -1,0 +1,45 @@
+# Plummer — Flow-map Lagrangian evolution
+#
+# Uses FlowMapRepr: stores forward maps X(t;q), V(t;q)
+# instead of f(x,v,t) directly. The maps stay smooth even
+# when f develops fine filaments.
+#
+# Advantages: exact mass conservation, no interpolation error
+# in the drift step, natural caustic detection.
+#
+# Watch F3 Density for CIC-deposited density.
+# Watch F5 Energy for conservation.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "flow_map"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[solver.flow_map]
+lagrangian_resolution = 16
+velocity_resolution = 8
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_flow_map"
+prefix = "run"
+snapshot_interval = 0.5

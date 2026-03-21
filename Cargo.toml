@@ -21,6 +21,7 @@ include = [
 
 [dependencies]
 caustic = { path = "../caustic", features = ["hdf5"] }
+hdf5-metno = "0.12.3"
 toml = "1.0.7"
 clap = { version = "4.6.0", features = [
     "derive",

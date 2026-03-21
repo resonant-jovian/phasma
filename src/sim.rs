@@ -168,6 +168,22 @@ pub struct SimState {
     // ── Verbose log messages (--verbose) ──
     #[serde(default)]
     pub log_messages: Vec<String>,
+    // ── Positivity enforcement diagnostics ──
+    /// Number of negative-value violations detected and clipped this step.
+    #[serde(default)]
+    pub positivity_violations: Option<u64>,
+    // ── Near-field correction diagnostics ──
+    /// L2 norm of near-field correction applied during Poisson solve.
+    #[serde(default)]
+    pub near_field_correction_l2: Option<f64>,
+    // ── Symplecticity diagnostic ──
+    /// Per-step Casimir C₂ drift as a proxy for symplecticity violation.
+    #[serde(default)]
+    pub symplecticity_error: Option<f64>,
+    // ── Rank explosion early-warning ──
+    /// Exponential growth rate of max rank (> 0.5 = doubling every ~2 steps).
+    #[serde(default)]
+    pub rank_growth_rate: Option<f64>,
 }
 
 impl SimState {
@@ -609,6 +625,9 @@ fn build_from_config(
             };
             ht.max_rank = max_rank;
             ht.tolerance = tolerance;
+            if cfg.solver.positivity_limiter.unwrap_or(false) {
+                ht = ht.with_positivity_limiter(true);
+            }
             if verbose {
                 logs.push(format!(
                     "  HT total rank: {}, memory: {:.1} MB",
@@ -668,10 +687,12 @@ fn build_from_config(
                         Some("mp7") => caustic::AdvectionScheme::Mp7,
                         _ => caustic::AdvectionScheme::CatmullRom,
                     };
-                    Box::new(
-                        UniformGrid6D::from_snapshot(snap, domain.clone())
-                            .with_advection_scheme(scheme),
-                    )
+                    let mut grid = UniformGrid6D::from_snapshot(snap, domain.clone())
+                        .with_advection_scheme(scheme);
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        grid = grid.with_positivity_limiter(true);
+                    }
+                    Box::new(grid)
                 }
                 "tensor_train" => {
                     let max_rank = cfg
@@ -686,9 +707,13 @@ fn build_from_config(
                             "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
                         ));
                     }
-                    Box::new(TensorTrain::from_snapshot_owned(
+                    let mut tt = TensorTrain::from_snapshot_owned(
                         snap, max_rank, tolerance, &domain,
-                    ))
+                    );
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        tt = tt.with_positivity_limiter(true);
+                    }
+                    Box::new(tt)
                 }
                 "spectral" | "velocity_ht" => {
                     let n_modes = cfg
@@ -700,7 +725,15 @@ fn build_from_config(
                     if verbose {
                         logs.push(format!("  Spectral n_modes={n_modes}"));
                     }
-                    Box::new(SpectralV::from_snapshot(&snap, n_modes, &domain))
+                    let mut sv = SpectralV::from_snapshot(&snap, n_modes, &domain);
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        sv = sv.with_positivity_limiter(true);
+                    }
+                    if let Some(ref fil) = cfg.solver.filamentation {
+                        sv.hypercollision_nu = fil.hypercollision_nu;
+                        sv.hypercollision_order = fil.hypercollision_order as usize;
+                    }
+                    Box::new(sv)
                 }
                 _ => unreachable!(),
             }
@@ -1537,6 +1570,10 @@ fn extract_sim_state(
         advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
+        positivity_violations: None,
+        near_field_correction_l2: None,
+        symplecticity_error: diag.symplecticity_error,
+        rank_growth_rate: None,
         log_messages: Vec::new(),
     }
 }
@@ -1569,6 +1606,9 @@ fn zero_diag() -> caustic::GlobalDiagnostics {
         casimir_c2: 0.0,
         casimir_c2_pre_lomac: None,
         casimir_c2_post_lomac: None,
+        near_field_correction_magnitude: None,
+        coarse_grained_entropy: None,
+        symplecticity_error: None,
         entropy: 0.0,
         mass_in_box: 0.0,
     }
@@ -1693,6 +1733,10 @@ fn error_state(msg: String) -> SimState {
         advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
+        positivity_violations: None,
+        near_field_correction_l2: None,
+        symplecticity_error: None,
+        rank_growth_rate: None,
         log_messages: vec![format!("ERROR: {msg}")],
     }
 }
@@ -2354,6 +2398,10 @@ mod unit_tests {
             advection_rank_amplification: None,
             green_function_rank: None,
             exp_sum_terms: None,
+            positivity_violations: None,
+            near_field_correction_l2: None,
+            symplecticity_error: None,
+            rank_growth_rate: None,
             log_messages: vec![],
         }
     }

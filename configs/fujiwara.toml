@@ -1,0 +1,47 @@
+# Fujiwara (1983) — Uniform density sphere collapse
+#
+# 32^3 x 16^3 uniform grid (~128 GB, use HT for production).
+# Cold uniform-density sphere undergoes gravitational collapse,
+# violent relaxation, and virialization.
+# Canonical test for spherically symmetric gravitational dynamics.
+#
+# Isolated BC required (vacuum outside the sphere).
+# HT representation recommended for higher resolution.
+#
+# Watch F3 Density for collapse dynamics.
+# Watch F5 Energy for virial ratio approaching 1.0.
+# Watch F7 Profiles for half-mass radius evolution.
+
+[model]
+type = "uniform_perturbation"
+total_mass = 1.0
+scale_radius = 3.0
+
+[domain]
+spatial_extent = 6.0
+velocity_extent = 2.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|open"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "vgf"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 15.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/fujiwara"
+prefix = "run"
+snapshot_interval = 0.2
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.8

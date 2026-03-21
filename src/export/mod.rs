@@ -29,6 +29,7 @@ pub enum ExportFormat {
     RadialProfilesCsv,
     PerformanceParquet,
     Zip,
+    Hdf5,
 }
 
 impl ExportFormat {
@@ -46,6 +47,7 @@ impl ExportFormat {
             "config" | "toml" => Self::ConfigToml,
             "radial" | "profiles" => Self::RadialProfilesCsv,
             "performance" | "perf" => Self::PerformanceParquet,
+            "hdf5" | "h5" => Self::Hdf5,
             _ => Self::Csv,
         }
     }
@@ -64,6 +66,7 @@ impl ExportFormat {
             Self::RadialProfilesCsv => "Radial profiles → CSV",
             Self::PerformanceParquet => "Performance data → Parquet",
             Self::Zip => "★ Export All → ZIP archive",
+            Self::Hdf5 => "Snapshot → HDF5",
         }
     }
 
@@ -82,6 +85,7 @@ impl ExportFormat {
             Self::RadialProfilesCsv => "0",
             Self::PerformanceParquet => "a",
             Self::Zip => "z",
+            Self::Hdf5 => "h",
         }
     }
 }
@@ -112,7 +116,63 @@ pub fn export_diagnostics(
         ExportFormat::RadialProfilesCsv => export_radial_profiles_csv(dir, state, stem),
         ExportFormat::PerformanceParquet => export_performance_csv(dir, diagnostics, stem),
         ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
+        ExportFormat::Hdf5 => export_hdf5(dir, state, stem),
     }
+}
+
+/// Export current snapshot as HDF5 via caustic's IOManager.
+fn export_hdf5(
+    dir: &Path,
+    state: Option<&SimState>,
+    stem: &str,
+) -> Result<String, String> {
+    let state = state.ok_or("No simulation state available")?;
+    if state.density_xy.is_empty() {
+        return Err("No density data available".to_string());
+    }
+
+    let path = dir.join(format!("{stem}_snapshot.h5"));
+    let path_str = path.display().to_string();
+
+    // Write density projection data as HDF5 using hdf5-metno directly.
+    use hdf5_metno as hdf5;
+
+    let file = hdf5::File::create(&path).map_err(|e| format!("HDF5 create: {e}"))?;
+
+    // Density projection: shape [ny, nx] (row-major)
+    let nx = state.density_nx;
+    let ny = state.density_ny;
+    file.new_dataset::<f64>()
+        .shape([ny, nx])
+        .create("density_xy")
+        .map_err(|e| format!("HDF5 dataset: {e}"))?
+        .write_raw(&state.density_xy)
+        .map_err(|e| format!("HDF5 write: {e}"))?;
+
+    // Simulation metadata
+    let params = file
+        .create_group("simulation_parameters")
+        .map_err(|e| format!("HDF5 group: {e}"))?;
+    params
+        .new_attr::<f64>()
+        .create("time")
+        .map_err(|e| format!("HDF5 attr: {e}"))?
+        .write_scalar(&state.t)
+        .map_err(|e| format!("HDF5 write: {e}"))?;
+    params
+        .new_attr::<f64>()
+        .create("total_energy")
+        .map_err(|e| format!("HDF5 attr: {e}"))?
+        .write_scalar(&state.total_energy)
+        .map_err(|e| format!("HDF5 write: {e}"))?;
+    params
+        .new_attr::<u64>()
+        .create("step")
+        .map_err(|e| format!("HDF5 attr: {e}"))?
+        .write_scalar(&state.step)
+        .map_err(|e| format!("HDF5 write: {e}"))?;
+
+    Ok(path_str)
 }
 
 /// Export the current config as a TOML file.

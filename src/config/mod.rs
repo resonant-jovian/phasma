@@ -400,6 +400,24 @@ pub struct SolverConfig {
     pub multigrid: Option<MultigridConfig>,
     #[serde(default)]
     pub exponential_sum: Option<ExponentialSumConfig>,
+    /// Enable positivity-preserving limiter (clips f < 0 after advection/truncation).
+    #[serde(default)]
+    pub positivity_limiter: Option<bool>,
+    /// Filamentation control: velocity-space filtering/hypercollision.
+    #[serde(default)]
+    pub filamentation: Option<FilamentationConfig>,
+    /// Enable symplecticity monitoring (Casimir-based proxy). Default: false.
+    #[serde(default)]
+    pub symplecticity_monitor: Option<bool>,
+    /// Flow-map representation config.
+    #[serde(default)]
+    pub flow_map: Option<FlowMapConfig>,
+    /// Range-separated Poisson solver config.
+    #[serde(default)]
+    pub range_separated: Option<RangeSeparatedConfig>,
+    /// Macro-micro decomposition config.
+    #[serde(default)]
+    pub macro_micro: Option<MacroMicroConfig>,
 }
 
 fn default_representation() -> String {
@@ -432,6 +450,12 @@ impl Default for SolverConfig {
             semi_lagrangian: None,
             multigrid: None,
             exponential_sum: None,
+            positivity_limiter: None,
+            filamentation: None,
+            symplecticity_monitor: None,
+            flow_map: None,
+            range_separated: None,
+            macro_micro: None,
         }
     }
 }
@@ -560,6 +584,13 @@ pub struct ExponentialSumConfig {
     pub num_terms: u32,
     #[serde(default = "default_exp_sum_accuracy")]
     pub accuracy: f64,
+    /// Enable near-field correction diagnostic reporting.
+    #[serde(default = "default_near_field_diagnostics")]
+    pub near_field_diagnostics: bool,
+}
+
+fn default_near_field_diagnostics() -> bool {
+    true
 }
 
 fn default_exp_sum_terms() -> u32 {
@@ -567,6 +598,83 @@ fn default_exp_sum_terms() -> u32 {
 }
 fn default_exp_sum_accuracy() -> f64 {
     1e-8
+}
+
+/// Filamentation control configuration.
+///
+/// For SpectralV: hypercollision damps high Hermite modes.
+/// For UniformGrid6D / HtTensor: velocity-space exponential filter (Phase 3).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FilamentationConfig {
+    /// Hypercollision coefficient (SpectralV only). 0 = disabled.
+    #[serde(default)]
+    pub hypercollision_nu: f64,
+    /// Order of hypercollision operator (typically 2 or 3).
+    #[serde(default = "default_hypercollision_order")]
+    pub hypercollision_order: u32,
+    /// Velocity-space exponential filter cutoff (fraction of Nyquist, 0.0–1.0).
+    /// For UniformGrid6D and HtTensor. None = disabled.
+    #[serde(default)]
+    pub velocity_filter_cutoff: Option<f64>,
+    /// Velocity-space exponential filter order (higher = sharper). Default: 4.
+    #[serde(default = "default_velocity_filter_order")]
+    pub velocity_filter_order: Option<u32>,
+}
+
+fn default_hypercollision_order() -> u32 {
+    2
+}
+
+fn default_velocity_filter_order() -> Option<u32> {
+    None
+}
+
+/// Flow-map representation configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FlowMapConfig {
+    /// Number of Lagrangian tracer points per spatial dimension.
+    #[serde(default = "default_flow_map_resolution")]
+    pub lagrangian_resolution: u32,
+    /// Number of Lagrangian tracer points per velocity dimension.
+    #[serde(default = "default_flow_map_v_resolution")]
+    pub velocity_resolution: u32,
+}
+
+fn default_flow_map_resolution() -> u32 {
+    16
+}
+fn default_flow_map_v_resolution() -> u32 {
+    8
+}
+
+/// Range-separated Poisson solver configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RangeSeparatedConfig {
+    /// Split radius in grid units (typically 2-4).
+    #[serde(default = "default_split_radius")]
+    pub split_radius: f64,
+    /// Inner solver for the long-range component ("fft_periodic", "fft_isolated", etc.)
+    #[serde(default = "default_inner_solver")]
+    pub inner_solver: String,
+}
+
+fn default_split_radius() -> f64 {
+    3.0
+}
+fn default_inner_solver() -> String {
+    "fft_periodic".to_string()
+}
+
+/// Macro-micro decomposition configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MacroMicroConfig {
+    /// Inner representation for the micro deviation g ("uniform", "ht", etc.)
+    #[serde(default = "default_inner_repr")]
+    pub inner_representation: String,
+}
+
+fn default_inner_repr() -> String {
+    "uniform".to_string()
 }
 
 // ── Time (§1.4) ─────────────────────────────────────────────────────────────

@@ -1,0 +1,43 @@
+# Phase-space mixing quantification
+#
+# Plummer equilibrium with radial perturbation.
+# Drives phase-space mixing and tests entropy evolution.
+#
+# Watch F5 Energy for fine-grained entropy (S) — should be conserved.
+# The coarse-grained entropy (S̄) should increase due to mixing.
+# The Casimir C₂ = ∫f² should be approximately conserved.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 20.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/mixing"
+prefix = "run"
+snapshot_interval = 0.2
+diagnostics_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 1.0
+casimir_drift_tolerance = 0.5

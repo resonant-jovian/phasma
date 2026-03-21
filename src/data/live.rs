@@ -438,6 +438,10 @@ mod tests {
             exp_sum_terms: None,
             density_power_spectrum: None,
             field_energy_spectrum: None,
+            positivity_violations: None,
+            near_field_correction_l2: None,
+            symplecticity_error: None,
+            rank_growth_rate: None,
             log_messages: vec![],
         }
     }

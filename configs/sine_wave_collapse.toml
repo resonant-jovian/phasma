@@ -1,0 +1,43 @@
+# Sine-wave gravitational collapse
+#
+# Sinusoidal density perturbation on a warm background.
+# Tests convergence of collapse dynamics vs resolution.
+#
+# The perturbation grows via Jeans instability, forming a
+# density concentration at the collapse point.
+#
+# Watch F3 Density for the developing density peak.
+# Watch F5 Energy for energy conservation during collapse.
+
+[model]
+type = "uniform_perturbation"
+total_mass = 1.0
+scale_radius = 5.0
+
+[domain]
+spatial_extent = 5.0
+velocity_extent = 2.0
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 5.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/sine_wave_collapse"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 1.0
