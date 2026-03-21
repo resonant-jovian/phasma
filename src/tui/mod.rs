@@ -1,7 +1,5 @@
 pub mod action;
 pub mod app;
-pub mod aspect;
-pub mod chart_utils;
 pub mod cli;
 pub mod command_palette;
 pub mod components;
@@ -12,6 +10,7 @@ pub mod guard;
 pub mod help;
 pub mod layout;
 pub mod logging;
+pub mod plt_bridge;
 pub mod status_bar;
 pub mod tabs;
 pub mod widgets;

@@ -5,15 +5,15 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Cell, Chart, Dataset, Paragraph, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
+use ratatui_plt::prelude::{Axis as PltAxis, LinePlot, Series};
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
 use crate::tui::action::Action;
-use crate::tui::chart_utils::{data_bounds, densify};
+use crate::tui::plt_bridge::phasma_theme_to_plt;
 
 const NODE_LABELS: [&str; 11] = [
     "x\u{2081}",
@@ -90,6 +90,24 @@ impl Default for RankTab {
             cached_rank: CachedRankData::default(),
         }
     }
+}
+
+/// Compute data bounds with 5% y-padding.
+fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    for &(x, y) in data {
+        if x < x_min { x_min = x; }
+        if x > x_max { x_max = x; }
+        if y < y_min { y_min = y; }
+        if y > y_max { y_max = y; }
+    }
+    if x_min >= x_max { x_max = x_min + 1.0; }
+    if y_min >= y_max { y_max = y_min + 1.0; }
+    let ypad = (y_max - y_min) * 0.05;
+    (x_min, x_max, y_min - ypad, y_max + ypad)
 }
 
 impl RankTab {
@@ -295,11 +313,10 @@ impl RankTab {
     }
 
     fn draw_rank_evolution(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Rank Evolution ")
-            .border_style(Style::default().fg(theme.border));
-
         if self.cached_rank.chart_data.len() < 2 {
+            let block = Block::bordered()
+                .title(" Rank Evolution ")
+                .border_style(Style::default().fg(theme.border));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -312,75 +329,45 @@ impl RankTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = (
-            self.cached_rank.x_min,
-            self.cached_rank.x_max,
-            self.cached_rank.y_min,
-            self.cached_rank.y_max,
-        );
-
-        let target = area.width.saturating_sub(2) as usize * 2;
-        let dense = densify(&self.cached_rank.chart_data, target);
-        let dense_trunc = densify(&self.cached_rank.trunc_data, target);
-
-        let mut datasets = vec![
-            Dataset::default()
-                .name("total rank")
-                .marker(symbols::Marker::Braille)
-                .style(Style::default().fg(theme.chart[0]))
-                .data(&dense),
+        let plt_theme = phasma_theme_to_plt(theme);
+        let mut series_vec = vec![
+            Series::new("total rank")
+                .data(self.cached_rank.chart_data.clone())
+                .color(theme.chart[0]),
         ];
 
-        if dense_trunc.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("ε_trunc")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[2]))
-                    .data(&dense_trunc),
+        if self.cached_rank.trunc_data.len() >= 2 {
+            series_vec.push(
+                Series::new("ε_trunc")
+                    .data(self.cached_rank.trunc_data.clone())
+                    .color(theme.chart[2]),
             );
         }
 
-        let dense_poisson_amp = densify(&self.cached_rank.poisson_amp, target);
-
-        if dense_poisson_amp.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("Poisson amp.")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[3 % theme.chart.len()]))
-                    .data(&dense_poisson_amp),
+        if self.cached_rank.poisson_amp.len() >= 2 {
+            series_vec.push(
+                Series::new("Poisson amp.")
+                    .data(self.cached_rank.poisson_amp.clone())
+                    .color(theme.chart[3 % theme.chart.len()]),
             );
         }
 
-        let dense_advection_amp = densify(&self.cached_rank.advection_amp, target);
-
-        if dense_advection_amp.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("Advect. amp.")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[4 % theme.chart.len()]))
-                    .data(&dense_advection_amp),
+        if self.cached_rank.advection_amp.len() >= 2 {
+            series_vec.push(
+                Series::new("Advect. amp.")
+                    .data(self.cached_rank.advection_amp.clone())
+                    .color(theme.chart[4 % theme.chart.len()]),
             );
         }
 
-        let chart = Chart::new(datasets)
-            .block(block)
-            .x_axis(
-                Axis::default()
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.3}"), format!("{x_max:.3}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{:.0}", y_min), format!("{:.0}", y_max)])
-                    .style(Style::default().fg(theme.dim)),
-            );
+        let plot = LinePlot::new()
+            .series_vec(series_vec)
+            .x_axis(PltAxis::new())
+            .y_axis(PltAxis::new())
+            .title(" Rank Evolution ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 
     fn draw_per_node_table(

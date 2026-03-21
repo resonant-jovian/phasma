@@ -8,6 +8,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use ratatui_plt::prelude::{
+    AspectRatio, Axis as PltAxis, Heatmap, Histogram as PltHistogram, LinearNorm, LogNorm, Series,
+};
 
 use crate::{
     colormaps::Colormap,
@@ -15,8 +18,8 @@ use crate::{
     themes::ThemeColors,
     tui::{
         action::Action,
-        aspect::AspectCorrection,
-        widgets::{data_cursor::DataCursor, heatmap::HeatmapWidget},
+        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        widgets::data_cursor::DataCursor,
     },
 };
 
@@ -36,6 +39,8 @@ pub struct PhaseSpaceTab {
     physical_aspect: bool,
     /// Toggle stream-count overlay (§2.2 F4 `[s]`)
     show_stream_count: bool,
+    /// Toggle velocity distribution histogram panel
+    show_vel_histogram: bool,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
@@ -56,6 +61,7 @@ impl Default for PhaseSpaceTab {
             slice_offsets: [0.0; 4],
             physical_aspect: false,
             show_stream_count: false,
+            show_vel_histogram: false,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
@@ -169,6 +175,10 @@ impl PhaseSpaceTab {
                 self.show_stream_count = !self.show_stream_count;
                 None
             }
+            KeyCode::Char('v') => {
+                self.show_vel_histogram = !self.show_vel_histogram;
+                None
+            }
             _ => None,
         }
     }
@@ -262,10 +272,20 @@ impl PhaseSpaceTab {
             slice_info,
         );
 
-        let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
+        let [main_area, info_area] = if self.show_info && area.height > 4 {
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area)
         } else {
             [area, Rect::new(area.x, area.y, 0, 0)]
+        };
+
+        // Split main area for optional velocity histogram
+        let (heatmap_area, hist_area) = if self.show_vel_histogram && main_area.width >= 50 {
+            let [hm, hi] =
+                Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .areas(main_area);
+            (hm, Some(hi))
+        } else {
+            (main_area, None)
         };
 
         let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
@@ -273,26 +293,45 @@ impl PhaseSpaceTab {
         // Use physical extents for aspect ratio when enabled
         let state = data_provider.current_state();
         let cfg = data_provider.config();
-        let cell_ar = cfg.map(|c| c.appearance.cell_aspect_ratio).unwrap_or(0.5);
-        let asp = AspectCorrection::new(cell_ar);
+        let x_extent = state.map(|s| s.spatial_extent).unwrap_or(vnx as f64 / 2.0);
+        let v_extent = cfg
+            .map(|c| {
+                use rust_decimal::prelude::ToPrimitive;
+                c.domain.velocity_extent.to_f64().unwrap_or(5.0)
+            })
+            .unwrap_or(vnv as f64 / 2.0);
 
-        let mut widget = HeatmapWidget::new(&view_data, vnx, vnv, &title)
-            .colormap(effective_cmap)
-            .log_scale(self.log_scale)
-            .aspect(asp);
+        let aspect = if self.physical_aspect {
+            AspectRatio::Fixed(x_extent / v_extent)
+        } else {
+            AspectRatio::Auto
+        };
 
-        if self.physical_aspect {
-            let x_extent = state.map(|s| s.spatial_extent * 2.0).unwrap_or(vnx as f64);
-            let v_extent = cfg
-                .map(|c| {
-                    use rust_decimal::prelude::ToPrimitive;
-                    c.domain.velocity_extent.to_f64().unwrap_or(5.0) * 2.0
-                })
-                .unwrap_or(vnv as f64);
-            widget = widget.x_range(x_extent).y_range(v_extent);
+        let grid = flat_to_grid_data(
+            &view_data,
+            vnx,
+            vnv,
+            (-x_extent, x_extent),
+            (-v_extent, v_extent),
+        );
+
+        let (vmin, vmax) = grid.value_bounds();
+        let plt_theme = phasma_theme_to_plt(theme);
+
+        let mut hm = Heatmap::new(grid)
+            .colormap(phasma_cmap_to_plt(effective_cmap))
+            .title(title.clone())
+            .aspect_ratio(aspect)
+            .show_colorbar(true)
+            .theme(plt_theme);
+
+        if self.log_scale && vmin > 0.0 {
+            hm = hm.norm(LogNorm::new(vmin, vmax));
+        } else {
+            hm = hm.norm(LinearNorm::new(vmin, vmax));
         }
 
-        frame.render_widget(widget, heatmap_area);
+        frame.render_widget(&hm, heatmap_area);
 
         // Cache data for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = heatmap_area;
@@ -303,6 +342,53 @@ impl PhaseSpaceTab {
             self.last_state_step = s.step;
             self.last_nx = vnx;
             self.last_ny = vnv;
+        }
+
+        // Velocity histogram panel — marginal velocity distribution
+        if let Some(ha) = hist_area {
+            if !self.last_data.is_empty() && self.last_nx > 0 && self.last_ny > 0 {
+                // Sum columns to get velocity marginal (sum over x for each v bin)
+                let vel_marginal: Vec<f64> = (0..self.last_ny)
+                    .map(|iv| {
+                        (0..self.last_nx)
+                            .map(|ix| self.last_data.get(iv * self.last_nx + ix).copied().unwrap_or(0.0))
+                            .sum()
+                    })
+                    .collect();
+                let vel_data: Vec<f64> = vel_marginal
+                    .iter()
+                    .flat_map(|&val| {
+                        // Repeat values to simulate binned data for the histogram
+                        let count = (val * 100.0).max(0.0) as usize;
+                        std::iter::repeat_n(0.0, count)
+                    })
+                    .collect();
+
+                // Use LinePlot for a cleaner velocity profile instead
+                let plt_theme = phasma_theme_to_plt(theme);
+                let vel_series_data: Vec<(f64, f64)> = vel_marginal
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &val)| {
+                        let v_frac = i as f64 / (self.last_ny.max(1) - 1).max(1) as f64;
+                        let v = -v_extent + 2.0 * v_extent * v_frac;
+                        (v, val)
+                    })
+                    .collect();
+
+                let hist_plot = ratatui_plt::prelude::LinePlot::new()
+                    .series(
+                        Series::new("f(v)")
+                            .data(vel_series_data)
+                            .color(theme.chart[0]),
+                    )
+                    .x_axis(PltAxis::new().label("v"))
+                    .y_axis(PltAxis::new().label("f"))
+                    .title(" Velocity Distribution ")
+                    .theme(plt_theme);
+
+                frame.render_widget(&hist_plot, ha);
+            }
         }
 
         if self.show_info && info_area.width > 0 {

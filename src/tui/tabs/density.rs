@@ -8,14 +8,43 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
+use ratatui_plt::prelude::{
+    AspectRatio, Axis as PltAxis, ContourPlot, GridData, Heatmap, LinearNorm, LogNorm,
+};
 
 use crate::{
     colormaps::Colormap,
     data::DataProvider,
     themes::ThemeColors,
     tui::widgets::data_cursor::DataCursor,
-    tui::{action::Action, aspect::AspectCorrection, widgets::heatmap::HeatmapWidget},
+    tui::{action::Action, plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt}},
 };
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum ContourMode {
+    #[default]
+    HeatmapOnly,
+    HeatmapContour,
+    FilledContour,
+}
+
+impl ContourMode {
+    fn next(self) -> Self {
+        match self {
+            ContourMode::HeatmapOnly => ContourMode::HeatmapContour,
+            ContourMode::HeatmapContour => ContourMode::FilledContour,
+            ContourMode::FilledContour => ContourMode::HeatmapOnly,
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            ContourMode::HeatmapOnly => "",
+            ContourMode::HeatmapContour => " [contour]",
+            ContourMode::FilledContour => " [filled]",
+        }
+    }
+}
 
 pub struct DensityTab {
     axis: usize, // 0=yz, 1=xz, 2=xy (default)
@@ -23,7 +52,7 @@ pub struct DensityTab {
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
-    show_contours: bool,
+    contour_mode: ContourMode,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
@@ -40,7 +69,7 @@ impl Default for DensityTab {
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
-            show_contours: false,
+            contour_mode: ContourMode::default(),
             data_cursor: DataCursor::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
@@ -86,7 +115,7 @@ impl DensityTab {
                 None
             }
             KeyCode::Char('n') => {
-                self.show_contours = !self.show_contours;
+                self.contour_mode = self.contour_mode.next();
                 None
             }
             KeyCode::Char('r') => {
@@ -191,7 +220,7 @@ impl DensityTab {
         ];
         let title = axis_names[self.axis.min(2)];
         let log_tag = if self.log_scale { " [log]" } else { "" };
-        let contour_tag = if self.show_contours { " [contour]" } else { "" };
+        let contour_tag = self.contour_mode.tag();
         let full_title = format!(" {title}{log_tag}{contour_tag} ");
 
         let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
@@ -206,37 +235,67 @@ impl DensityTab {
 
         // Use physical spatial extent for aspect ratio if available
         let state = data_provider.current_state();
-        let x_extent = state.map(|s| s.spatial_extent * 2.0).unwrap_or(vnx as f64);
-        let y_extent = x_extent; // spatial domain is symmetric
+        let extent = state.map(|s| s.spatial_extent).unwrap_or(vnx as f64 / 2.0);
 
-        let cell_ar = data_provider
-            .config()
-            .map(|c| c.appearance.cell_aspect_ratio)
-            .unwrap_or(0.5);
-        let asp = AspectCorrection::new(cell_ar);
-        frame.render_widget(
-            HeatmapWidget::new(&view_data, vnx, vny, &full_title)
-                .colormap(effective_cmap)
-                .log_scale(self.log_scale)
-                .aspect(asp)
-                .x_range(x_extent)
-                .y_range(y_extent),
-            heatmap_area,
+        // Build GridData and render via ratatui-plt Heatmap
+        let grid = flat_to_grid_data(
+            &view_data,
+            vnx,
+            vny,
+            (-extent, extent),
+            (-extent, extent),
         );
 
-        // Compute the actual draw area used by the heatmap (replicate widget logic)
-        let hm_inner = Block::bordered().inner(heatmap_area);
-        let hm_draw = if hm_inner.width > 8 {
-            let [hm, _cb] =
-                Layout::horizontal([Constraint::Min(0), Constraint::Length(4)]).areas(hm_inner);
-            hm
-        } else {
-            hm_inner
-        };
-        let hm_draw = asp.letterbox(hm_draw, x_extent, y_extent).rect;
+        let (vmin, vmax) = grid.value_bounds();
+        let plt_theme = phasma_theme_to_plt(theme);
 
-        // Store data for mouse cursor lookups — only copy when data actually changed
-        self.last_heatmap_area = hm_draw;
+        match self.contour_mode {
+            ContourMode::HeatmapOnly | ContourMode::HeatmapContour => {
+                let mut hm = Heatmap::new(grid.clone())
+                    .colormap(phasma_cmap_to_plt(effective_cmap))
+                    .title(full_title.clone())
+                    .aspect_ratio(AspectRatio::Equal)
+                    .show_colorbar(true)
+                    .theme(plt_theme.clone());
+
+                if self.log_scale && vmin > 0.0 {
+                    hm = hm.norm(LogNorm::new(vmin, vmax));
+                } else {
+                    hm = hm.norm(LinearNorm::new(vmin, vmax));
+                }
+
+                frame.render_widget(&hm, heatmap_area);
+
+                // Overlay contours if requested
+                if self.contour_mode == ContourMode::HeatmapContour {
+                    let contour = ContourPlot::new(grid)
+                        .levels(10)
+                        .aspect_ratio(AspectRatio::Equal)
+                        .theme(phasma_theme_to_plt(theme));
+                    frame.render_widget(&contour, heatmap_area);
+                }
+            }
+            ContourMode::FilledContour => {
+                let mut contour = ContourPlot::new(grid)
+                    .levels(10)
+                    .filled(true)
+                    .colormap(phasma_cmap_to_plt(effective_cmap))
+                    .title(full_title.clone())
+                    .aspect_ratio(AspectRatio::Equal)
+                    .theme(plt_theme);
+
+                if self.log_scale && vmin > 0.0 {
+                    contour = contour.norm(LogNorm::new(vmin, vmax));
+                } else {
+                    contour = contour.norm(LinearNorm::new(vmin, vmax));
+                }
+
+                frame.render_widget(&contour, heatmap_area);
+            }
+        }
+
+        // Store heatmap area for mouse cursor lookups
+        self.last_heatmap_area = heatmap_area;
         if let Some(s) = state
             && (s.step != self.last_state_step || vnx != self.last_nx || vny != self.last_ny)
         {
@@ -244,11 +303,6 @@ impl DensityTab {
             self.last_state_step = s.step;
             self.last_nx = vnx;
             self.last_ny = vny;
-        }
-
-        // Contour overlay (uses cached data)
-        if self.show_contours && !self.last_data.is_empty() && vnx > 0 && vny > 0 {
-            overlay_contours(frame, hm_draw, &self.last_data, vnx, vny, self.log_scale);
         }
 
         if self.show_info && info_area.width > 0 {
@@ -269,122 +323,6 @@ impl DensityTab {
         // Data cursor tooltip (drawn last so it's on top)
         self.data_cursor.draw(frame);
     }
-}
-
-/// Overlay contour markers on the heatmap area.
-///
-/// Computes 5 evenly spaced contour levels between data min and max. For each
-/// cell in the rendered area, maps screen position back to data coordinates and
-/// checks whether the data value is within 10% of a level boundary (relative to
-/// the spacing between levels). Matching cells get a dim `·` marker.
-fn overlay_contours(
-    frame: &mut Frame,
-    draw_area: Rect,
-    data: &[f64],
-    nx: usize,
-    ny: usize,
-    log_scale: bool,
-) {
-    if draw_area.width == 0 || draw_area.height == 0 {
-        return;
-    }
-
-    // Compute data range
-    let (data_min, data_max) = data_range(data, log_scale);
-    if data_max <= data_min {
-        return;
-    }
-
-    let num_levels = 5usize;
-    let levels: Vec<f64> = (1..=num_levels)
-        .map(|i| {
-            if log_scale && data_min > 0.0 {
-                let lmin = data_min.ln();
-                let lmax = data_max.ln();
-                (lmin + (lmax - lmin) * i as f64 / (num_levels + 1) as f64).exp()
-            } else {
-                data_min + (data_max - data_min) * i as f64 / (num_levels + 1) as f64
-            }
-        })
-        .collect();
-
-    let level_spacing = if log_scale && data_min > 0.0 {
-        let lmin = data_min.ln();
-        let lmax = data_max.ln();
-        ((lmax - lmin) / (num_levels + 1) as f64).exp() - 1.0
-    } else {
-        (data_max - data_min) / (num_levels + 1) as f64
-    };
-
-    // Threshold: 10% of spacing between levels
-    let threshold_frac = 0.10;
-
-    let cols = draw_area.width as usize;
-    let rows = draw_area.height as usize;
-
-    let buf = frame.buffer_mut();
-
-    for row in 0..rows {
-        for col in 0..cols {
-            // Map screen position to data index
-            let data_col = (col * nx) / cols.max(1);
-            let data_col = data_col.min(nx.saturating_sub(1));
-            let data_row = (row * ny) / rows.max(1);
-            let data_row = data_row.min(ny.saturating_sub(1));
-
-            let idx = data_row * nx + data_col;
-            if idx >= data.len() {
-                continue;
-            }
-            let val = data[idx];
-
-            // Check if this value is near any contour level
-            let near_contour = levels.iter().any(|&level| {
-                let threshold = if log_scale && val > 0.0 && level > 0.0 {
-                    level * level_spacing * threshold_frac
-                } else {
-                    level_spacing * threshold_frac
-                };
-                (val - level).abs() < threshold
-            });
-
-            if near_contour {
-                let x = draw_area.x + col as u16;
-                let y = draw_area.y + row as u16;
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("\u{00b7}"); // middle dot ·
-                    cell.set_fg(Color::White);
-                }
-            }
-        }
-    }
-}
-
-/// Compute data range (min, max), handling log scale.
-fn data_range(data: &[f64], log_scale: bool) -> (f64, f64) {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for &v in data {
-        if log_scale && v <= 0.0 {
-            continue;
-        }
-        if v < min {
-            min = v;
-        }
-        if v > max {
-            max = v;
-        }
-    }
-    if min == f64::INFINITY {
-        min = 0.0;
-    }
-    if max == f64::NEG_INFINITY {
-        max = 1.0;
-    }
-    if min == max {
-        max = min + 1.0;
-    }
-    (min, max)
 }
 
 /// Crop data to a centered sub-region defined by zoom level.

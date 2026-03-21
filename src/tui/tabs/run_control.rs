@@ -6,9 +6,11 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, Gauge, GraphType, Paragraph},
+    widgets::{Block, Gauge, Paragraph},
+};
+use ratatui_plt::prelude::{
+    AspectRatio, Axis as PltAxis, Bounds, Heatmap, LinearNorm, LinePlot, ReferenceLine, Series,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -19,13 +21,9 @@ use crate::{
     themes::ThemeColors,
     tui::{
         action::Action,
-        aspect::AspectCorrection,
-        chart_utils::densify,
         config::Config,
-        widgets::{
-            heatmap::HeatmapWidget,
-            sparkline_table::{SparklineRow, SparklineTable},
-        },
+        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        widgets::sparkline_table::{SparklineRow, SparklineTable},
     },
 };
 
@@ -371,47 +369,50 @@ impl RunControlTab {
                 }
             }
             Some(state) => {
-                let cell_ar = data_provider
-                    .config()
-                    .map(|c| c.appearance.cell_aspect_ratio)
-                    .unwrap_or(0.5);
-                let asp = AspectCorrection::new(cell_ar);
-
                 // Spatial domain is symmetric: extent covers half-width
-                let x_extent = state.spatial_extent * 2.0;
-                let y_extent = x_extent;
+                let extent = state.spatial_extent;
+                let plt_theme = phasma_theme_to_plt(theme);
 
-                frame.render_widget(
-                    HeatmapWidget::new(
-                        &state.density_xy,
-                        state.density_nx,
-                        state.density_ny,
-                        " ρ(x,y) density ",
-                    )
-                    .colormap(colormap)
-                    .aspect(asp)
-                    .x_range(x_extent)
-                    .y_range(y_extent),
-                    density_area,
+                // Density heatmap
+                let dens_grid = flat_to_grid_data(
+                    &state.density_xy,
+                    state.density_nx,
+                    state.density_ny,
+                    (-extent, extent),
+                    (-extent, extent),
                 );
+                let (dvmin, dvmax) = dens_grid.value_bounds();
+                let dens_hm = Heatmap::new(dens_grid)
+                    .colormap(phasma_cmap_to_plt(colormap))
+                    .title(" ρ(x,y) density ")
+                    .aspect_ratio(AspectRatio::Equal)
+                    .show_colorbar(true)
+                    .norm(LinearNorm::new(dvmin, dvmax))
+                    .theme(plt_theme.clone());
+                frame.render_widget(&dens_hm, density_area);
 
-                // Phase-space: use 1:1 aspect (equal ranges → visually square)
+                // Phase-space heatmap
                 let ps_data = state
                     .phase_slices
                     .first()
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
-                frame.render_widget(
-                    HeatmapWidget::new(
-                        ps_data,
-                        state.phase_nx,
-                        state.phase_nv,
-                        " f(x,vx) phase-space ",
-                    )
-                    .colormap(colormap)
-                    .aspect(asp),
-                    phase_area,
+                let ps_grid = flat_to_grid_data(
+                    ps_data,
+                    state.phase_nx,
+                    state.phase_nv,
+                    (-extent, extent),
+                    (-extent, extent),
                 );
+                let (pvmin, pvmax) = ps_grid.value_bounds();
+                let ps_hm = Heatmap::new(ps_grid)
+                    .colormap(phasma_cmap_to_plt(colormap))
+                    .title(" f(x,vx) phase-space ")
+                    .aspect_ratio(AspectRatio::Equal)
+                    .show_colorbar(true)
+                    .norm(LinearNorm::new(pvmin, pvmax))
+                    .theme(plt_theme);
+                frame.render_widget(&ps_hm, phase_area);
             }
         }
     }
@@ -468,42 +469,20 @@ impl RunControlTab {
             let e_lo = (e_min - 0.001).min(0.99);
             let e_hi = (e_max + 0.001).max(1.01);
 
-            let chart_width = chart_area.width.saturating_sub(2) as usize;
-            let dense = densify(&energy_data, chart_width * 2);
+            let plt_theme = phasma_theme_to_plt(theme);
+            let plot = LinePlot::new()
+                .series(
+                    Series::new("E/E₀")
+                        .data(energy_data)
+                        .color(theme.chart[0]),
+                )
+                .x_axis(PltAxis::new().label("t").bounds(Bounds::Manual(t_min, t_max)))
+                .y_axis(PltAxis::new().label("E/E₀").bounds(Bounds::Manual(e_lo, e_hi)))
+                .reference_line(ReferenceLine::hline_dashed(1.0, theme.dim))
+                .title(" E(t)/E₀ ")
+                .theme(plt_theme);
 
-            let chart = Chart::new(vec![
-                Dataset::default()
-                    .name("E/E₀")
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(theme.chart[0]))
-                    .data(&dense),
-            ])
-            .block(Block::bordered().title(" E(t)/E₀ "))
-            .x_axis(
-                Axis::default()
-                    .title("t")
-                    .style(Style::default().fg(theme.dim))
-                    .bounds([t_min, t_max])
-                    .labels(vec![
-                        format!("{t_min:.1}"),
-                        format!("{:.1}", (t_min + t_max) / 2.0),
-                        format!("{t_max:.1}"),
-                    ]),
-            )
-            .y_axis(
-                Axis::default()
-                    .title("E/E₀")
-                    .style(Style::default().fg(theme.dim))
-                    .bounds([e_lo, e_hi])
-                    .labels(vec![
-                        format!("{e_lo:.4}"),
-                        format!("{:.4}", (e_lo + e_hi) / 2.0),
-                        format!("{e_hi:.4}"),
-                    ]),
-            );
-
-            frame.render_widget(chart, chart_area);
+            frame.render_widget(&plot, chart_area);
         }
 
         // Log stream

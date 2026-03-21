@@ -3,9 +3,11 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Paragraph},
+};
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, LinePlot, PsdPlot, RefLineDash, ReferenceLine, Scale, Series,
 };
 
 use std::borrow::Cow;
@@ -14,7 +16,7 @@ use crate::{
     data::DataProvider,
     themes::ThemeColors,
     tui::action::Action,
-    tui::chart_utils::{data_bounds, densify},
+    tui::plt_bridge::phasma_theme_to_plt,
 };
 
 type SeriesData<'a> = (&'a str, &'a [(f64, f64)], Color);
@@ -110,7 +112,7 @@ struct CachedSeries {
 pub struct EnergyTab {
     traces: TraceVisibility,
     show_drift: bool,      // show fractional drift or absolute values
-    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy
+    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy, 4=psd
     show_grid: bool,
     time_window: TimeWindow,
     cached: CachedSeries,
@@ -170,6 +172,10 @@ impl EnergyTab {
             }
             KeyCode::Char('4') => {
                 self.selected_panel = 3;
+                None
+            }
+            KeyCode::Char('5') => {
+                self.selected_panel = 4;
                 None
             }
             // Time window controls
@@ -264,13 +270,14 @@ impl EnergyTab {
             };
         }
 
-        // Compact mode: single panel (selected by panel key 1-4)
+        // Compact mode: single panel (selected by panel key 1-5)
         if area.width < 76 {
             match self.selected_panel {
                 0 => self.draw_energy_chart(frame, area, theme, data_provider),
                 1 => self.draw_mass_chart(frame, area, theme),
                 2 => self.draw_virial_chart(frame, area, theme),
-                _ => self.draw_entropy_chart(frame, area, theme),
+                3 => self.draw_entropy_chart(frame, area, theme),
+                _ => self.draw_psd_chart(frame, area, theme),
             }
             return;
         }
@@ -384,30 +391,111 @@ impl EnergyTab {
             self.show_grid,
         );
     }
+
+    fn draw_psd_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        if self.cached.total_energy.len() < 8 {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" PSD — Energy ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        // Compute PSD of the total energy time series using FFT
+        let n = self.cached.total_energy.len();
+        let dt = if n >= 2 {
+            let t0 = self.cached.total_energy.first().map(|(t, _)| *t).unwrap_or(0.0);
+            let tn = self.cached.total_energy.last().map(|(t, _)| *t).unwrap_or(1.0);
+            (tn - t0) / (n - 1) as f64
+        } else {
+            1.0
+        };
+        let sample_rate = if dt > 0.0 { 1.0 / dt } else { 1.0 };
+
+        // Remove mean and compute FFT
+        let mean: f64 =
+            self.cached.total_energy.iter().map(|(_, e)| e).sum::<f64>() / n as f64;
+        let mut input: Vec<rustfft::num_complex::Complex<f64>> = self
+            .cached
+            .total_energy
+            .iter()
+            .map(|(_, e)| rustfft::num_complex::Complex::new(e - mean, 0.0))
+            .collect();
+
+        let mut planner = rustfft::FftPlanner::new();
+        let fft = planner.plan_fft_forward(n);
+        fft.process(&mut input);
+
+        // Compute one-sided PSD: |X(f)|² / (N * fs)
+        let n_half = n / 2 + 1;
+        let psd_data: Vec<(f64, f64)> = (1..n_half)
+            .filter_map(|i| {
+                let freq = i as f64 * sample_rate / n as f64;
+                let power = (input[i].norm_sqr()) / (n as f64 * sample_rate);
+                if freq > 0.0 && power > 0.0 {
+                    Some((freq, power))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if psd_data.len() < 2 {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" PSD — Energy ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let psd = PsdPlot::new()
+            .series(
+                Series::new("E(f)")
+                    .data(psd_data)
+                    .color(theme.chart[0]),
+            )
+            .x_axis(PltAxis::new().label("frequency").scale(Scale::Log(10.0)))
+            .y_axis(PltAxis::new().label("PSD").scale(Scale::Log(10.0)))
+            .title(" PSD — Energy ")
+            .theme(plt_theme);
+
+        frame.render_widget(&psd, area);
+    }
 }
 
-/// Generate evenly-spaced label strings between `lo` and `hi`.
-/// `n` is the total number of labels (including endpoints).
-fn grid_labels(lo: f64, hi: f64, n: usize, scientific: bool) -> Vec<String> {
-    if n <= 1 {
-        let val = (lo + hi) * 0.5;
-        return vec![if scientific {
-            format!("{val:.2e}")
-        } else {
-            format!("{val:.2}")
-        }];
+/// Compute data bounds with 5% y-padding (local, replaces chart_utils::data_bounds).
+fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    for &(x, y) in data {
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
     }
-    (0..n)
-        .map(|i| {
-            let frac = i as f64 / (n - 1) as f64;
-            let val = lo + frac * (hi - lo);
-            if scientific {
-                format!("{val:.2e}")
-            } else {
-                format!("{val:.2}")
-            }
-        })
-        .collect()
+    if x_min >= x_max {
+        x_max = x_min + 1.0;
+    }
+    if y_min >= y_max {
+        y_max = y_min + 1.0;
+    }
+    let ypad = (y_max - y_min) * 0.05;
+    (x_min, x_max, y_min - ypad, y_max + ypad)
 }
 
 fn draw_single_series_with_threshold(
@@ -453,8 +541,6 @@ fn draw_single_series_with_threshold(
     };
 
     // Expand y bounds to include threshold if it's close to the data range.
-    // If threshold is more than 5x the data range away from data center, suppress
-    // it from Y-bounds so it doesn't squash the actual data to a thin line.
     let data_range = (y_max - y_min).abs().max(1e-15);
     let data_center = (y_max + y_min) / 2.0;
     let effective_threshold = threshold.filter(|&thr| (thr - data_center).abs() < data_range * 5.0);
@@ -467,62 +553,21 @@ fn draw_single_series_with_threshold(
         (y_min, y_max)
     };
 
-    let chart_width = area.width.saturating_sub(2) as usize;
-    let dense = densify(&windowed, chart_width * 2);
+    let plt_theme = phasma_theme_to_plt(theme);
 
-    let mut datasets = vec![
-        Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(color))
-            .data(&dense),
-    ];
+    let mut plot = LinePlot::new()
+        .series(Series::new(title.trim()).data(windowed.to_vec()).color(color))
+        .x_axis(PltAxis::new().bounds(Bounds::Manual(x_min, x_max)).grid(show_grid))
+        .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)).grid(show_grid))
+        .title(title)
+        .theme(plt_theme);
 
     // Add dashed threshold line
-    let threshold_data: Vec<(f64, f64)>;
     if let Some(thr) = threshold {
-        threshold_data = vec![(x_min, thr), (x_max, thr)];
-        datasets.push(
-            Dataset::default()
-                .name(format!("thr={thr:.2e}"))
-                .marker(symbols::Marker::Dot)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(theme.warn))
-                .data(&threshold_data),
-        );
+        plot = plot.reference_line(ReferenceLine::hline_dashed(thr, theme.warn));
     }
 
-    let x_labels = if show_grid {
-        grid_labels(x_min, x_max, 5, false)
-    } else {
-        vec![format!("{x_min:.2}"), format!("{x_max:.2}")]
-    };
-    let y_labels = if show_grid {
-        grid_labels(y_min, y_max, 5, true)
-    } else {
-        vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")]
-    };
-
-    let chart = Chart::new(datasets)
-        .block(
-            Block::bordered()
-                .title(title)
-                .border_style(Style::default().fg(theme.border)),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([x_min, x_max])
-                .labels(x_labels)
-                .style(Style::default().fg(theme.dim)),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([y_min, y_max])
-                .labels(y_labels)
-                .style(Style::default().fg(theme.dim)),
-        );
-
-    frame.render_widget(chart, area);
+    frame.render_widget(&plot, area);
 }
 
 fn draw_multi_series_windowed(
@@ -580,80 +625,30 @@ fn draw_multi_series_windowed(
         y_max = wy_max + pad;
     }
 
-    let chart_width = area.width.saturating_sub(2) as usize;
-    let target_points = chart_width * 2;
     let is_fit_all = time_window.t_end.is_none() && time_window.width.is_none();
+    let plt_theme = phasma_theme_to_plt(theme);
 
-    // In fit-all mode, densify directly from source data (avoids filter allocation).
-    // In windowed mode, filter first then densify.
-    let filter_storage: Vec<Vec<(f64, f64)>> = if is_fit_all {
-        Vec::new()
-    } else {
-        series
-            .iter()
-            .map(|(_, data, _)| {
+    let plt_series: Vec<Series> = series
+        .iter()
+        .map(|(name, data, color)| {
+            let filtered: Vec<(f64, f64)> = if is_fit_all {
+                data.to_vec()
+            } else {
                 data.iter()
                     .copied()
                     .filter(|(x, _)| *x >= x_min && *x <= x_max)
                     .collect()
-            })
-            .collect()
-    };
-
-    let windowed_series: Vec<Cow<'_, [(f64, f64)]>> = if is_fit_all {
-        series
-            .iter()
-            .map(|(_, data, _)| densify(data, target_points))
-            .collect()
-    } else {
-        filter_storage
-            .iter()
-            .map(|filtered| densify(filtered, target_points))
-            .collect()
-    };
-
-    let datasets: Vec<Dataset> = series
-        .iter()
-        .zip(windowed_series.iter())
-        .map(|((name, _, color), dense)| {
-            Dataset::default()
-                .name(*name)
-                .marker(symbols::Marker::Braille)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(*color))
-                .data(dense)
+            };
+            Series::new(*name).data(filtered).color(*color)
         })
         .collect();
 
-    let x_labels = if show_grid {
-        grid_labels(x_min, x_max, 5, false)
-    } else {
-        vec![format!("{x_min:.2}"), format!("{x_max:.2}")]
-    };
-    let y_labels = if show_grid {
-        grid_labels(y_min, y_max, 5, true)
-    } else {
-        vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")]
-    };
+    let mut plot = LinePlot::new()
+        .series_vec(plt_series)
+        .x_axis(PltAxis::new().bounds(Bounds::Manual(x_min, x_max)).grid(show_grid))
+        .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)).grid(show_grid))
+        .title(title)
+        .theme(plt_theme);
 
-    let chart = Chart::new(datasets)
-        .block(
-            Block::bordered()
-                .title(title)
-                .border_style(Style::default().fg(theme.border)),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([x_min, x_max])
-                .labels(x_labels)
-                .style(Style::default().fg(theme.dim)),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([y_min, y_max])
-                .labels(y_labels)
-                .style(Style::default().fg(theme.dim)),
-        );
-
-    frame.render_widget(chart, area);
+    frame.render_widget(&plot, area);
 }

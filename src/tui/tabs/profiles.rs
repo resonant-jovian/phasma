@@ -5,16 +5,18 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Paragraph},
+};
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, LineStyle, LinePlot, Scale, Series,
 };
 
 use crate::{
     data::DataProvider,
     themes::ThemeColors,
     tui::action::Action,
-    tui::chart_utils::{data_bounds, densify},
+    tui::plt_bridge::phasma_theme_to_plt,
 };
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -455,18 +457,20 @@ impl ProfilesTab {
         let log_tag = if self.log_scale { " [log]" } else { "" };
         let full_title = format!("{title}{log_tag}");
 
-        // Apply log scaling
+        // When log_scale is on, use ratatui-plt Scale::Log instead of manual ln() transforms.
+        // Filter out non-positive values that can't be plotted on log axes.
         let chart_data: Vec<(f64, f64)> = if self.log_scale && kind == ProfileKind::Potential {
+            // Potential is negative; plot |Φ| on log scale
             profile_data
                 .iter()
                 .filter(|&&(r, v)| r > 0.0 && v < 0.0)
-                .map(|&(r, v)| (r.ln(), (-v).ln()))
+                .map(|&(r, v)| (r, -v))
                 .collect()
         } else if self.log_scale && kind != ProfileKind::Anisotropy {
             profile_data
                 .iter()
                 .filter(|&&(r, v)| r > 0.0 && v > 0.0)
-                .map(|&(r, v)| (r.ln(), v.ln()))
+                .map(|&(r, v)| (r, v))
                 .collect()
         } else {
             profile_data.to_vec()
@@ -479,7 +483,6 @@ impl ProfilesTab {
         } else {
             Vec::new()
         };
-        let analytic_available = self.show_analytic && !analytic_data.is_empty();
 
         if chart_data.is_empty() {
             frame.render_widget(
@@ -491,71 +494,55 @@ impl ProfilesTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = combined_bounds(&chart_data, &analytic_data);
-        let x_label = if self.log_scale { "ln(r)" } else { "r" };
+        let plt_theme = phasma_theme_to_plt(theme);
+        let x_label = if self.log_scale { "r" } else { "r" };
 
-        let chart_width = area.width.saturating_sub(2) as usize;
-        let target = chart_width * 2;
-        let dense_chart = densify(&chart_data, target);
-        let dense_analytic = densify(&analytic_data, target);
-
-        let mut datasets = vec![
-            Dataset::default()
-                .name("sim")
-                .marker(symbols::Marker::Braille)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(color))
-                .data(&dense_chart),
+        let mut series_vec = vec![
+            Series::new("sim")
+                .data(chart_data)
+                .color(color),
         ];
 
-        if analytic_available && !dense_analytic.is_empty() {
-            datasets.push(
-                Dataset::default()
-                    .name("analytic")
-                    .marker(symbols::Marker::Dot)
-                    .graph_type(GraphType::Line)
-                    .style(
-                        Style::default()
-                            .fg(theme.chart[5 % theme.chart.len()])
-                            .add_modifier(Modifier::DIM),
-                    )
-                    .data(&dense_analytic),
+        if self.show_analytic && !analytic_data.is_empty() {
+            series_vec.push(
+                Series::new("analytic")
+                    .data(analytic_data)
+                    .color(theme.chart[5 % theme.chart.len()])
+                    .line_style(LineStyle::dashed()),
             );
         }
 
-        let chart = Chart::new(datasets)
-            .block(
-                Block::bordered()
-                    .title(full_title.as_str())
-                    .border_style(Style::default().fg(theme.border)),
-            )
-            .x_axis(
-                Axis::default()
-                    .title(x_label)
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.1}"), format!("{x_max:.1}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.1e}"), format!("{y_max:.1e}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+        let x_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
+            PltAxis::new().label(x_label).scale(Scale::Log(10.0))
+        } else {
+            PltAxis::new().label(x_label)
+        };
 
-        frame.render_widget(chart, area);
+        let y_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
+            PltAxis::new().scale(Scale::Log(10.0))
+        } else {
+            PltAxis::new()
+        };
+
+        let plot = LinePlot::new()
+            .series_vec(series_vec)
+            .x_axis(x_axis)
+            .y_axis(y_axis)
+            .title(full_title)
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
     }
 
     fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Lagrangian Radii ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
         // Check if we have any data
         let has_data = self.lagrangian_history[0].len() >= 2;
         if !has_data {
+            let block = Block::bordered()
+                .title(" Lagrangian Radii ")
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "  Lagrangian radii appear once simulation runs",
@@ -567,67 +554,27 @@ impl ProfilesTab {
         }
 
         const LABELS: [&str; 5] = ["L10", "L25", "L50", "L75", "L90"];
+        let plt_theme = phasma_theme_to_plt(theme);
 
-        // Use cached series data (rebuilt in draw() when history grows)
-        let series_data = &self.cached_lagrangian;
-
-        // Find global bounds
-        let (mut t_min, mut t_max, mut r_min, mut r_max) = (
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        );
-        for series in series_data {
-            for &(t, r) in series {
-                t_min = t_min.min(t);
-                t_max = t_max.max(t);
-                r_min = r_min.min(r);
-                r_max = r_max.max(r);
-            }
-        }
-        if t_min >= t_max {
-            t_max = t_min + 1.0;
-        }
-        if r_min >= r_max {
-            r_max = r_min + 1.0;
-        }
-        let rpad = (r_max - r_min) * 0.05;
-
-        let target = inner.width.saturating_sub(2) as usize * 2;
-        let dense: Vec<std::borrow::Cow<'_, [(f64, f64)]>> =
-            series_data.iter().map(|s| densify(s, target)).collect();
-
-        let datasets: Vec<Dataset> = dense
+        let series_vec: Vec<Series> = self
+            .cached_lagrangian
             .iter()
             .enumerate()
-            .map(|(i, d)| {
-                Dataset::default()
-                    .name(LABELS[i])
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(theme.chart[i % theme.chart.len()]))
-                    .data(d)
+            .map(|(i, data)| {
+                Series::new(LABELS[i])
+                    .data(data.clone())
+                    .color(theme.chart[i % theme.chart.len()])
             })
             .collect();
 
-        let chart = Chart::new(datasets)
-            .x_axis(
-                Axis::default()
-                    .title("t")
-                    .bounds([t_min, t_max])
-                    .labels(vec![format!("{t_min:.2}"), format!("{t_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .title("r")
-                    .bounds([r_min - rpad, r_max + rpad])
-                    .labels(vec![format!("{r_min:.2}"), format!("{r_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+        let plot = LinePlot::new()
+            .series_vec(series_vec)
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("r"))
+            .title(" Lagrangian Radii ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, inner);
+        frame.render_widget(&plot, area);
     }
 }
 
@@ -856,30 +803,19 @@ fn compute_analytic_profile(
         _ => Vec::new(), // No analytic formula for king, zeldovich, merger, etc.
     };
 
-    // Apply log scaling to match the simulation data
+    // When log_scale is on, filter to positive values (the axes handle the log transform).
+    // For potential, use |Φ| since Φ is negative.
     if log_scale && kind != ProfileKind::Anisotropy && kind != ProfileKind::Potential {
         raw.iter()
             .filter(|&&(r, v)| r > 0.0 && v > 0.0)
-            .map(|&(r, v)| (r.ln(), v.ln()))
+            .copied()
             .collect()
     } else if log_scale && kind == ProfileKind::Potential {
         raw.iter()
             .filter(|&&(r, v)| r > 0.0 && v < 0.0)
-            .map(|&(r, v)| (r.ln(), (-v).ln()))
+            .map(|&(r, v)| (r, -v))
             .collect()
     } else {
         raw
     }
-}
-
-fn combined_bounds(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, f64, f64, f64) {
-    let (mut x_min, mut x_max, mut y_min, mut y_max) = data_bounds(a);
-    if !b.is_empty() {
-        let (bx0, bx1, by0, by1) = data_bounds(b);
-        x_min = x_min.min(bx0);
-        x_max = x_max.max(bx1);
-        y_min = y_min.min(by0);
-        y_max = y_max.max(by1);
-    }
-    (x_min, x_max, y_min, y_max)
 }

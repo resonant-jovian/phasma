@@ -2,17 +2,17 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Paragraph},
 };
+use ratatui_plt::prelude::{Axis as PltAxis, Bounds, LinePlot, Series};
 use std::collections::VecDeque;
 
 use crate::{
     data::DataProvider,
     themes::ThemeColors,
     tui::action::Action,
-    tui::chart_utils::{data_bounds, densify},
+    tui::plt_bridge::phasma_theme_to_plt,
 };
 
 const RECENT_CAP: usize = 500;
@@ -649,36 +649,19 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
-
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[4]))
-            .data(&dense);
-
-        let chart = Chart::new(vec![ds])
-            .block(
-                Block::bordered()
-                    .title(" dt(t) — adaptive timestep ")
-                    .border_style(Style::default().fg(theme.border)),
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("dt")
+                    .data(data.clone())
+                    .color(theme.chart[4]),
             )
-            .x_axis(
-                Axis::default()
-                    .title("t")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new())
+            .title(" dt(t) — adaptive timestep ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 
     fn draw_wall_time_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
@@ -694,36 +677,19 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
-
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[3]))
-            .data(&dense);
-
-        let chart = Chart::new(vec![ds])
-            .block(
-                Block::bordered()
-                    .title(" ms/step ")
-                    .border_style(Style::default().fg(theme.border)),
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("ms/step")
+                    .data(data.clone())
+                    .color(theme.chart[3]),
             )
-            .x_axis(
-                Axis::default()
-                    .title("step")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.0}"), format!("{x_max:.0}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.1}"), format!("{y_max:.1}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+            .x_axis(PltAxis::new().label("step"))
+            .y_axis(PltAxis::new())
+            .title(" ms/step ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 
     fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
@@ -739,37 +705,19 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
-
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[1]))
-            .data(&dense);
-
-        let chart = Chart::new(vec![ds])
-            .block(
-                Block::bordered()
-                    .title(" Wall time vs sim time ")
-                    .border_style(Style::default().fg(theme.border)),
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("wall")
+                    .data(data.clone())
+                    .color(theme.chart[1]),
             )
-            .x_axis(
-                Axis::default()
-                    .title("sim t")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .title("wall s")
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.1}"), format!("{y_max:.1}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+            .x_axis(PltAxis::new().label("sim t"))
+            .y_axis(PltAxis::new().label("wall s"))
+            .title(" Wall time vs sim time ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 }
 

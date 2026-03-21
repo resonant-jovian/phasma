@@ -5,15 +5,17 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Paragraph},
+};
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, LinePlot, MarkerShape, Scale, Series,
 };
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
 use crate::tui::action::Action;
-use crate::tui::chart_utils::{data_bounds, densify};
+use crate::tui::plt_bridge::phasma_theme_to_plt;
 
 const MAX_HISTORY: usize = 500;
 
@@ -118,69 +120,46 @@ impl PoissonDetailTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        let block = Block::bordered()
-            .title(" P(k) Potential Power Spectrum ")
-            .border_style(Style::default().fg(theme.border));
-
         let state = data_provider.current_state();
 
         let spec_data: Option<Vec<(f64, f64)>> = state.and_then(|s| {
             s.potential_power_spectrum.as_ref().map(|spec| {
                 spec.iter()
                     .filter(|&&(k, p)| k > 0.0 && p > 0.0)
-                    .map(|&(k, p)| (k.log10(), p.log10()))
+                    .map(|&(k, p)| (k, p))
                     .collect()
             })
         });
 
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
-                let (x_min, x_max, y_min, y_max) = data_bounds(data);
-
-                let chart_width = area.width.saturating_sub(2) as usize;
-                let dense = densify(data, chart_width * 2);
-
-                let line_ds = Dataset::default()
-                    .name("|\u{03a6}\u{0302}(k)|\u{00b2}")
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(theme.chart[0]))
-                    .data(&dense);
-
-                let dots_ds = Dataset::default()
-                    .marker(symbols::Marker::Dot)
-                    .graph_type(GraphType::Scatter)
-                    .style(Style::default().fg(theme.chart[0]))
-                    .data(data);
-
-                let chart = Chart::new(vec![line_ds, dots_ds])
-                    .block(block)
+                let plt_theme = phasma_theme_to_plt(theme);
+                let plot = LinePlot::new()
+                    .series(
+                        Series::new("|\u{03a6}\u{0302}(k)|\u{00b2}")
+                            .data(data.clone())
+                            .color(theme.chart[0])
+                            .marker(MarkerShape::Circle),
+                    )
                     .x_axis(
-                        Axis::default()
-                            .title("log\u{2081}\u{2080}(k)")
-                            .bounds([x_min, x_max])
-                            .labels(vec![
-                                format!("{x_min:.1}"),
-                                format!("{:.1}", (x_min + x_max) / 2.0),
-                                format!("{x_max:.1}"),
-                            ])
-                            .style(Style::default().fg(theme.dim)),
+                        PltAxis::new()
+                            .label("k")
+                            .scale(Scale::Log(10.0)),
                     )
                     .y_axis(
-                        Axis::default()
-                            .title("log\u{2081}\u{2080}(P)")
-                            .bounds([y_min, y_max])
-                            .labels(vec![
-                                format!("{y_min:.1}"),
-                                format!("{:.1}", (y_min + y_max) / 2.0),
-                                format!("{y_max:.1}"),
-                            ])
-                            .style(Style::default().fg(theme.dim)),
-                    );
+                        PltAxis::new()
+                            .label("P(k)")
+                            .scale(Scale::Log(10.0)),
+                    )
+                    .title(" P(k) Potential Power Spectrum ")
+                    .theme(plt_theme);
 
-                frame.render_widget(chart, area);
+                frame.render_widget(&plot, area);
             }
             _ => {
+                let block = Block::bordered()
+                    .title(" P(k) Potential Power Spectrum ")
+                    .border_style(Style::default().fg(theme.border));
                 let inner = block.inner(area);
                 frame.render_widget(block, area);
                 frame.render_widget(
@@ -195,11 +174,10 @@ impl PoissonDetailTab {
     }
 
     fn draw_residual_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Poisson Residual ||\u{2207}\u{00b2}\u{03a6} \u{2212} 4\u{03c0}G\u{03c1}||\u{2082} ")
-            .border_style(Style::default().fg(theme.border));
-
         if self.residual_history.len() < 2 {
+            let block = Block::bordered()
+                .title(" Poisson Residual ||\u{2207}\u{00b2}\u{03a6} \u{2212} 4\u{03c0}G\u{03c1}||\u{2082} ")
+                .border_style(Style::default().fg(theme.border));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -213,36 +191,20 @@ impl PoissonDetailTab {
         }
 
         let data: Vec<(f64, f64)> = self.residual_history.iter().copied().collect();
-        let (x_min, x_max, y_min, y_max) = data_bounds(&data);
+        let plt_theme = phasma_theme_to_plt(theme);
 
-        // Densify for smooth braille rendering
-        let chart_width = area.width.saturating_sub(2) as usize;
-        let dense = densify(&data, chart_width * 2);
-
-        let dataset = Dataset::default()
-            .name("residual")
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[1]))
-            .data(&dense);
-
-        let chart = Chart::new(vec![dataset])
-            .block(block)
-            .x_axis(
-                Axis::default()
-                    .title("t")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
+        let plot = LinePlot::new()
+            .series(
+                Series::new("residual")
+                    .data(data)
+                    .color(theme.chart[1]),
             )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new())
+            .title(" Poisson Residual ||\u{2207}\u{00b2}\u{03a6} \u{2212} 4\u{03c0}G\u{03c1}||\u{2082} ")
+            .theme(plt_theme);
 
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 
     fn draw_solver_stats(
