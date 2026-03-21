@@ -151,15 +151,15 @@ pub(crate) fn sim_params(path: &str) -> anyhow::Result<SimParams> {
     let c = read_config(path)?;
     Ok(SimParams {
         model_type: c.model.r#type,
-        mass: c.model.mass.to_f64().unwrap(),
-        scale_radius: c.model.scale_radius.to_f64().unwrap(),
-        spatial_extent: c.domain.spatial_extent.to_f64().unwrap(),
-        velocity_extent: c.domain.velocity_extent.to_f64().unwrap(),
+        mass: c.model.mass.to_f64().unwrap_or(1.0),
+        scale_radius: c.model.scale_radius.to_f64().unwrap_or(1.0),
+        spatial_extent: c.domain.spatial_extent.to_f64().unwrap_or(10.0),
+        velocity_extent: c.domain.velocity_extent.to_f64().unwrap_or(5.0),
         spatial_resolution: c.domain.spatial_resolution as usize,
         velocity_resolution: c.domain.velocity_resolution as usize,
         boundary: c.domain.boundary,
-        t_final: c.time.t_final.to_f64().unwrap(),
-        cfl_factor: c.time.cfl_factor.to_f64().unwrap(),
-        energy_tolerance: c.exit.energy_tolerance.to_f64().unwrap(),
+        t_final: c.time.t_final.to_f64().unwrap_or(10.0),
+        cfl_factor: c.time.cfl_factor.to_f64().unwrap_or(0.5),
+        energy_tolerance: c.exit.energy_tolerance.to_f64().unwrap_or(1e-6),
     })
 }

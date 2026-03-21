@@ -146,12 +146,10 @@ impl StatusBar {
         if self.step_times.len() < 2 {
             return 0.0;
         }
-        let dt = self
-            .step_times
-            .back()
-            .unwrap()
-            .duration_since(*self.step_times.front().unwrap())
-            .as_secs_f64();
+        let (Some(back), Some(front)) = (self.step_times.back(), self.step_times.front()) else {
+            return 0.0;
+        };
+        let dt = back.duration_since(*front).as_secs_f64();
         if dt <= 0.0 {
             return 0.0;
         }
@@ -311,25 +309,31 @@ fn format_duration(secs: f64) -> String {
 fn read_rss_mb() -> f64 {
     #[cfg(target_os = "linux")]
     {
-        // Read from /proc/self/statm — single read, cheaper than /proc/self/status.
-        // Field 1 (index 1) is RSS in pages.
-        if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
-            let mut fields = content.split_whitespace();
-            if let Some(Ok(pages)) = fields.nth(1).map(|s| s.parse::<u64>()) {
-                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-                return (pages * page_size) as f64 / (1024.0 * 1024.0);
+        // Read VmRSS from /proc/self/status — reported in kB, no page size needed.
+        if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
+            for line in content.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb: f64 = rest
+                        .trim()
+                        .trim_end_matches(" kB")
+                        .trim()
+                        .parse()
+                        .unwrap_or(0.0);
+                    return kb / 1024.0;
+                }
             }
         }
     }
     #[cfg(target_os = "macos")]
     {
-        use std::mem::MaybeUninit;
-        unsafe {
-            let mut info = MaybeUninit::<libc::rusage>::uninit();
-            if libc::getrusage(libc::RUSAGE_SELF, info.as_mut_ptr()) == 0 {
-                let info = info.assume_init();
-                // macOS reports ru_maxrss in bytes
-                return info.ru_maxrss as f64 / (1024.0 * 1024.0);
+        // Read RSS from /proc/self/status equivalent — use command output
+        if let Ok(output) = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+        {
+            if let Ok(s) = std::str::from_utf8(&output.stdout) {
+                let kb: f64 = s.trim().parse().unwrap_or(0.0);
+                return kb / 1024.0;
             }
         }
     }

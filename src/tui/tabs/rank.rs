@@ -135,7 +135,7 @@ impl RankTab {
             return;
         }
 
-        let state = state.unwrap(); // safe: is_ht checked above
+        let Some(state) = state else { return };
 
         // Push new history entry if the step changed.
         if state.step != self.last_step

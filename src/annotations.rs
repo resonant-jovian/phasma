@@ -21,7 +21,6 @@ pub struct AnnotationStore {
     file_path: Option<PathBuf>,
 }
 
-#[allow(dead_code)]
 impl AnnotationStore {
     pub fn new() -> Self {
         Self::default()
@@ -50,7 +49,7 @@ impl AnnotationStore {
     pub fn add(&mut self, time: f64, label: String) {
         self.annotations.push(Annotation { time, label });
         self.annotations
-            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     /// Remove annotation at index.

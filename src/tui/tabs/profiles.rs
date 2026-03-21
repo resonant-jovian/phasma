@@ -210,7 +210,7 @@ impl ProfilesTab {
             );
             return;
         }
-        let state = state.unwrap();
+        let Some(state) = state else { return };
 
         // Recompute profiles only when step or bin count changes
         let n_bins = BIN_PRESETS[self.bin_preset_idx];
@@ -334,7 +334,6 @@ impl ProfilesTab {
         ])
         .split(area);
 
-        #[allow(clippy::type_complexity)]
         let profiles: [(ProfileKind, &str, &[(f64, f64)], usize); 4] = [
             (
                 ProfileKind::Density,
@@ -441,7 +440,6 @@ impl ProfilesTab {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_profile_panel(
         &self,
         frame: &mut Frame,

@@ -437,7 +437,7 @@ impl PerformanceTab {
             return;
         }
 
-        let s = state.unwrap();
+        let Some(s) = state else { return };
         let total = s.step_wall_ms;
         let timing_w = inner.width as usize;
         let plw = if timing_w < 22 { 5 } else { 8 }; // phase label width

@@ -410,7 +410,6 @@ fn grid_labels(lo: f64, hi: f64, n: usize, scientific: bool) -> Vec<String> {
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_single_series_with_threshold(
     frame: &mut Frame,
     area: Rect,

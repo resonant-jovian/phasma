@@ -259,7 +259,6 @@ impl SimHandle {
         )
     }
 
-    #[allow(dead_code)]
     pub fn spawn_with_verbose(config_path: String, verbose: bool) -> Self {
         let (tx, rx) = crossbeam_channel::bounded::<Arc<SimState>>(2);
         Self::spawn_inner(
@@ -523,7 +522,6 @@ fn build_from_config(
     logs: &mut Vec<String>,
     progress: &Arc<caustic::StepProgress>,
 ) -> anyhow::Result<caustic::Simulation> {
-    #[allow(deprecated)]
     use caustic::{
         AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
         FftIsolated, FftPoisson, HtTensor, HybridRepr, LieSplitting, MassLossCondition, Multigrid,
@@ -726,7 +724,6 @@ fn build_from_config(
         "fft_periodic" | "fft" => Box::new(FftPoisson::new(&domain)),
         "fft_isolated" => {
             logs.push("  WARNING: fft_isolated is deprecated; consider switching to \"vgf\" for spectral-accuracy isolated BC".to_string());
-            #[allow(deprecated)]
             Box::new(FftIsolated::new(&domain))
         }
         "tensor" | "tensor_poisson" => {
@@ -1211,14 +1208,14 @@ fn build_uniform_perturbation_ic(
     let dx = domain.dx();
     let dv = domain.dv();
     let lx = [
-        domain.spatial.x1.to_f64().unwrap(),
-        domain.spatial.x2.to_f64().unwrap(),
-        domain.spatial.x3.to_f64().unwrap(),
+        domain.spatial.x1.to_f64().unwrap_or(1.0),
+        domain.spatial.x2.to_f64().unwrap_or(1.0),
+        domain.spatial.x3.to_f64().unwrap_or(1.0),
     ];
     let lv = [
-        domain.velocity.v1.to_f64().unwrap(),
-        domain.velocity.v2.to_f64().unwrap(),
-        domain.velocity.v3.to_f64().unwrap(),
+        domain.velocity.v1.to_f64().unwrap_or(1.0),
+        domain.velocity.v2.to_f64().unwrap_or(1.0),
+        domain.velocity.v3.to_f64().unwrap_or(1.0),
     ];
 
     // Compute velocity-space normalization
@@ -1337,7 +1334,6 @@ fn parse_boundary(s: &str) -> (caustic::SpatialBoundType, caustic::VelocityBound
     (spatial, velocity)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_sim_state(
     sim: &caustic::Simulation,
     initial_energy: f64,
@@ -1435,7 +1431,7 @@ fn extract_sim_state(
     const PHASE_SNAPSHOT_THRESHOLD: usize = 64 * 64 * 64 * 64 * 64 * 64;
     let total_elements = sim.domain.total_cells();
     let (phase_slices, phase_nx, phase_nv) =
-        if compute_phase && total_elements <= PHASE_SNAPSHOT_THRESHOLD {
+        if compute_phase && sim.repr.can_materialize() && total_elements <= PHASE_SNAPSHOT_THRESHOLD {
             let snap = sim.repr.to_snapshot(sim.time);
             let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
             let s = [sx1, sx2, sx3, sv1, sv2, sv3];
@@ -1883,18 +1879,22 @@ mod memory_tests {
     use super::*;
     use crate::config::defaults::{estimate_memory_breakdown, estimate_memory_mb};
 
-    /// Read current process RSS in MB from /proc/self/statm.
+    /// Read current process RSS in MB from /proc/self/status (VmRSS field, in kB).
     fn read_rss_mb() -> f64 {
         #[cfg(target_os = "linux")]
         {
-            if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
-                let rss_pages: u64 = content
-                    .split_whitespace()
-                    .nth(1) // second field = resident pages
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
-                return rss_pages as f64 * page_size / 1_000_000.0;
+            if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
+                for line in content.lines() {
+                    if let Some(rest) = line.strip_prefix("VmRSS:") {
+                        let kb: f64 = rest
+                            .trim()
+                            .trim_end_matches(" kB")
+                            .trim()
+                            .parse()
+                            .unwrap_or(0.0);
+                        return kb / 1024.0;
+                    }
+                }
             }
         }
         0.0
@@ -2042,18 +2042,22 @@ mod heavy_tests {
     use super::*;
     use rust_decimal::prelude::FromPrimitive;
 
-    /// Read current process RSS in MB from /proc/self/statm.
+    /// Read current process RSS in MB from /proc/self/status (VmRSS field, in kB).
     fn read_rss_mb() -> f64 {
         #[cfg(target_os = "linux")]
         {
-            if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
-                let rss_pages: u64 = content
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
-                return rss_pages as f64 * page_size / 1_000_000.0;
+            if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
+                for line in content.lines() {
+                    if let Some(rest) = line.strip_prefix("VmRSS:") {
+                        let kb: f64 = rest
+                            .trim()
+                            .trim_end_matches(" kB")
+                            .trim()
+                            .parse()
+                            .unwrap_or(0.0);
+                        return kb / 1024.0;
+                    }
+                }
             }
         }
         0.0
