@@ -312,8 +312,8 @@ field_test!(
     "uniform",
     "fft_periodic",
     "lie",
-    4,
-    4,
+    8,
+    8,
     "periodic|truncated"
 );
 field_test!(
@@ -542,7 +542,7 @@ field_test!(
     "uniform",
     "vgf",
     "strang",
-    16,
+    32,
     16,
     "isolated|truncated"
 );

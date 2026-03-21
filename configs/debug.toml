@@ -1,7 +1,7 @@
 # Debug — Instant feedback on a tiny grid
 #
-# 4^3 x 4^3 uniform Plummer.
-# Phase-space: 4^6 x 8 B = 32 KB.
+# 8^3 x 8^3 uniform Plummer.
+# Phase-space: 8^6 x 8 B = 2 MB.
 # Lie splitting (cheapest per step) with very small CFL factor.
 # Not physically meaningful.
 # Purely for exercising the full pipeline,
@@ -16,8 +16,8 @@ scale_radius = 1.0
 [domain]
 spatial_extent = 8.0
 velocity_extent = 2.5
-spatial_resolution = 4
-velocity_resolution = 4
+spatial_resolution = 8
+velocity_resolution = 8
 boundary = "periodic|truncated"
 coordinates = "cartesian"
 gravitational_constant = 1.0
@@ -40,7 +40,7 @@ snapshot_interval = 1.0
 
 [exit]
 energy_drift_tolerance = 100.0
-mass_drift_tolerance = 1.0
+mass_drift_tolerance = 0.01
 
 [performance]
 memory_budget_gb = 1.0

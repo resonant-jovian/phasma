@@ -385,7 +385,9 @@ fn run_caustic_sim(
         match sim.step() {
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
-                let compute_poisson_diag = diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
+                // Skip expensive Poisson diagnostics on first frame for fast visual feedback
+                let compute_poisson_diag =
+                    !first_state && diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
                 let compute_phase = diag_step.is_multiple_of(PHASE_DIAG_INTERVAL);
                 diag_step += 1;
                 let mut state = extract_sim_state(
@@ -835,12 +837,35 @@ fn build_from_config(
 
     // Build simulation
     progress.set_phase(caustic::StepPhase::BuildAssembly);
+
+    // Guard: LoMaC is incompatible with HT representation. LoMaC requires full 6D grid
+    // materialization (to_snapshot), which destroys HT compression and converts to dense
+    // UniformGrid6D after every step. Disable LoMaC for HT with a warning.
+    let enable_lomac = if cfg.solver.conservation == "lomac" {
+        let is_ht = matches!(
+            cfg.solver.representation.as_str(),
+            "hierarchical_tucker" | "ht"
+        );
+        if is_ht {
+            logs.push(
+                "WARNING: LoMaC disabled — incompatible with HT representation \
+                 (requires full 6D grid materialization, destroying tensor compression)"
+                    .to_string(),
+            );
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+
     if verbose {
         logs.push(format!(
             "Assembling simulation: G={g}, t_final={}, cfl={}, conservation={}",
             cfg.time.t_final.to_f64().unwrap_or(10.0),
             cfg.time.cfl_factor.to_f64().unwrap_or(0.5),
-            cfg.solver.conservation
+            if enable_lomac { "lomac" } else { &cfg.solver.conservation }
         ));
     }
     let t0 = Instant::now();
@@ -854,7 +879,7 @@ fn build_from_config(
         .cfl_factor(cfg.time.cfl_factor.to_f64().unwrap_or(0.5))
         .gravitational_constant(g)
         .exit_on_energy_drift(cfg.exit.energy_drift_tolerance)
-        .lomac(cfg.solver.conservation == "lomac")
+        .lomac(enable_lomac)
         .build()?;
     if verbose {
         logs.push(format!(
@@ -1332,8 +1357,11 @@ fn extract_sim_state(
         .copied()
         .unwrap_or_else(zero_diag);
 
-    // Density projections over 3 axes
-    let density = sim.repr.compute_density();
+    // Density projections over 3 axes (reuse cached from step if available)
+    let density = sim
+        .cached_density
+        .clone()
+        .unwrap_or_else(|| sim.repr.compute_density());
     let [nx1, nx2, nx3] = density.shape;
 
     let mut density_xy = vec![0.0f64; nx1 * nx2];
@@ -1367,7 +1395,10 @@ fn extract_sim_state(
 
     // Poisson diagnostics: residual and power spectrum (only every Nth step)
     let (residual, spectrum, density_ps, field_es) = if compute_poisson_diag {
-        let potential = sim.poisson.solve(&density, sim.g);
+        let potential = sim
+            .cached_potential
+            .clone()
+            .unwrap_or_else(|| sim.poisson.solve(&density, sim.g));
         let dx = sim.domain.dx();
         let r = compute_poisson_residual_l2(
             &density.data,
