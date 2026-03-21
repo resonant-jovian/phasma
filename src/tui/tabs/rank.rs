@@ -100,13 +100,25 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     let mut y_min = f64::INFINITY;
     let mut y_max = f64::NEG_INFINITY;
     for &(x, y) in data {
-        if x < x_min { x_min = x; }
-        if x > x_max { x_max = x; }
-        if y < y_min { y_min = y; }
-        if y > y_max { y_max = y; }
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
     }
-    if x_min >= x_max { x_max = x_min + 1.0; }
-    if y_min >= y_max { y_max = y_min + 1.0; }
+    if x_min >= x_max {
+        x_max = x_min + 1.0;
+    }
+    if y_min >= y_max {
+        y_max = y_min + 1.0;
+    }
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, y_min - ypad, y_max + ypad)
 }
@@ -213,8 +225,7 @@ impl RankTab {
                 .filter(|&&(_, e)| e > 0.0)
                 .copied()
                 .collect();
-            let poisson_amp: Vec<(f64, f64)> =
-                self.poisson_amp_history.iter().copied().collect();
+            let poisson_amp: Vec<(f64, f64)> = self.poisson_amp_history.iter().copied().collect();
             let advection_amp: Vec<(f64, f64)> =
                 self.advection_amp_history.iter().copied().collect();
             self.cached_rank = CachedRankData {

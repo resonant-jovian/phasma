@@ -9,13 +9,11 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LegendPosition, LineStyle, LinePlot, ReferenceLine, Scale, Series,
+    Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, ReferenceLine, Scale, Series,
 };
 
 use crate::{
-    data::DataProvider,
-    themes::ThemeColors,
-    tui::action::Action,
+    data::DataProvider, themes::ThemeColors, tui::action::Action,
     tui::plt_bridge::phasma_theme_to_plt,
 };
 
@@ -507,11 +505,7 @@ impl ProfilesTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
 
-        let mut series_vec = vec![
-            Series::new("sim")
-                .data(chart_data.clone())
-                .color(color),
-        ];
+        let mut series_vec = vec![Series::new("sim").data(chart_data.clone()).color(color)];
 
         if self.show_analytic && !analytic_data.is_empty() {
             series_vec.push(

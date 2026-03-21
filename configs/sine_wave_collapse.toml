@@ -14,6 +14,12 @@ type = "uniform_perturbation"
 total_mass = 1.0
 scale_radius = 5.0
 
+[model.uniform_perturbation]
+background_density = 1.0
+velocity_dispersion = 0.5
+perturbation_amplitude = 0.1
+perturbation_wavenumber = [1.2566, 0.0, 0.0]
+
 [domain]
 spatial_extent = 5.0
 velocity_extent = 2.0

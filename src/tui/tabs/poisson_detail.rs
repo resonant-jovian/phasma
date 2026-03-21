@@ -8,9 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LinePlot, MarkerShape, Scale, Series,
-};
+use ratatui_plt::prelude::{Axis as PltAxis, Bounds, LinePlot, MarkerShape, Scale, Series};
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
@@ -146,16 +144,8 @@ impl PoissonDetailTab {
                             .color(theme.chart[0])
                             .marker(MarkerShape::Circle),
                     )
-                    .x_axis(
-                        PltAxis::new()
-                            .label("k")
-                            .scale(Scale::Log(10.0)),
-                    )
-                    .y_axis(
-                        PltAxis::new()
-                            .label("P(k)")
-                            .scale(Scale::Log(10.0)),
-                    )
+                    .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
+                    .y_axis(PltAxis::new().label("P(k)").scale(Scale::Log(10.0)))
                     .title(" P(k) Potential Power Spectrum ")
                     .theme(plt_theme);
 
@@ -205,11 +195,7 @@ impl PoissonDetailTab {
                             .marker(MarkerShape::Circle),
                     )
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
-                    .y_axis(
-                        PltAxis::new()
-                            .label("P\u{03c1}(k)")
-                            .scale(Scale::Log(10.0)),
-                    )
+                    .y_axis(PltAxis::new().label("P\u{03c1}(k)").scale(Scale::Log(10.0)))
                     .title(" P\u{03c1}(k) Density Spectrum ")
                     .theme(plt_theme);
 
@@ -482,7 +468,6 @@ impl PoissonDetailTab {
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
-
 }
 
 /// Derive boundary condition label from the poisson_type string.

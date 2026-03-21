@@ -352,7 +352,12 @@ impl PhaseSpaceTab {
                 let vel_marginal: Vec<f64> = (0..self.last_ny)
                     .map(|iv| {
                         (0..self.last_nx)
-                            .map(|ix| self.last_data.get(iv * self.last_nx + ix).copied().unwrap_or(0.0))
+                            .map(|ix| {
+                                self.last_data
+                                    .get(iv * self.last_nx + ix)
+                                    .copied()
+                                    .unwrap_or(0.0)
+                            })
                             .sum()
                     })
                     .collect();
@@ -366,12 +371,15 @@ impl PhaseSpaceTab {
                 } else {
                     1.0
                 };
-                let edges: Vec<f64> = (0..=n_bins)
-                    .map(|i| -v_extent + dv * i as f64)
-                    .collect();
+                let edges: Vec<f64> = (0..=n_bins).map(|i| -v_extent + dv * i as f64).collect();
 
                 let stairs = StairsPlot::new()
-                    .dataset(StairsDataset::new("f(v)", edges, vel_marginal, theme.chart[0]))
+                    .dataset(StairsDataset::new(
+                        "f(v)",
+                        edges,
+                        vel_marginal,
+                        theme.chart[0],
+                    ))
                     .x_axis(PltAxis::new().label("v"))
                     .y_axis(PltAxis::new().label("f"))
                     .title(" Velocity Distribution ")

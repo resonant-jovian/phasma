@@ -121,11 +121,7 @@ pub fn export_diagnostics(
 }
 
 /// Export current snapshot as HDF5 via caustic's IOManager.
-fn export_hdf5(
-    dir: &Path,
-    state: Option<&SimState>,
-    stem: &str,
-) -> Result<String, String> {
+fn export_hdf5(dir: &Path, state: Option<&SimState>, stem: &str) -> Result<String, String> {
     let state = state.ok_or("No simulation state available")?;
     if state.density_xy.is_empty() {
         return Err("No density data available".to_string());

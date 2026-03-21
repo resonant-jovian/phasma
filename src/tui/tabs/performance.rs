@@ -10,9 +10,7 @@ use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 use std::collections::VecDeque;
 
 use crate::{
-    data::DataProvider,
-    themes::ThemeColors,
-    tui::action::Action,
+    data::DataProvider, themes::ThemeColors, tui::action::Action,
     tui::plt_bridge::phasma_theme_to_plt,
 };
 
@@ -620,11 +618,7 @@ impl PerformanceTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
         let plot = LinePlot::new()
-            .series(
-                Series::new("dt")
-                    .data(data.clone())
-                    .color(theme.chart[4]),
-            )
+            .series(Series::new("dt").data(data.clone()).color(theme.chart[4]))
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new())
             .title(" dt(t) — adaptive timestep ")
@@ -701,11 +695,7 @@ impl PerformanceTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
         let plot = LinePlot::new()
-            .series(
-                Series::new("wall")
-                    .data(data.clone())
-                    .color(theme.chart[1]),
-            )
+            .series(Series::new("wall").data(data.clone()).color(theme.chart[1]))
             .x_axis(PltAxis::new().label("sim t"))
             .y_axis(PltAxis::new().label("wall s"))
             .title(" Wall time vs sim time ")

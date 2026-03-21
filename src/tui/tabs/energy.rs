@@ -6,18 +6,16 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
+use ratatui_plt::fft::stft;
 use ratatui_plt::prelude::{
     Annotation, Axis as PltAxis, Bounds, LegendPosition, LinePlot, PsdPlot, RefLineDash,
     ReferenceLine, Scale, Series, Spectrogram, StackedArea,
 };
-use ratatui_plt::fft::stft;
 
 use std::borrow::Cow;
 
 use crate::{
-    data::DataProvider,
-    themes::ThemeColors,
-    tui::action::Action,
+    data::DataProvider, themes::ThemeColors, tui::action::Action,
     tui::plt_bridge::phasma_theme_to_plt,
 };
 
@@ -380,7 +378,9 @@ impl EnergyTab {
                 Some(threshold),
                 &self.time_window,
                 self.show_grid,
-                self.exit_event_time.as_ref().map(|&t| (t, &self.exit_reason_label as &str)),
+                self.exit_event_time
+                    .as_ref()
+                    .map(|&t| (t, &self.exit_reason_label as &str)),
             );
         } else if self.stacked_mode
             && !self.cached.kinetic_energy.is_empty()
@@ -401,11 +401,7 @@ impl EnergyTab {
                         .data(self.cached.kinetic_energy.clone())
                         .color(theme.chart[1]),
                 )
-                .series(
-                    Series::new("|W|")
-                        .data(abs_w)
-                        .color(theme.chart[2]),
-                )
+                .series(Series::new("|W|").data(abs_w).color(theme.chart[2]))
                 .x_axis(PltAxis::new().label("t"))
                 .y_axis(PltAxis::new())
                 .title(" Energy (stacked) ")
@@ -500,8 +496,18 @@ impl EnergyTab {
         // Compute PSD of the total energy time series using FFT
         let n = self.cached.total_energy.len();
         let dt = if n >= 2 {
-            let t0 = self.cached.total_energy.first().map(|(t, _)| *t).unwrap_or(0.0);
-            let tn = self.cached.total_energy.last().map(|(t, _)| *t).unwrap_or(1.0);
+            let t0 = self
+                .cached
+                .total_energy
+                .first()
+                .map(|(t, _)| *t)
+                .unwrap_or(0.0);
+            let tn = self
+                .cached
+                .total_energy
+                .last()
+                .map(|(t, _)| *t)
+                .unwrap_or(1.0);
             (tn - t0) / (n - 1) as f64
         } else {
             1.0
@@ -509,8 +515,7 @@ impl EnergyTab {
         let sample_rate = if dt > 0.0 { 1.0 / dt } else { 1.0 };
 
         // Remove mean and compute FFT
-        let mean: f64 =
-            self.cached.total_energy.iter().map(|(_, e)| e).sum::<f64>() / n as f64;
+        let mean: f64 = self.cached.total_energy.iter().map(|(_, e)| e).sum::<f64>() / n as f64;
         let mut input: Vec<rustfft::num_complex::Complex<f64>> = self
             .cached
             .total_energy
@@ -548,11 +553,7 @@ impl EnergyTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
         let psd = PsdPlot::new()
-            .series(
-                Series::new("E(f)")
-                    .data(psd_data)
-                    .color(theme.chart[0]),
-            )
+            .series(Series::new("E(f)").data(psd_data).color(theme.chart[0]))
             .x_axis(PltAxis::new().label("frequency").scale(Scale::Log(10.0)))
             .y_axis(PltAxis::new().label("PSD").scale(Scale::Log(10.0)))
             .title(" PSD — Energy ")
@@ -712,9 +713,21 @@ fn draw_single_series_with_threshold(
     let plt_theme = phasma_theme_to_plt(theme);
 
     let mut plot = LinePlot::new()
-        .series(Series::new(title.trim()).data(windowed.to_vec()).color(color))
-        .x_axis(PltAxis::new().bounds(Bounds::Manual(x_min, x_max)).grid(show_grid))
-        .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)).grid(show_grid))
+        .series(
+            Series::new(title.trim())
+                .data(windowed.to_vec())
+                .color(color),
+        )
+        .x_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(x_min, x_max))
+                .grid(show_grid),
+        )
+        .y_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(y_min, y_max))
+                .grid(show_grid),
+        )
         .title(title)
         .show_legend(true)
         .legend_position(LegendPosition::TopRight)
@@ -816,8 +829,16 @@ fn draw_multi_series_windowed(
 
     let plot = LinePlot::new()
         .series_vec(plt_series)
-        .x_axis(PltAxis::new().bounds(Bounds::Manual(x_min, x_max)).grid(show_grid))
-        .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)).grid(show_grid))
+        .x_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(x_min, x_max))
+                .grid(show_grid),
+        )
+        .y_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(y_min, y_max))
+                .grid(show_grid),
+        )
         .title(title)
         .show_legend(true)
         .legend_position(LegendPosition::TopRight)

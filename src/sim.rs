@@ -664,7 +664,15 @@ fn build_from_config(
             let r_max = cfg.domain.spatial_extent.to_f64().unwrap_or(10.0);
             let v_max = cfg.domain.velocity_extent.to_f64().unwrap_or(5.0);
             let l_max = r_max * v_max;
-            Box::new(SphericalRepr::new(domain.clone(), n, nv, n, r_max, v_max, l_max))
+            Box::new(SphericalRepr::new(
+                domain.clone(),
+                n,
+                nv,
+                n,
+                r_max,
+                v_max,
+                l_max,
+            ))
         }
 
         // Representations that require the full N^6 grid in memory
@@ -732,9 +740,8 @@ fn build_from_config(
                             "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
                         ));
                     }
-                    let mut tt = TensorTrain::from_snapshot_owned(
-                        snap, max_rank, tolerance, &domain,
-                    );
+                    let mut tt =
+                        TensorTrain::from_snapshot_owned(snap, max_rank, tolerance, &domain);
                     if cfg.solver.positivity_limiter.unwrap_or(false) {
                         tt = tt.with_positivity_limiter(true);
                     }
@@ -812,13 +819,27 @@ fn build_from_config(
                 cfg.domain.spatial_resolution as usize,
             ];
             let dx = domain.dx();
-            let accuracy = cfg.solver.exponential_sum.as_ref().map(|e| e.accuracy).unwrap_or(1e-6);
+            let accuracy = cfg
+                .solver
+                .exponential_sum
+                .as_ref()
+                .map(|e| e.accuracy)
+                .unwrap_or(1e-6);
             let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
-            let max_rank = cfg.solver.ht.as_ref().map(|h| h.max_rank as usize).unwrap_or(50);
+            let max_rank = cfg
+                .solver
+                .ht
+                .as_ref()
+                .map(|h| h.max_rank as usize)
+                .unwrap_or(50);
             if verbose {
-                logs.push(format!("  HtPoisson: shape={shape:?}, tolerance={tolerance:.1e}, max_rank={max_rank}"));
+                logs.push(format!(
+                    "  HtPoisson: shape={shape:?}, tolerance={tolerance:.1e}, max_rank={max_rank}"
+                ));
             }
-            Box::new(caustic::HtPoisson::new(shape, dx, accuracy, tolerance, max_rank))
+            Box::new(caustic::HtPoisson::new(
+                shape, dx, accuracy, tolerance, max_rank,
+            ))
         }
         "multigrid" => {
             if verbose {
@@ -1283,9 +1304,7 @@ fn build_ic(
                 match tc.progenitor_type.as_str() {
                     "plummer" => Box::new(caustic::PlummerIC::new(prog_mass, prog_scale, g)),
                     "hernquist" => Box::new(caustic::HernquistIC::new(prog_mass, prog_scale, g)),
-                    "isochrone" => {
-                        Box::new(caustic::IsochroneIC::new(prog_mass, prog_scale, g))
-                    }
+                    "isochrone" => Box::new(caustic::IsochroneIC::new(prog_mass, prog_scale, g)),
                     "king" => {
                         let w0 = cfg
                             .model
@@ -2683,6 +2702,22 @@ mod smoke_tests {
     smoke_test!(smoke_tidal_point, "tidal_point");
     smoke_test!(smoke_zeldovich, "zeldovich");
     smoke_test!(smoke_plummer_128, "plummer_128");
+    smoke_test!(smoke_isochrone, "isochrone");
+    smoke_test!(smoke_fujiwara, "fujiwara");
+    smoke_test!(smoke_plummer_flow_map, "plummer_flow_map");
+    smoke_test!(smoke_plummer_range_separated, "plummer_range_separated");
+    smoke_test!(smoke_plummer_macro_micro, "plummer_macro_micro");
+    smoke_test!(smoke_plummer_perturbation, "plummer_perturbation");
+    smoke_test!(smoke_sine_wave_collapse, "sine_wave_collapse");
+    smoke_test!(smoke_mixing, "mixing");
+    smoke_test!(smoke_plummer_bm4, "plummer_bm4");
+    smoke_test!(smoke_plummer_rkn6, "plummer_rkn6");
+    smoke_test!(smoke_plummer_adaptive, "plummer_adaptive");
+    smoke_test!(smoke_plummer_instrumented, "plummer_instrumented");
+    smoke_test!(smoke_plummer_ht_poisson, "plummer_ht_poisson");
+    smoke_test!(smoke_plummer_positivity, "plummer_positivity");
+    smoke_test!(smoke_plummer_lawson, "plummer_lawson");
+    smoke_test!(smoke_zeldovich_cosmological, "zeldovich_cosmological");
 
     /// Full smoke test — builds and steps every config without memory limit.
     /// Run with: `cargo test --release smoke_all_full -- --ignored --nocapture`
@@ -2714,6 +2749,22 @@ mod smoke_tests {
             "tidal_nfw",
             "tidal_point",
             "zeldovich",
+            "isochrone",
+            "fujiwara",
+            "plummer_flow_map",
+            "plummer_range_separated",
+            "plummer_macro_micro",
+            "plummer_perturbation",
+            "sine_wave_collapse",
+            "mixing",
+            "plummer_bm4",
+            "plummer_rkn6",
+            "plummer_adaptive",
+            "plummer_instrumented",
+            "plummer_ht_poisson",
+            "plummer_positivity",
+            "plummer_lawson",
+            "zeldovich_cosmological",
             // plummer_128 excluded — requires ~35 GB
         ];
         for config in configs {

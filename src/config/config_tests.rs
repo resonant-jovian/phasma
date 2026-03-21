@@ -51,6 +51,22 @@ load_test!(plummer_yoshida);
 load_test!(tidal_nfw);
 load_test!(tidal_point);
 load_test!(zeldovich);
+load_test!(isochrone);
+load_test!(fujiwara);
+load_test!(plummer_flow_map);
+load_test!(plummer_range_separated);
+load_test!(plummer_macro_micro);
+load_test!(plummer_perturbation);
+load_test!(sine_wave_collapse);
+load_test!(mixing);
+load_test!(plummer_bm4);
+load_test!(plummer_rkn6);
+load_test!(plummer_adaptive);
+load_test!(plummer_instrumented);
+load_test!(plummer_ht_poisson);
+load_test!(plummer_positivity);
+load_test!(plummer_lawson);
+load_test!(zeldovich_cosmological);
 
 // ── 2. Validation tests ──────────────────────────────────────────────────────
 // Each config passes validation with no error-level warnings.
@@ -103,6 +119,22 @@ validate_test!(plummer_yoshida);
 validate_test!(tidal_nfw);
 validate_test!(tidal_point);
 validate_test!(zeldovich);
+validate_test!(isochrone);
+validate_test!(fujiwara);
+validate_test!(plummer_flow_map);
+validate_test!(plummer_range_separated);
+validate_test!(plummer_macro_micro);
+validate_test!(plummer_perturbation);
+validate_test!(sine_wave_collapse);
+validate_test!(mixing);
+validate_test!(plummer_bm4);
+validate_test!(plummer_rkn6);
+validate_test!(plummer_adaptive);
+validate_test!(plummer_instrumented);
+validate_test!(plummer_ht_poisson);
+validate_test!(plummer_positivity);
+validate_test!(plummer_lawson);
+validate_test!(zeldovich_cosmological);
 
 // ── 3. Round-trip tests ──────────────────────────────────────────────────────
 // Load → serialize → deserialize preserves key fields.
@@ -204,6 +236,21 @@ fn round_trip(name: &str) {
         restored.solver.exponential_sum.is_some(),
         "{name}: exponential_sum sub-config presence mismatch"
     );
+    assert_eq!(
+        original.solver.flow_map.is_some(),
+        restored.solver.flow_map.is_some(),
+        "{name}: flow_map sub-config presence mismatch"
+    );
+    assert_eq!(
+        original.solver.range_separated.is_some(),
+        restored.solver.range_separated.is_some(),
+        "{name}: range_separated sub-config presence mismatch"
+    );
+    assert_eq!(
+        original.solver.macro_micro.is_some(),
+        restored.solver.macro_micro.is_some(),
+        "{name}: macro_micro sub-config presence mismatch"
+    );
 }
 
 macro_rules! round_trip_test {
@@ -243,6 +290,22 @@ round_trip_test!(plummer_yoshida);
 round_trip_test!(tidal_nfw);
 round_trip_test!(tidal_point);
 round_trip_test!(zeldovich);
+round_trip_test!(isochrone);
+round_trip_test!(fujiwara);
+round_trip_test!(plummer_flow_map);
+round_trip_test!(plummer_range_separated);
+round_trip_test!(plummer_macro_micro);
+round_trip_test!(plummer_perturbation);
+round_trip_test!(sine_wave_collapse);
+round_trip_test!(mixing);
+round_trip_test!(plummer_bm4);
+round_trip_test!(plummer_rkn6);
+round_trip_test!(plummer_adaptive);
+round_trip_test!(plummer_instrumented);
+round_trip_test!(plummer_ht_poisson);
+round_trip_test!(plummer_positivity);
+round_trip_test!(plummer_lawson);
+round_trip_test!(zeldovich_cosmological);
 
 // ── 4. Field assertion tests ─────────────────────────────────────────────────
 // Each config has the expected field values.
@@ -566,6 +629,166 @@ field_test!(
     32,
     "periodic|truncated"
 );
+field_test!(
+    isochrone,
+    "isochrone",
+    "uniform",
+    "vgf",
+    "strang",
+    16,
+    16,
+    "isolated|truncated"
+);
+field_test!(
+    fujiwara,
+    "uniform_perturbation",
+    "uniform",
+    "vgf",
+    "strang",
+    16,
+    16,
+    "isolated|open"
+);
+field_test!(
+    plummer_flow_map,
+    "plummer",
+    "flow_map",
+    "fft_periodic",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    plummer_range_separated,
+    "plummer",
+    "uniform",
+    "range_separated",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    plummer_macro_micro,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    plummer_perturbation,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    sine_wave_collapse,
+    "uniform_perturbation",
+    "uniform",
+    "fft_periodic",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    mixing,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "strang",
+    16,
+    8,
+    "periodic"
+);
+field_test!(
+    plummer_bm4,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "blanes_moan",
+    8,
+    8,
+    "periodic|truncated"
+);
+field_test!(
+    plummer_rkn6,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "rkn6",
+    8,
+    8,
+    "periodic|truncated"
+);
+field_test!(
+    plummer_adaptive,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "adaptive_strang",
+    8,
+    8,
+    "periodic|truncated"
+);
+field_test!(
+    plummer_instrumented,
+    "plummer",
+    "hierarchical_tucker",
+    "vgf",
+    "instrumented_strang",
+    16,
+    16,
+    "isolated|truncated"
+);
+field_test!(
+    plummer_ht_poisson,
+    "plummer",
+    "uniform",
+    "ht_poisson",
+    "strang",
+    16,
+    16,
+    "isolated|truncated"
+);
+field_test!(
+    plummer_positivity,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "strang",
+    8,
+    8,
+    "periodic|truncated"
+);
+field_test!(
+    plummer_lawson,
+    "plummer",
+    "uniform",
+    "fft_periodic",
+    "lawson_rk4",
+    8,
+    8,
+    "periodic|truncated"
+);
+field_test!(
+    zeldovich_cosmological,
+    "zeldovich",
+    "uniform",
+    "fft_periodic",
+    "cosmological_strang",
+    16,
+    16,
+    "periodic|truncated"
+);
 
 // ── 5. Smart defaults don't introduce validation errors ──────────────────────
 
@@ -785,5 +1008,81 @@ fn plummer_tt_has_ht_subconfig() {
     assert!(
         cfg.solver.ht.is_some(),
         "plummer_tt.toml must have [solver.ht]"
+    );
+}
+
+#[test]
+fn plummer_flow_map_has_flow_map_subconfig() {
+    let cfg = load_config("plummer_flow_map");
+    assert!(
+        cfg.solver.flow_map.is_some(),
+        "plummer_flow_map.toml must have [solver.flow_map]"
+    );
+}
+
+#[test]
+fn plummer_range_separated_has_range_separated_subconfig() {
+    let cfg = load_config("plummer_range_separated");
+    assert!(
+        cfg.solver.range_separated.is_some(),
+        "plummer_range_separated.toml must have [solver.range_separated]"
+    );
+}
+
+#[test]
+fn plummer_macro_micro_has_macro_micro_subconfig() {
+    let cfg = load_config("plummer_macro_micro");
+    assert!(
+        cfg.solver.macro_micro.is_some(),
+        "plummer_macro_micro.toml must have [solver.macro_micro]"
+    );
+}
+
+#[test]
+fn plummer_instrumented_has_solver_subconfigs() {
+    let cfg = load_config("plummer_instrumented");
+    assert!(
+        cfg.solver.ht.is_some(),
+        "plummer_instrumented.toml must have [solver.ht]"
+    );
+    assert!(
+        cfg.solver.slar.is_some(),
+        "plummer_instrumented.toml must have [solver.slar]"
+    );
+    assert!(
+        cfg.solver.lomac.is_some(),
+        "plummer_instrumented.toml must have [solver.lomac]"
+    );
+}
+
+#[test]
+fn plummer_ht_poisson_has_solver_subconfigs() {
+    let cfg = load_config("plummer_ht_poisson");
+    assert!(
+        cfg.solver.ht.is_some(),
+        "plummer_ht_poisson.toml must have [solver.ht]"
+    );
+    assert!(
+        cfg.solver.exponential_sum.is_some(),
+        "plummer_ht_poisson.toml must have [solver.exponential_sum]"
+    );
+}
+
+#[test]
+fn plummer_positivity_has_positivity_limiter() {
+    let cfg = load_config("plummer_positivity");
+    assert_eq!(
+        cfg.solver.positivity_limiter,
+        Some(true),
+        "plummer_positivity.toml must have positivity_limiter = true"
+    );
+}
+
+#[test]
+fn zeldovich_cosmological_has_zeldovich_subconfig() {
+    let cfg = load_config("zeldovich_cosmological");
+    assert!(
+        cfg.model.zeldovich.is_some(),
+        "zeldovich_cosmological.toml must have [model.zeldovich]"
     );
 }

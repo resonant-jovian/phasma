@@ -1,0 +1,52 @@
+# Zel'dovich — Cosmological Strang splitting
+#
+# 16^3 x 16^3 uniform grid.
+# Uses CosmologicalStrangSplitting which accounts for
+# Hubble expansion in the splitting: the drift sub-step
+# uses comoving coordinates and the kick includes the
+# cosmological deceleration term.
+#
+# Watch F3 Density for pancake formation in comoving coordinates.
+# Watch F5 Energy for comoving energy conservation.
+
+[model]
+type = "zeldovich"
+total_mass = 1.0
+scale_radius = 1.0
+
+[model.zeldovich]
+amplitude = 0.3
+wave_number = 1.0
+redshift_initial = 50.0
+cosmology_h = 0.7
+cosmology_omega_m = 0.3
+cosmology_omega_lambda = 0.7
+
+[domain]
+spatial_extent = 6.283185
+velocity_extent = 2.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "cosmological_strang"
+
+[time]
+t_final = 20.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/zeldovich_cosmological"
+prefix = "run"
+snapshot_interval = 0.2
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

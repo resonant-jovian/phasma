@@ -17,7 +17,10 @@ use crate::{
     data::DataProvider,
     themes::ThemeColors,
     tui::widgets::data_cursor::DataCursor,
-    tui::{action::Action, plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt}},
+    tui::{
+        action::Action,
+        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+    },
 };
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -238,13 +241,7 @@ impl DensityTab {
         let extent = state.map(|s| s.spatial_extent).unwrap_or(vnx as f64 / 2.0);
 
         // Build GridData and render via ratatui-plt Heatmap
-        let grid = flat_to_grid_data(
-            &view_data,
-            vnx,
-            vny,
-            (-extent, extent),
-            (-extent, extent),
-        );
+        let grid = flat_to_grid_data(&view_data, vnx, vny, (-extent, extent), (-extent, extent));
 
         let (vmin, vmax) = grid.value_bounds();
         let plt_theme = phasma_theme_to_plt(theme);

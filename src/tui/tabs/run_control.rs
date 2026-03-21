@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Gauge, Paragraph},
 };
 use ratatui_plt::prelude::{
-    AspectRatio, Axis as PltAxis, Bounds, Heatmap, LinearNorm, LinePlot, ReferenceLine, Series,
+    AspectRatio, Axis as PltAxis, Bounds, Heatmap, LinePlot, LinearNorm, ReferenceLine, Series,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -471,13 +471,17 @@ impl RunControlTab {
 
             let plt_theme = phasma_theme_to_plt(theme);
             let plot = LinePlot::new()
-                .series(
-                    Series::new("E/E₀")
-                        .data(energy_data)
-                        .color(theme.chart[0]),
+                .series(Series::new("E/E₀").data(energy_data).color(theme.chart[0]))
+                .x_axis(
+                    PltAxis::new()
+                        .label("t")
+                        .bounds(Bounds::Manual(t_min, t_max)),
                 )
-                .x_axis(PltAxis::new().label("t").bounds(Bounds::Manual(t_min, t_max)))
-                .y_axis(PltAxis::new().label("E/E₀").bounds(Bounds::Manual(e_lo, e_hi)))
+                .y_axis(
+                    PltAxis::new()
+                        .label("E/E₀")
+                        .bounds(Bounds::Manual(e_lo, e_hi)),
+                )
                 .reference_line(ReferenceLine::hline_dashed(1.0, theme.dim))
                 .title(" E(t)/E₀ ")
                 .theme(plt_theme);

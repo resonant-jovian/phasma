@@ -1,0 +1,38 @@
+# Plummer — RKN6 6th-order splitting
+#
+# 8^3 x 8^3 uniform grid.
+# Uses a 6th-order Runge-Kutta-Nystrom integrator
+# for high-precision equilibrium tests. More sub-steps
+# than Yoshida but smaller error constants.
+#
+# Watch F5 Energy for 6th-order energy conservation.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "rkn6"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_rkn6"
+prefix = "run"
+snapshot_interval = 0.5
