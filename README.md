@@ -11,6 +11,8 @@ phasma is a terminal application built with [ratatui](https://ratatui.rs/) for s
 
 It provides real-time density and phase-space heatmaps, energy conservation charts, radial profiles, performance dashboards, history scrubbing, batch execution, parameter sweeps, convergence studies, playback, comparison, and export — all without leaving the terminal.
 
+> **Note:** This application has not yet reached version 0.1.0. The interface and configuration format are unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+
 ## Installation
 
 ### From crates.io
@@ -250,7 +252,7 @@ This directory is the input for `--playback`, `--monitor`, `--compare`, `--regre
 
 ## Config file reference
 
-All sections and fields are optional — sensible defaults are provided. The full config has 9 top-level sections.
+All sections and fields are optional — sensible defaults are provided. The full config has 10 top-level sections.
 
 ### `[domain]` — Simulation domain
 
@@ -386,7 +388,8 @@ gravitational_constant = 1.0
 | Value | Description | BC |
 |---|---|---|
 | `fft_periodic` / `fft` | FFT periodic | periodic |
-| `fft_isolated` | Hockney-Eastwood zero-padded FFT | isolated |
+| `fft_isolated` | Hockney-Eastwood zero-padded FFT *(deprecated)* | isolated |
+| `vgf` / `vgf_isolated` | Vico-Greengard-Ferrando spectral isolated | isolated |
 | `tensor` / `tensor_poisson` | Braess-Hackbusch exponential sum | isolated |
 | `multigrid` | V-cycle multigrid (red-black GS) | isolated |
 | `spherical` / `spherical_harmonics` | Legendre decomposition + radial ODE | spherical |
@@ -402,6 +405,14 @@ gravitational_constant = 1.0
 | `unsplit` / `unsplit_rk4` | 4th | — | Unsplit method-of-lines RK4 |
 | `unsplit_rk2` | 2nd | — | Unsplit RK2 |
 | `unsplit_rk3` | 3rd | — | Unsplit RK3 |
+| `rkei` | 3rd | 3 | SSP-RK3 exponential integrator (unsplit) |
+| `adaptive` / `adaptive_strang` | 2nd | 3 | Strang with adaptive timestep control |
+| `blanes_moan` / `bm4` | 4th | — | Blanes-Moan optimized splitting |
+| `rkn6` | 6th | — | 6th-order Runge-Kutta-Nyström splitting |
+| `bug` | varies | — | Basis Update & Galerkin (BUG) for HT tensors |
+| `rk_bug` / `rk_bug3` | varies | — | Runge-Kutta BUG variant |
+| `parallel_bug` / `pbug` | varies | — | Parallelized BUG |
+| `lawson` / `lawson_rk4` | varies | — | Lawson Runge-Kutta exponential integrator |
 
 #### HT/TT solver options `[solver.ht]`
 
@@ -488,6 +499,16 @@ The simulation exits when **any** enabled condition triggers.
 
 ---
 
+### `[logging]` — Logging
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `level` | string | `"info"` | Log level (`"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`) |
+| `file` | string | none | Log file path |
+| `structured` | bool | `false` | Structured JSON logging |
+
+---
+
 ### `[appearance]` — TUI appearance
 
 | Key | Type | Default | Description |
@@ -502,61 +523,62 @@ The simulation exits when **any** enabled condition triggers.
 
 ## Preset configurations
 
-phasma ships with 30 preset TOML configurations in `configs/`:
+phasma ships with 26 preset TOML configurations in `configs/`:
 
-### Equilibrium models
+### Plummer sphere variants
 
-| Preset | Model | Grid | Integrator | Notes |
-|---|---|---|---|---|
-| `speed_priority` | Plummer | 8^3 x 8^3 | Strang | Fast smoke tests (~2 MB) |
-| `default` | Plummer | 16^3 x 16^3 | Strang | Default starting point (~128 MB) |
-| `balanced` | Plummer | 16^3 x 16^3 | Yoshida | Good conservation balance |
-| `conservation_priority` | Plummer | 16^3 x 16^3 | Yoshida | Conservation law validation |
-| `resolution_priority` | Plummer | 32^3 x 32^3 | Yoshida | High-accuracy production (~8 GB) |
-| `isolated_plummer` | Plummer | 16^3 x 16^3 | Strang | Isolated BC with fft_isolated |
-| `yoshida_plummer` | Plummer | 16^3 x 16^3 | Yoshida | 4th-order integrator comparison |
-| `king_equilibrium` | King (W0=6) | 16^3 x 16^3 | Strang | Tidally truncated equilibrium |
-| `hernquist_galaxy` | Hernquist | 16^3 x 16^3 | Yoshida | Galaxy model |
-| `nfw_dark_matter` | NFW (c=10) | 16^3 x 16^3 | Yoshida | Dark matter halo |
-| `nfw_high_res` | NFW (c=10) | 32^3 x 16^3 | Yoshida | High-res NFW (~1 GB) |
+| Preset | Grid | Integrator/Solver | Notes |
+|---|---|---|---|
+| `plummer` | 16^3 x 16^3 | Strang | Default Plummer starting point |
+| `plummer_64` | 16^3 x 16^3 | Strang | 64-cell spatial grid variant |
+| `plummer_128` | 16^3 x 16^3 | Strang | 128-cell spatial grid variant |
+| `plummer_hires` | 32^3 x 32^3 | Yoshida | High-resolution (~8 GB) |
+| `plummer_yoshida` | 16^3 x 16^3 | Yoshida | 4th-order integrator comparison |
+| `plummer_unsplit` | 16^3 x 16^3 | Unsplit RK4 | Method-of-lines integrator |
 
-### Advanced solvers
+### Advanced representations
 
 | Preset | Model | Solver | Notes |
 |---|---|---|---|
-| `ht_plummer` | Plummer | HT tensor | Hierarchical Tucker compressed |
-| `tensor_train_plummer` | Plummer | TT decomposition | Tensor-train representation |
-| `spectral_plummer` | Plummer | Spectral velocity | Hermite velocity basis |
-| `lomac_plummer` | Plummer | LoMaC conservation | Mass/momentum/energy preserving |
-| `unsplit_rk4_plummer` | Plummer | Unsplit RK4 | Method-of-lines integrator |
+| `plummer_ht` | Plummer | HT tensor | Hierarchical Tucker compressed |
+| `plummer_tt` | Plummer | TT decomposition | Tensor-train representation |
+| `plummer_spectral` | Plummer | Spectral velocity | Hermite velocity basis |
+| `plummer_lomac` | Plummer | LoMaC conservation | Mass/momentum/energy preserving |
 
 ### Alternative Poisson solvers
 
 | Preset | Model | Poisson solver | Notes |
 |---|---|---|---|
-| `tensor_poisson_plummer` | Plummer | Exp-sum tensor | Braess-Hackbusch isolated |
-| `multigrid_plummer` | Plummer | V-cycle multigrid | Red-black Gauss-Seidel |
-| `spherical_harmonics_plummer` | Plummer | Spherical harmonics | Legendre + radial ODE |
-| `tree_nfw` | NFW | Barnes-Hut tree | Octree gravity |
+| `plummer_tensor_poisson` | Plummer | Exp-sum tensor | Braess-Hackbusch isolated |
+| `plummer_multigrid` | Plummer | V-cycle multigrid | Red-black Gauss-Seidel |
+| `plummer_spherical` | Plummer | Spherical harmonics | Legendre + radial ODE |
+| `nfw_tree` | NFW | Barnes-Hut tree | Octree gravity |
+
+### Other equilibrium models
+
+| Preset | Model | Notes |
+|---|---|---|
+| `hernquist` | Hernquist | Galaxy model |
+| `king` | King (W0=6) | Tidally truncated equilibrium |
+| `nfw` | NFW (c=10) | Dark matter halo |
 
 ### Multi-body and cosmological
 
 | Preset | Model | Notes |
 |---|---|---|
-| `merger` | 2x Plummer (equal mass) | Head-on collision |
-| `merger_demo` | 2x Plummer | Demonstration merger |
+| `merger_equal` | 2x Plummer (equal mass) | Head-on collision |
 | `merger_unequal` | 2x Plummer (3:1) | Unequal mass ratio |
-| `cosmological` | Zel'dovich | Caustic formation |
-| `disk_exponential` | Exponential disk | Disk stability (Toomre Q) |
-| `tidal_stream` | Tidal Plummer | Stream generation |
-| `tidal_nfw_host` | Tidal + NFW host | NFW host potential |
+| `zeldovich` | Zel'dovich | Caustic formation |
+| `disk_bar` | Exponential disk | Disk stability (Toomre Q) |
+| `tidal_point` | Tidal Plummer | Point-mass host stream generation |
+| `tidal_nfw` | Tidal + NFW host | NFW host potential |
 
 ### Stability and testing
 
 | Preset | Notes |
 |---|---|
-| `jeans_instability` | Gravitational instability growth rate |
-| `jeans_stability` | Stable mode (should not grow) |
+| `jeans_unstable` | Gravitational instability growth rate |
+| `jeans_stable` | Stable mode (should not grow) |
 | `debug` | Minimal 4^3 x 4^3 grid for debugging |
 
 ## Sweep config
@@ -640,7 +662,7 @@ Panels below minimum size show a "(too small)" placeholder.
 ```
 phasma/
 ├── Cargo.toml
-├── configs/                    # 30 preset TOML configurations
+├── configs/                    # 26 preset TOML configurations
 │   ├── balanced.toml
 │   ├── default.toml
 │   ├── nfw_high_res.toml
@@ -695,9 +717,9 @@ phasma is a **consumer** of the caustic library. It provides no solver logic —
 | caustic provides | phasma provides |
 |---|---|
 | 6D Vlasov-Poisson simulation engine | ratatui TUI with 10 live tabs |
-| 7 phase-space representations | TOML config loading with 30 presets |
-| 6 Poisson solvers | Real-time density/phase-space heatmaps |
-| 6 time integrators | Energy conservation charts and radial profiles |
+| 8 phase-space representations | TOML config loading with 26 presets |
+| 10 Poisson solvers | Real-time density/phase-space heatmaps |
+| 14 time integrators | Energy conservation charts and radial profiles |
 | 10 IC generators | History scrubbing, playback, comparison |
 | LoMaC conservation framework | Batch mode, sweeps, convergence studies |
 | Diagnostics and exit conditions | Export (CSV, JSON, NPY, Parquet, VTK, ZIP) |
@@ -721,7 +743,7 @@ let snap = sample_on_grid(&ic, &domain);
 
 let mut sim = Simulation::builder()
     .domain(domain)
-    .poisson_solver(FftIsolated::new(&domain))
+    .poisson_solver(VgfPoisson::new(&domain))
     .advector(SemiLagrangian::new())
     .integrator(YoshidaSplitting::new(1.0))
     .initial_conditions(snap)

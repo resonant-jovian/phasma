@@ -95,11 +95,8 @@ pub async fn run_batch(config_path: Option<String>) -> color_eyre::Result<()> {
         }
 
         let is_exit = state.exit_reason.is_some();
-        if is_exit {
-            eprintln!(
-                "phasma batch: exit — {}",
-                state.exit_reason.as_ref().unwrap()
-            );
+        if let Some(ref reason) = state.exit_reason {
+            eprintln!("phasma batch: exit — {reason}");
         }
         final_state = Some(state);
         if is_exit {

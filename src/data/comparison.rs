@@ -1,6 +1,8 @@
 //! ComparisonDataProvider — holds two PlaybackDataProviders for side-by-side comparison.
 //! The `c` key cycles between showing Run A, Run B, or Diff.
 
+use std::borrow::Cow;
+
 use super::DataProvider;
 use super::live::DiagnosticsStore;
 use super::playback::PlaybackDataProvider;
@@ -72,14 +74,14 @@ impl DataProvider for ComparisonDataProvider {
         }
     }
 
-    fn density_projection(&self, axis: usize) -> Option<(Vec<f64>, usize, usize)> {
+    fn density_projection(&self, axis: usize) -> Option<(Cow<'_, [f64]>, usize, usize)> {
         match self.view {
             ComparisonView::RunA => self.a.density_projection(axis),
             ComparisonView::RunB => self.b.density_projection(axis),
             ComparisonView::Diff => {
                 let (da, nx, ny) = self.a.density_projection(axis)?;
                 let (db, _, _) = self.b.density_projection(axis)?;
-                Some((diff_vec(&da, &db), nx, ny))
+                Some((Cow::Owned(diff_vec(&da, &db)), nx, ny))
             }
         }
     }
@@ -89,14 +91,14 @@ impl DataProvider for ComparisonDataProvider {
         dim_x: usize,
         dim_v: usize,
         fixed: &[(usize, f64)],
-    ) -> Option<(Vec<f64>, usize, usize)> {
+    ) -> Option<(Cow<'_, [f64]>, usize, usize)> {
         match self.view {
             ComparisonView::RunA => self.a.phase_slice(dim_x, dim_v, fixed),
             ComparisonView::RunB => self.b.phase_slice(dim_x, dim_v, fixed),
             ComparisonView::Diff => {
                 let (da, nx, nv) = self.a.phase_slice(dim_x, dim_v, fixed)?;
                 let (db, _, _) = self.b.phase_slice(dim_x, dim_v, fixed)?;
-                Some((diff_vec(&da, &db), nx, nv))
+                Some((Cow::Owned(diff_vec(&da, &db)), nx, nv))
             }
         }
     }

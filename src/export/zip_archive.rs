@@ -127,18 +127,11 @@ fn export_conservation_csv(dir: &Path, diagnostics: &DiagnosticsStore) {
     let path = dir.join("conservation.csv");
     let mut out = String::from("time,energy_drift,mass_drift,casimir_drift\n");
 
-    // Merge all drift series by time (use energy drift as base timeline)
-    for &(t, de) in &energy_drift {
-        let dm = mass_drift
-            .iter()
-            .find(|(mt, _)| (*mt - t).abs() < 1e-10)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let dc = c2_drift
-            .iter()
-            .find(|(ct, _)| (*ct - t).abs() < 1e-10)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
+    // All three drift series share the same time base from iter_chart_data(),
+    // so index alignment is correct — use direct indexing instead of O(N) find.
+    for (i, &(t, de)) in energy_drift.iter().enumerate() {
+        let dm = mass_drift.get(i).map(|(_, v)| *v).unwrap_or(0.0);
+        let dc = c2_drift.get(i).map(|(_, v)| *v).unwrap_or(0.0);
         out.push_str(&format!("{t},{de},{dm},{dc}\n"));
     }
 

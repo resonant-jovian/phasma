@@ -124,7 +124,6 @@ const MAGMA_STOPS: [(f64, u8, u8, u8); 9] = [
 ];
 
 fn interp_stops(stops: &[(f64, u8, u8, u8)], t: f64) -> (u8, u8, u8) {
-    // Find the two surrounding stops
     let n = stops.len();
     if t <= stops[0].0 {
         return (stops[0].1, stops[0].2, stops[0].3);
@@ -132,18 +131,15 @@ fn interp_stops(stops: &[(f64, u8, u8, u8)], t: f64) -> (u8, u8, u8) {
     if t >= stops[n - 1].0 {
         return (stops[n - 1].1, stops[n - 1].2, stops[n - 1].3);
     }
-    for i in 0..n - 1 {
-        let (t0, r0, g0, b0) = stops[i];
-        let (t1, r1, g1, b1) = stops[i + 1];
-        if t >= t0 && t <= t1 {
-            let s = (t - t0) / (t1 - t0);
-            let r = lerp_u8(r0, r1, s);
-            let g = lerp_u8(g0, g1, s);
-            let b = lerp_u8(b0, b1, s);
-            return (r, g, b);
-        }
-    }
-    (255, 255, 255)
+    // Stops are evenly spaced at 0.125 intervals; compute index directly
+    let i = ((t / 0.125) as usize).min(n - 2);
+    let (t0, r0, g0, b0) = stops[i];
+    let (t1, r1, g1, b1) = stops[i + 1];
+    let s = (t - t0) / (t1 - t0);
+    let r = lerp_u8(r0, r1, s);
+    let g = lerp_u8(g0, g1, s);
+    let b = lerp_u8(b0, b1, s);
+    (r, g, b)
 }
 
 fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {

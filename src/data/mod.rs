@@ -3,6 +3,8 @@ pub mod comparison;
 pub mod live;
 pub mod playback;
 
+use std::borrow::Cow;
+
 use crate::{config::PhasmaConfig, sim::SimState};
 
 use live::DiagnosticsStore;
@@ -11,14 +13,14 @@ use live::DiagnosticsStore;
 pub trait DataProvider: Send {
     fn current_state(&self) -> Option<&SimState>;
     /// Returns (data, nx, ny) for a density projection along the given axis (0=x, 1=y, 2=z).
-    fn density_projection(&self, axis: usize) -> Option<(Vec<f64>, usize, usize)>;
+    fn density_projection(&self, axis: usize) -> Option<(Cow<'_, [f64]>, usize, usize)>;
     /// Returns (data, nx, nv) for a phase-space slice.
     fn phase_slice(
         &self,
         dim_x: usize,
         dim_v: usize,
         fixed: &[(usize, f64)],
-    ) -> Option<(Vec<f64>, usize, usize)>;
+    ) -> Option<(Cow<'_, [f64]>, usize, usize)>;
     fn config(&self) -> Option<&PhasmaConfig>;
     fn diagnostics(&self) -> &DiagnosticsStore;
     fn scrub_position(&self) -> Option<(usize, usize)> {

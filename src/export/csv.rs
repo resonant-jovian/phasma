@@ -9,7 +9,9 @@ pub fn export_csv(
     stem: &str,
 ) -> Result<String, String> {
     let path = dir.join(format!("{stem}.csv"));
-    let mut f = std::fs::File::create(&path).map_err(|e| format!("create file: {e}"))?;
+    let mut f = std::io::BufWriter::new(
+        std::fs::File::create(&path).map_err(|e| format!("create file: {e}"))?,
+    );
 
     writeln!(f, "time,total_energy,kinetic_energy,potential_energy,total_mass,casimir_c2,entropy,virial_ratio")
         .map_err(|e| format!("write header: {e}"))?;

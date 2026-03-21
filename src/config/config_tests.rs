@@ -36,6 +36,7 @@ load_test!(merger_unequal);
 load_test!(nfw);
 load_test!(nfw_tree);
 load_test!(plummer);
+load_test!(plummer_64);
 load_test!(plummer_128);
 load_test!(plummer_hires);
 load_test!(plummer_ht);
@@ -87,6 +88,7 @@ validate_test!(merger_unequal);
 validate_test!(nfw);
 validate_test!(nfw_tree);
 validate_test!(plummer);
+validate_test!(plummer_64);
 validate_test!(plummer_128);
 validate_test!(plummer_hires);
 validate_test!(plummer_ht);
@@ -226,6 +228,7 @@ round_trip_test!(merger_unequal);
 round_trip_test!(nfw);
 round_trip_test!(nfw_tree);
 round_trip_test!(plummer);
+round_trip_test!(plummer_64);
 round_trip_test!(plummer_128);
 round_trip_test!(plummer_hires);
 round_trip_test!(plummer_ht);
@@ -309,15 +312,15 @@ field_test!(
     "uniform",
     "fft_periodic",
     "lie",
-    4,
-    4,
+    8,
+    8,
     "periodic|truncated"
 );
 field_test!(
     disk_bar,
     "disk_stability",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
@@ -327,7 +330,7 @@ field_test!(
     hernquist,
     "hernquist",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "yoshida",
     16,
     16,
@@ -357,7 +360,7 @@ field_test!(
     king,
     "king",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
@@ -387,7 +390,7 @@ field_test!(
     nfw,
     "nfw",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "yoshida",
     16,
     16,
@@ -407,17 +410,27 @@ field_test!(
     plummer,
     "plummer",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
     "isolated|truncated"
 );
 field_test!(
+    plummer_64,
+    "plummer",
+    "hierarchical_tucker",
+    "vgf",
+    "strang",
+    64,
+    64,
+    "isolated|truncated"
+);
+field_test!(
     plummer_128,
     "plummer",
     "hierarchical_tucker",
-    "fft_isolated",
+    "vgf",
     "strang",
     128,
     128,
@@ -427,7 +440,7 @@ field_test!(
     plummer_hires,
     "plummer",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "yoshida",
     32,
     32,
@@ -437,7 +450,7 @@ field_test!(
     plummer_ht,
     "plummer",
     "hierarchical_tucker",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
@@ -467,7 +480,7 @@ field_test!(
     plummer_spectral,
     "plummer",
     "spectral",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
@@ -497,7 +510,7 @@ field_test!(
     plummer_tt,
     "plummer",
     "tensor_train",
-    "fft_isolated",
+    "vgf",
     "strang",
     16,
     16,
@@ -517,7 +530,7 @@ field_test!(
     plummer_yoshida,
     "plummer",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "yoshida",
     16,
     16,
@@ -527,9 +540,9 @@ field_test!(
     tidal_nfw,
     "tidal",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "strang",
-    16,
+    32,
     16,
     "isolated|truncated"
 );
@@ -537,7 +550,7 @@ field_test!(
     tidal_point,
     "tidal",
     "uniform",
-    "fft_isolated",
+    "vgf",
     "strang",
     32,
     32,
@@ -676,6 +689,23 @@ fn jeans_unstable_has_perturbation_subconfig() {
     assert!(
         cfg.model.uniform_perturbation.is_some(),
         "jeans_unstable.toml must have [model.uniform_perturbation]"
+    );
+}
+
+#[test]
+fn plummer_64_has_solver_subconfigs() {
+    let cfg = load_config("plummer_64");
+    assert!(
+        cfg.solver.ht.is_some(),
+        "plummer_64.toml must have [solver.ht]"
+    );
+    assert!(
+        cfg.solver.slar.is_some(),
+        "plummer_64.toml must have [solver.slar]"
+    );
+    assert!(
+        cfg.solver.lomac.is_some(),
+        "plummer_64.toml must have [solver.lomac]"
     );
 }
 

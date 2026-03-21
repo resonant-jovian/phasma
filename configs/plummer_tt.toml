@@ -21,7 +21,7 @@ gravitational_constant = 1.0
 
 [solver]
 representation = "tensor_train"
-poisson = "fft_isolated"
+poisson = "vgf"
 advection = "semi_lagrangian"
 integrator = "strang"
 

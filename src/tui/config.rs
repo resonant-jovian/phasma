@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Remove this once you start using the code
-
 use std::{collections::HashMap, env, path::PathBuf, sync::LazyLock};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -44,10 +42,18 @@ pub static CONFIG_FOLDER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
 impl Config {
     fn default_config() -> Self {
         let mut home_bindings = HashMap::new();
-        home_bindings.insert(parse_key_sequence("<q>").unwrap(), Action::Quit);
-        home_bindings.insert(parse_key_sequence("<Ctrl-d>").unwrap(), Action::Quit);
-        home_bindings.insert(parse_key_sequence("<Ctrl-c>").unwrap(), Action::Quit);
-        home_bindings.insert(parse_key_sequence("<Ctrl-z>").unwrap(), Action::Suspend);
+        if let Ok(keys) = parse_key_sequence("<q>") {
+            home_bindings.insert(keys, Action::Quit);
+        }
+        if let Ok(keys) = parse_key_sequence("<Ctrl-d>") {
+            home_bindings.insert(keys, Action::Quit);
+        }
+        if let Ok(keys) = parse_key_sequence("<Ctrl-c>") {
+            home_bindings.insert(keys, Action::Quit);
+        }
+        if let Ok(keys) = parse_key_sequence("<Ctrl-z>") {
+            home_bindings.insert(keys, Action::Suspend);
+        }
         let mut bindings = HashMap::new();
         bindings.insert(Mode::Home, home_bindings);
         Self {
@@ -150,7 +156,9 @@ impl<'de> Deserialize<'de> for KeyBindings {
             .map(|(mode, inner_map)| {
                 let converted_inner_map = inner_map
                     .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
+                    .filter_map(|(key_str, cmd)| {
+                        parse_key_sequence(&key_str).ok().map(|keys| (keys, cmd))
+                    })
                     .collect();
                 (mode, converted_inner_map)
             })
@@ -230,7 +238,7 @@ fn parse_key_code_with_modifiers(
         "minus" => KeyCode::Char('-'),
         "tab" => KeyCode::Tab,
         c if c.len() == 1 => {
-            let mut c = c.chars().next().unwrap();
+            let mut c = c.chars().next().unwrap_or('\0');
             if modifiers.contains(KeyModifiers::SHIFT) {
                 c = c.to_ascii_uppercase();
             }

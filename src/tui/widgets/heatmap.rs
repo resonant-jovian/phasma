@@ -106,6 +106,13 @@ impl Widget for HeatmapWidget<'_> {
         // Normalise data
         let (min_val, max_val) = data_range(self.data, self.log_scale);
 
+        // Precompute log bounds outside the pixel loop (avoids 2 extra ln() per pixel)
+        let (lmin, lmax) = if self.log_scale && min_val > 0.0 {
+            (min_val.ln(), max_val.ln())
+        } else {
+            (0.0, 0.0)
+        };
+
         // Render using HalfBlock characters (2× vertical resolution)
         // Each terminal row = 2 "half-rows": upper (bg) and lower (fg, "▄")
         let cols = draw_area.width as usize;
@@ -131,8 +138,10 @@ impl Widget for HeatmapWidget<'_> {
                 let v_upper = self.data.get(idx_upper).copied().unwrap_or(0.0);
                 let v_lower = self.data.get(idx_lower).copied().unwrap_or(0.0);
 
-                let t_upper = normalize(v_upper, min_val, max_val, self.log_scale);
-                let t_lower = normalize(v_lower, min_val, max_val, self.log_scale);
+                let t_upper =
+                    normalize_precomputed(v_upper, min_val, max_val, self.log_scale, lmin, lmax);
+                let t_lower =
+                    normalize_precomputed(v_lower, min_val, max_val, self.log_scale, lmin, lmax);
 
                 let c_upper = lookup(self.colormap, t_upper);
                 let c_lower = lookup(self.colormap, t_lower);
@@ -179,14 +188,12 @@ fn data_range(data: &[f64], log_scale: bool) -> (f64, f64) {
     (min, max)
 }
 
-fn normalize(v: f64, min: f64, max: f64, log_scale: bool) -> f64 {
+fn normalize_precomputed(v: f64, min: f64, max: f64, log_scale: bool, lmin: f64, lmax: f64) -> f64 {
     if log_scale {
-        if v <= 0.0 || min <= 0.0 {
+        if v <= 0.0 {
             return 0.0;
         }
         let lv = v.ln();
-        let lmin = min.ln();
-        let lmax = max.ln();
         if lmax == lmin {
             return 0.0;
         }

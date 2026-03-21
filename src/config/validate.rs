@@ -168,6 +168,8 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "spherical_harmonics",
         "tree",
         "barnes_hut",
+        "vgf",
+        "vgf_isolated",
     ];
     if !valid_poisson.contains(&cfg.solver.poisson.as_str()) {
         warnings.push(ValidationWarning {
@@ -202,6 +204,21 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "unsplit_rk2",
         "unsplit_rk3",
         "unsplit_rk4",
+        "rkei",
+        "bug",
+        "midpoint_bug",
+        "conservative_bug",
+        "blanes_moan",
+        "bm4",
+        "rkn6",
+        "adaptive",
+        "adaptive_strang",
+        "parallel_bug",
+        "pbug",
+        "rk_bug",
+        "rk_bug3",
+        "lawson",
+        "lawson_rk4",
     ];
     if !valid_integrator.contains(&cfg.solver.integrator.as_str()) {
         warnings.push(ValidationWarning {
@@ -214,8 +231,17 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
+    if cfg.solver.poisson == "fft_isolated" {
+        warnings.push(ValidationWarning {
+            field: "solver.poisson".into(),
+            message:
+                "fft_isolated is deprecated; consider \"vgf\" for spectral-accuracy isolated BC"
+                    .into(),
+        });
+    }
+
     // Resolution must be power of 2 for FFT-based solvers
-    let is_fft = cfg.solver.poisson.starts_with("fft");
+    let is_fft = cfg.solver.poisson.starts_with("fft") || cfg.solver.poisson.starts_with("vgf");
     if is_fft && !cfg.domain.spatial_resolution.is_power_of_two() {
         warnings.push(ValidationWarning {
             field: "domain.spatial_resolution".into(),

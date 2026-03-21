@@ -513,7 +513,7 @@ fn default_lomac_tol() -> f64 {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SemiLagrangianConfig {
-    /// "linear", "cubic", "quintic"
+    /// "linear", "cubic", "quintic", "wpfc", "mp7"
     #[serde(default = "default_sl_interp")]
     pub interpolation: String,
     /// "none", "minmod", "van_leer"
@@ -522,7 +522,7 @@ pub struct SemiLagrangianConfig {
 }
 
 fn default_sl_interp() -> String {
-    "cubic".to_string()
+    "wpfc".to_string()
 }
 fn default_sl_limiter() -> String {
     "none".to_string()

@@ -74,7 +74,9 @@ fn export_vtk_2d(
     field_name: &str,
 ) -> Result<(), String> {
     let path = dir.join(filename);
-    let mut f = std::fs::File::create(&path).map_err(|e| format!("create {filename}: {e}"))?;
+    let mut f = std::io::BufWriter::new(
+        std::fs::File::create(&path).map_err(|e| format!("create {filename}: {e}"))?,
+    );
 
     // VTK legacy ASCII structured points
     writeln!(f, "# vtk DataFile Version 3.0").map_err(|e| e.to_string())?;

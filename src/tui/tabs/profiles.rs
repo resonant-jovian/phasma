@@ -10,7 +10,12 @@ use ratatui::{
     widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
 };
 
-use crate::{data::DataProvider, themes::ThemeColors, tui::action::Action};
+use crate::{
+    data::DataProvider,
+    themes::ThemeColors,
+    tui::action::Action,
+    tui::chart_utils::{data_bounds, densify},
+};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ProfileKind {
@@ -42,6 +47,28 @@ const BIN_PRESETS: &[usize] = &[16, 32, 64, 128];
 const LAGRANGIAN_PCTS: [f64; 5] = [0.10, 0.25, 0.50, 0.75, 0.90];
 const LAGRANGIAN_CAP: usize = 500;
 
+struct CachedProfiles {
+    density: Vec<(f64, f64)>,
+    mass: Vec<(f64, f64)>,
+    potential: Vec<(f64, f64)>,
+    sigma: Vec<(f64, f64)>,
+    cached_step: u64,
+    cached_bin_preset: usize,
+}
+
+impl Default for CachedProfiles {
+    fn default() -> Self {
+        Self {
+            density: Vec::new(),
+            mass: Vec::new(),
+            potential: Vec::new(),
+            sigma: Vec::new(),
+            cached_step: u64::MAX,
+            cached_bin_preset: usize::MAX,
+        }
+    }
+}
+
 pub struct ProfilesTab {
     kind: ProfileKind,
     log_scale: bool,
@@ -53,6 +80,11 @@ pub struct ProfilesTab {
     lagrangian_history: [VecDeque<(f64, f64)>; 5],
     /// Last step we recorded Lagrangian radii for (to avoid duplicates).
     lagrangian_last_step: u64,
+    /// Cached radial profiles (recomputed only when step or bin count changes).
+    cached_profiles: CachedProfiles,
+    /// Cached lagrangian series (Vec copies of VecDeque history).
+    cached_lagrangian: [Vec<(f64, f64)>; 5],
+    cached_lagrangian_len: usize,
 }
 
 impl Default for ProfilesTab {
@@ -65,6 +97,9 @@ impl Default for ProfilesTab {
             bin_preset_idx: 2, // default 64 bins
             lagrangian_history: std::array::from_fn(|_| VecDeque::with_capacity(LAGRANGIAN_CAP)),
             lagrangian_last_step: u64::MAX,
+            cached_profiles: CachedProfiles::default(),
+            cached_lagrangian: std::array::from_fn(|_| Vec::new()),
+            cached_lagrangian_len: 0,
         }
     }
 }
@@ -150,7 +185,7 @@ impl ProfilesTab {
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
@@ -175,21 +210,40 @@ impl ProfilesTab {
             );
             return;
         }
-        let state = state.unwrap();
+        let Some(state) = state else { return };
 
-        // Compute radial density profile from the 3D density (using xy projection)
-        let l_box = state.spatial_extent * 2.0; // full box size
-        let nx = state.density_nx;
-        let ny = state.density_ny;
-        let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
+        // Recompute profiles only when step or bin count changes
         let n_bins = BIN_PRESETS[self.bin_preset_idx];
-        let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
+        if state.step != self.cached_profiles.cached_step
+            || self.bin_preset_idx != self.cached_profiles.cached_bin_preset
+        {
+            let l_box = state.spatial_extent * 2.0;
+            let nx = state.density_nx;
+            let ny = state.density_ny;
+            let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
+            let g = state.gravitational_constant;
+            let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
+            let mass_profile = compute_mass_profile(&density_profile, dx);
+            let potential_profile = compute_potential_profile(&mass_profile, g);
+            let sigma_profile = compute_sigma_profile(&density_profile, &mass_profile, g);
+            self.cached_profiles = CachedProfiles {
+                density: density_profile,
+                mass: mass_profile,
+                potential: potential_profile,
+                sigma: sigma_profile,
+                cached_step: state.step,
+                cached_bin_preset: self.bin_preset_idx,
+            };
+        }
 
-        // Derive other quantities from the density profile
-        let g = state.gravitational_constant;
-        let mass_profile = compute_mass_profile(&density_profile, dx);
-        let potential_profile = compute_potential_profile(&mass_profile, g);
-        let sigma_profile = compute_sigma_profile(&density_profile, &mass_profile, g);
+        // Rebuild lagrangian series cache when history grows
+        let total_lag_len: usize = self.lagrangian_history.iter().map(|h| h.len()).sum();
+        if total_lag_len != self.cached_lagrangian_len {
+            for i in 0..5 {
+                self.cached_lagrangian[i] = self.lagrangian_history[i].iter().copied().collect();
+            }
+            self.cached_lagrangian_len = total_lag_len;
+        }
 
         // Footer area
         let [main_area, info_area] =
@@ -204,28 +258,10 @@ impl ProfilesTab {
 
         match effective_mode {
             LayoutMode::Stacked => {
-                self.draw_stacked(
-                    frame,
-                    main_area,
-                    theme,
-                    data_provider,
-                    &density_profile,
-                    &mass_profile,
-                    &potential_profile,
-                    &sigma_profile,
-                );
+                self.draw_stacked(frame, main_area, theme, data_provider);
             }
             LayoutMode::Single => {
-                self.draw_single(
-                    frame,
-                    main_area,
-                    theme,
-                    data_provider,
-                    &density_profile,
-                    &mass_profile,
-                    &potential_profile,
-                    &sigma_profile,
-                );
+                self.draw_single(frame, main_area, theme, data_provider);
             }
         }
 
@@ -281,17 +317,12 @@ impl ProfilesTab {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_stacked(
         &self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
-        density_profile: &[(f64, f64)],
-        mass_profile: &[(f64, f64)],
-        potential_profile: &[(f64, f64)],
-        sigma_profile: &[(f64, f64)],
     ) {
         // 4 profile panels + Lagrangian radii stub, sharing the r axis
         let panels = Layout::vertical([
@@ -303,12 +334,26 @@ impl ProfilesTab {
         ])
         .split(area);
 
-        #[allow(clippy::type_complexity)]
         let profiles: [(ProfileKind, &str, &[(f64, f64)], usize); 4] = [
-            (ProfileKind::Density, " ρ(r) ", density_profile, 0),
-            (ProfileKind::Mass, " M(<r) ", mass_profile, 1),
-            (ProfileKind::Potential, " Φ(r) ", potential_profile, 2),
-            (ProfileKind::Velocity, " σ(r) ", sigma_profile, 4),
+            (
+                ProfileKind::Density,
+                " ρ(r) ",
+                &self.cached_profiles.density,
+                0,
+            ),
+            (ProfileKind::Mass, " M(<r) ", &self.cached_profiles.mass, 1),
+            (
+                ProfileKind::Potential,
+                " Φ(r) ",
+                &self.cached_profiles.potential,
+                2,
+            ),
+            (
+                ProfileKind::Velocity,
+                " σ(r) ",
+                &self.cached_profiles.sigma,
+                4,
+            ),
         ];
 
         for (i, &(kind, title, profile_data, color_idx)) in profiles.iter().enumerate() {
@@ -321,7 +366,6 @@ impl ProfilesTab {
                 title,
                 profile_data,
                 theme.chart[color_idx],
-                density_profile,
             );
         }
 
@@ -329,50 +373,56 @@ impl ProfilesTab {
         self.draw_lagrangian_panel(frame, panels[4], theme);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_single(
         &self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
-        density_profile: &[(f64, f64)],
-        mass_profile: &[(f64, f64)],
-        potential_profile: &[(f64, f64)],
-        sigma_profile: &[(f64, f64)],
     ) {
-        let (kind, title, color, profile_data) = match self.kind {
-            ProfileKind::Density => (
-                ProfileKind::Density,
-                " ρ(r) ",
-                theme.chart[0],
-                density_profile,
-            ),
-            ProfileKind::Mass => (ProfileKind::Mass, " M(<r) ", theme.chart[1], mass_profile),
-            ProfileKind::Potential => (
-                ProfileKind::Potential,
-                " Φ(r) ",
-                theme.chart[2],
-                potential_profile,
-            ),
-            ProfileKind::Velocity => (
-                ProfileKind::Velocity,
-                " σ(r) ",
-                theme.chart[4],
-                sigma_profile,
-            ),
-            ProfileKind::Anisotropy => (
-                ProfileKind::Anisotropy,
-                " β(r) ",
-                theme.chart[3],
-                density_profile,
-            ),
-        };
+        let (kind, title, color, profile_data): (ProfileKind, &str, _, &[(f64, f64)]) =
+            match self.kind {
+                ProfileKind::Density => (
+                    ProfileKind::Density,
+                    " ρ(r) ",
+                    theme.chart[0],
+                    &self.cached_profiles.density,
+                ),
+                ProfileKind::Mass => (
+                    ProfileKind::Mass,
+                    " M(<r) ",
+                    theme.chart[1],
+                    &self.cached_profiles.mass,
+                ),
+                ProfileKind::Potential => (
+                    ProfileKind::Potential,
+                    " Φ(r) ",
+                    theme.chart[2],
+                    &self.cached_profiles.potential,
+                ),
+                ProfileKind::Velocity => (
+                    ProfileKind::Velocity,
+                    " σ(r) ",
+                    theme.chart[4],
+                    &self.cached_profiles.sigma,
+                ),
+                ProfileKind::Anisotropy => (
+                    ProfileKind::Anisotropy,
+                    " β(r) ",
+                    theme.chart[3],
+                    &self.cached_profiles.density,
+                ),
+            };
 
         // For anisotropy, show β=0 (isotropic) placeholder
         let aniso_data: Vec<(f64, f64)>;
         let chart_source = if self.kind == ProfileKind::Anisotropy {
-            aniso_data = density_profile.iter().map(|&(r, _)| (r, 0.0)).collect();
+            aniso_data = self
+                .cached_profiles
+                .density
+                .iter()
+                .map(|&(r, _)| (r, 0.0))
+                .collect();
             &aniso_data
         } else {
             profile_data
@@ -387,11 +437,9 @@ impl ProfilesTab {
             title,
             chart_source,
             color,
-            density_profile,
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_profile_panel(
         &self,
         frame: &mut Frame,
@@ -402,8 +450,8 @@ impl ProfilesTab {
         title: &str,
         profile_data: &[(f64, f64)],
         color: ratatui::style::Color,
-        density_profile: &[(f64, f64)],
     ) {
+        let density_profile = &self.cached_profiles.density;
         let log_tag = if self.log_scale { " [log]" } else { "" };
         let full_title = format!("{title}{log_tag}");
 
@@ -520,12 +568,8 @@ impl ProfilesTab {
 
         const LABELS: [&str; 5] = ["L10", "L25", "L50", "L75", "L90"];
 
-        // Build datasets from history
-        let series_data: Vec<Vec<(f64, f64)>> = self
-            .lagrangian_history
-            .iter()
-            .map(|h| h.iter().copied().collect::<Vec<_>>())
-            .collect();
+        // Use cached series data (rebuilt in draw() when history grows)
+        let series_data = &self.cached_lagrangian;
 
         // Find global bounds
         let (mut t_min, mut t_max, mut r_min, mut r_max) = (
@@ -534,7 +578,7 @@ impl ProfilesTab {
             f64::INFINITY,
             f64::NEG_INFINITY,
         );
-        for series in &series_data {
+        for series in series_data {
             for &(t, r) in series {
                 t_min = t_min.min(t);
                 t_max = t_max.max(t);
@@ -551,7 +595,8 @@ impl ProfilesTab {
         let rpad = (r_max - r_min) * 0.05;
 
         let target = inner.width.saturating_sub(2) as usize * 2;
-        let dense: Vec<Vec<(f64, f64)>> = series_data.iter().map(|s| densify(s, target)).collect();
+        let dense: Vec<std::borrow::Cow<'_, [(f64, f64)]>> =
+            series_data.iter().map(|s| densify(s, target)).collect();
 
         let datasets: Vec<Dataset> = dense
             .iter()
@@ -837,60 +882,4 @@ fn combined_bounds(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, f64, f64, f64) {
         y_max = y_max.max(by1);
     }
     (x_min, x_max, y_min, y_max)
-}
-
-fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
-    let mut x_min = f64::INFINITY;
-    let mut x_max = f64::NEG_INFINITY;
-    let mut y_min = f64::INFINITY;
-    let mut y_max = f64::NEG_INFINITY;
-    for &(x, y) in data {
-        if x < x_min {
-            x_min = x;
-        }
-        if x > x_max {
-            x_max = x;
-        }
-        if y < y_min {
-            y_min = y;
-        }
-        if y > y_max {
-            y_max = y;
-        }
-    }
-    if x_min >= x_max {
-        x_max = x_min + 1.0;
-    }
-    if y_min >= y_max {
-        y_max = y_min + 1.0;
-    }
-    let ypad = (y_max - y_min) * 0.05;
-    (x_min, x_max, y_min - ypad, y_max + ypad)
-}
-
-/// Linearly interpolate sparse data so there are at least `target` points.
-fn densify(data: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
-    if data.len() >= target || data.len() < 2 {
-        return data.to_vec();
-    }
-    let mut out = Vec::with_capacity(target);
-    let n_segments = data.len() - 1;
-    let points_per_seg = (target / n_segments).max(2);
-    for i in 0..n_segments {
-        let (x0, y0) = data[i];
-        let (x1, y1) = data[i + 1];
-        let steps = if i < n_segments - 1 {
-            points_per_seg
-        } else {
-            target.saturating_sub(out.len()).max(2)
-        };
-        for j in 0..steps {
-            let frac = j as f64 / steps as f64;
-            out.push((x0 + frac * (x1 - x0), y0 + frac * (y1 - y0)));
-        }
-    }
-    if let Some(&last) = data.last() {
-        out.push(last);
-    }
-    out
 }

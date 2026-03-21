@@ -29,21 +29,21 @@ pub fn export_animation_frames(
     let nz = state.density_nz;
 
     if nx > 0 && ny > 0 {
-        let arr = ndarray::Array2::from_shape_vec((ny, nx), state.density_xy.clone())
+        let arr = ndarray::ArrayView2::from_shape((ny, nx), &state.density_xy)
             .map_err(|e| format!("array shape xy: {e}"))?;
         let path = frames_dir.join(format!("{stem}_density_xy_t{:.4}.npy", state.t));
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;
     }
 
     if nx > 0 && nz > 0 {
-        let arr = ndarray::Array2::from_shape_vec((nz, nx), state.density_xz.clone())
+        let arr = ndarray::ArrayView2::from_shape((nz, nx), &state.density_xz)
             .map_err(|e| format!("array shape xz: {e}"))?;
         let path = frames_dir.join(format!("{stem}_density_xz_t{:.4}.npy", state.t));
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;
     }
 
     if ny > 0 && nz > 0 {
-        let arr = ndarray::Array2::from_shape_vec((nz, ny), state.density_yz.clone())
+        let arr = ndarray::ArrayView2::from_shape((nz, ny), &state.density_yz)
             .map_err(|e| format!("array shape yz: {e}"))?;
         let path = frames_dir.join(format!("{stem}_density_yz_t{:.4}.npy", state.t));
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;
@@ -55,7 +55,7 @@ pub fn export_animation_frames(
         && let Some(ps) = state.phase_slices.first()
         && !ps.is_empty()
     {
-        let arr = ndarray::Array2::from_shape_vec((state.phase_nv, state.phase_nx), ps.clone())
+        let arr = ndarray::ArrayView2::from_shape((state.phase_nv, state.phase_nx), ps)
             .map_err(|e| format!("array shape phase: {e}"))?;
         let path = frames_dir.join(format!("{stem}_phase_xvx_t{:.4}.npy", state.t));
         ndarray_npy::write_npy(&path, &arr).map_err(|e| format!("write npy: {e}"))?;

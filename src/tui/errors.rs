@@ -12,11 +12,14 @@ pub fn init() -> color_eyre::Result<()> {
         .into_hooks();
     eyre_hook.install()?;
     std::panic::set_hook(Box::new(move |panic_info| {
-        if let Ok(mut t) = crate::tui::Tui::new()
-            && let Err(r) = t.exit()
-        {
-            error!("Unable to exit Terminal: {:?}", r);
-        }
+        // Restore terminal directly without allocating a new Tui
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show,
+            crossterm::event::DisableMouseCapture,
+        );
 
         let msg = format!("{}", panic_hook.panic_report(panic_info));
         eprintln!("{msg}");
