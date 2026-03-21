@@ -540,10 +540,11 @@ fn build_from_config(
 ) -> anyhow::Result<caustic::Simulation> {
     use caustic::{
         AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
-        FftIsolated, FftPoisson, HtTensor, HybridRepr, LieSplitting, MassLossCondition, Multigrid,
-        SemiLagrangian, SheetTracker, SpectralV, SphericalHarmonicsPoisson, SteadyStateCondition,
-        StrangSplitting, TensorPoisson, TensorTrain, TreePoisson, UniformGrid6D,
-        VirialRelaxedCondition, WallClockCondition, YoshidaSplitting,
+        FftIsolated, FftPoisson, FlowMapRepr, HtTensor, HybridRepr, LieSplitting,
+        MassLossCondition, Multigrid, SemiLagrangian, SheetTracker, SpectralV,
+        SphericalHarmonicsPoisson, SphericalRepr, SteadyStateCondition, StrangSplitting,
+        TensorPoisson, TensorTrain, TreePoisson, UniformGrid6D, VirialRelaxedCondition,
+        WallClockCondition, YoshidaSplitting,
     };
 
     let g = cfg.domain.gravitational_constant.to_f64().unwrap_or(1.0);
@@ -594,7 +595,7 @@ fn build_from_config(
 
     progress.set_phase(caustic::StepPhase::BuildIC);
     let t0 = Instant::now();
-    let repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
+    let mut repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
         "hierarchical_tucker" | "ht" => {
             let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
             let max_rank = cfg
@@ -641,6 +642,30 @@ fn build_from_config(
         "sheet_tracker" => Box::new(SheetTracker::new(domain.clone())),
         "amr" => Box::new(AmrGrid::new(domain.clone(), 0.1, 3)),
         "hybrid" => Box::new(HybridRepr::new(domain.clone())),
+        "flow_map" => {
+            let snap = build_ic(cfg, &domain, g, Some(progress))?;
+            let n_lag = cfg
+                .solver
+                .flow_map
+                .as_ref()
+                .map(|f| f.lagrangian_resolution as usize)
+                .unwrap_or(16);
+            let nv_lag = cfg
+                .solver
+                .flow_map
+                .as_ref()
+                .map(|f| f.velocity_resolution as usize)
+                .unwrap_or(8);
+            Box::new(FlowMapRepr::from_snapshot(&snap, &domain, n_lag, nv_lag))
+        }
+        "spherical_repr" => {
+            let n = cfg.domain.spatial_resolution as usize;
+            let nv = cfg.domain.velocity_resolution as usize;
+            let r_max = cfg.domain.spatial_extent.to_f64().unwrap_or(10.0);
+            let v_max = cfg.domain.velocity_extent.to_f64().unwrap_or(5.0);
+            let l_max = r_max * v_max;
+            Box::new(SphericalRepr::new(domain.clone(), n, nv, n, r_max, v_max, l_max))
+        }
 
         // Representations that require the full N^6 grid in memory
         "uniform" | "uniform_grid" | "tensor_train" | "spectral" | "velocity_ht" => {
@@ -747,6 +772,15 @@ fn build_from_config(
         ));
     }
 
+    // Macro-micro conservation wrapper: wraps the inner representation by decomposing
+    // f into macro (Maxwellian from moments) and micro (deviation g = f - f_M) parts.
+    if cfg.solver.conservation == "macro_micro" {
+        if verbose {
+            logs.push("Wrapping representation with MacroMicroRepr".to_string());
+        }
+        repr = Box::new(caustic::MacroMicroRepr::from_repr(repr, &domain));
+    }
+
     // Build Poisson solver
     progress.set_phase(caustic::StepPhase::BuildPoisson);
     if verbose {
@@ -770,6 +804,21 @@ fn build_from_config(
                 logs.push(format!("  TensorPoisson: shape={shape:?}, dx={dx:?}"));
             }
             Box::new(TensorPoisson::new(shape, dx, 1e-6, 1e-6, 30))
+        }
+        "ht_poisson" => {
+            let shape = [
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+            ];
+            let dx = domain.dx();
+            let accuracy = cfg.solver.exponential_sum.as_ref().map(|e| e.accuracy).unwrap_or(1e-6);
+            let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
+            let max_rank = cfg.solver.ht.as_ref().map(|h| h.max_rank as usize).unwrap_or(50);
+            if verbose {
+                logs.push(format!("  HtPoisson: shape={shape:?}, tolerance={tolerance:.1e}, max_rank={max_rank}"));
+            }
+            Box::new(caustic::HtPoisson::new(shape, dx, accuracy, tolerance, max_rank))
         }
         "multigrid" => {
             if verbose {
@@ -797,6 +846,54 @@ fn build_from_config(
                 logs.push("  VGF (spectral-accuracy isolated BC)".to_string());
             }
             Box::new(caustic::VgfPoisson::new(&domain))
+        }
+        "range_separated" => {
+            let split_radius = cfg
+                .solver
+                .range_separated
+                .as_ref()
+                .map(|r| r.split_radius)
+                .unwrap_or(3.0);
+            let inner_name = cfg
+                .solver
+                .range_separated
+                .as_ref()
+                .map(|r| r.inner_solver.as_str())
+                .unwrap_or("fft_periodic");
+            if verbose {
+                logs.push(format!(
+                    "  RangeSeparated: split_radius={split_radius}, inner={inner_name}"
+                ));
+            }
+            let inner: Box<dyn caustic::PoissonSolver + Send + Sync> = match inner_name {
+                "fft_periodic" | "fft" => Box::new(FftPoisson::new(&domain)),
+                "fft_isolated" => Box::new(FftIsolated::new(&domain)),
+                "vgf" | "vgf_isolated" => Box::new(caustic::VgfPoisson::new(&domain)),
+                other_inner => {
+                    logs.push(format!(
+                        "  WARNING: unknown inner solver '{other_inner}' for range_separated, \
+                         falling back to fft_periodic"
+                    ));
+                    Box::new(FftPoisson::new(&domain))
+                }
+            };
+            Box::new(caustic::RangeSeparatedPoisson::new(
+                &domain,
+                split_radius,
+                inner,
+            ))
+        }
+        "spherical_1d" => {
+            let nr = cfg.domain.spatial_resolution as usize;
+            let r_max = cfg.domain.spatial_extent.to_f64().unwrap_or(10.0);
+            let dr = r_max / nr as f64;
+            let r_min = dr; // avoid r=0 singularity
+            if verbose {
+                logs.push(format!(
+                    "  Spherical1D: nr={nr}, dr={dr:.4}, r_min={r_min:.4}"
+                ));
+            }
+            Box::new(caustic::Spherical1DPoisson::new(nr, dr, r_min))
         }
         other => anyhow::bail!("unsupported poisson solver '{other}'"),
     };
@@ -862,6 +959,42 @@ fn build_from_config(
             },
         )),
         "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
+        "cosmological" | "cosmological_strang" => {
+            // Pull cosmology parameters from Zeldovich config if available,
+            // otherwise use sensible defaults.
+            let scale_factor = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| 1.0 / (1.0 + z.redshift_initial.to_f64().unwrap_or(50.0)))
+                .unwrap_or(1.0);
+            let hubble = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| z.cosmology_h.to_f64().unwrap_or(0.7))
+                .unwrap_or(0.7);
+            let omega_m = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| z.cosmology_omega_m.to_f64().unwrap_or(0.3))
+                .unwrap_or(0.3);
+            if verbose {
+                logs.push(format!(
+                    "  Cosmological: a={scale_factor:.4}, H={hubble:.2}, Omega_m={omega_m:.2}"
+                ));
+            }
+            Box::new(caustic::CosmologicalStrangSplitting::new(
+                g,
+                scale_factor,
+                hubble,
+                omega_m,
+            ))
+        }
+        "instrumented" | "instrumented_strang" => {
+            Box::new(caustic::InstrumentedStrangSplitting::new(g))
+        }
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 
@@ -995,7 +1128,9 @@ fn build_ht_from_ic_aca(
     verbose: bool,
     logs: &mut Vec<String>,
 ) -> Option<caustic::HtTensor> {
-    use caustic::{HernquistIC, HtTensor, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC};
+    use caustic::{
+        HernquistIC, HtTensor, IsochroneIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC,
+    };
     use rust_decimal::prelude::ToPrimitive;
 
     let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
@@ -1004,6 +1139,7 @@ fn build_ht_from_ic_aca(
     let ic: Box<dyn IsolatedEquilibrium + Sync> = match cfg.model.model_type.as_str() {
         "plummer" => Box::new(PlummerIC::new(m, a, g)),
         "hernquist" => Box::new(HernquistIC::new(m, a, g)),
+        "isochrone" => Box::new(IsochroneIC::new(m, a, g)),
         "king" => {
             let king = cfg.model.king.as_ref()?;
             let w0 = king.w0.to_f64().unwrap_or(7.0);
@@ -1049,8 +1185,8 @@ fn build_ic(
     progress: Option<&caustic::StepProgress>,
 ) -> anyhow::Result<caustic::PhaseSpaceSnapshot> {
     use caustic::{
-        CustomICArray, HernquistIC, KingIC, MergerIC, NfwIC, PlummerIC, ZeldovichSingleMode,
-        sample_on_grid_with_progress,
+        CustomICArray, HernquistIC, IsochroneIC, KingIC, MergerIC, NfwIC, PlummerIC,
+        ZeldovichSingleMode, sample_on_grid_with_progress,
     };
 
     let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
@@ -1063,6 +1199,10 @@ fn build_ic(
         }
         "hernquist" => {
             let ic = HernquistIC::new(m, a, g);
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
+        }
+        "isochrone" => {
+            let ic = IsochroneIC::new(m, a, g);
             Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "king" => {
@@ -1143,6 +1283,9 @@ fn build_ic(
                 match tc.progenitor_type.as_str() {
                     "plummer" => Box::new(caustic::PlummerIC::new(prog_mass, prog_scale, g)),
                     "hernquist" => Box::new(caustic::HernquistIC::new(prog_mass, prog_scale, g)),
+                    "isochrone" => {
+                        Box::new(caustic::IsochroneIC::new(prog_mass, prog_scale, g))
+                    }
                     "king" => {
                         let w0 = cfg
                             .model

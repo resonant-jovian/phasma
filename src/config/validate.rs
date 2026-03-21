@@ -103,6 +103,7 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
     let valid_models = [
         "plummer",
         "hernquist",
+        "isochrone",
         "king",
         "nfw",
         "zeldovich",
@@ -145,6 +146,8 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "velocity_ht",
         "amr",
         "hybrid",
+        "flow_map",
+        "spherical_repr",
     ];
     if !valid_repr.contains(&cfg.solver.representation.as_str()) {
         warnings.push(ValidationWarning {
@@ -170,6 +173,9 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "barnes_hut",
         "vgf",
         "vgf_isolated",
+        "range_separated",
+        "spherical_1d",
+        "ht_poisson",
     ];
     if !valid_poisson.contains(&cfg.solver.poisson.as_str()) {
         warnings.push(ValidationWarning {
@@ -219,6 +225,10 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         "rk_bug3",
         "lawson",
         "lawson_rk4",
+        "cosmological",
+        "cosmological_strang",
+        "instrumented",
+        "instrumented_strang",
     ];
     if !valid_integrator.contains(&cfg.solver.integrator.as_str()) {
         warnings.push(ValidationWarning {

@@ -92,6 +92,10 @@ impl Default for DomainConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelConfig {
+    /// Model type for initial conditions.
+    /// Options: "plummer" (default), "hernquist", "king", "nfw",
+    /// "zeldovich", "merger"/"two_body_merger", "tidal",
+    /// "disk_exponential"/"disk_stability", "uniform_perturbation", "custom_file"
     #[serde(rename = "type", default = "default_model_type")]
     pub model_type: String,
     #[serde(default = "default_mass", alias = "mass", with = "decimal_serde")]
@@ -372,19 +376,32 @@ fn default_dataset_name() -> String {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SolverConfig {
-    /// "uniform_grid", "hierarchical_tucker", "tensor_train", "sheet_tracker", "velocity_ht"
+    /// Phase-space representation.
+    /// Options: "uniform" (default), "uniform_grid", "hierarchical_tucker"/"ht",
+    /// "tensor_train", "sheet_tracker", "spectral"/"velocity_ht", "amr", "hybrid",
+    /// "flow_map", "spherical_repr"
     #[serde(default = "default_representation")]
     pub representation: String,
-    /// "fft_periodic", "fft_isolated", "multigrid", "spherical_harmonics"
+    /// Poisson solver for nabla^2 Phi = 4 pi G rho.
+    /// Options: "fft_periodic"/"fft" (default), "fft_isolated" (deprecated, use "vgf"),
+    /// "vgf"/"vgf_isolated", "tensor"/"tensor_poisson", "ht_poisson",
+    /// "multigrid", "spherical"/"spherical_harmonics", "tree"/"barnes_hut",
+    /// "range_separated", "spherical_1d"
     #[serde(default = "default_poisson")]
     pub poisson: String,
-    /// "semi_lagrangian", "spectral", "slar"
+    /// Advection scheme. Options: "semi_lagrangian" (default)
     #[serde(default = "default_advection")]
     pub advection: String,
-    /// "strang_splitting", "yoshida_splitting", "lie"
+    /// Time integrator.
+    /// Options: "strang"/"strang_splitting" (default), "yoshida"/"yoshida_splitting",
+    /// "lie", "unsplit"/"unsplit_rk4", "unsplit_rk2", "unsplit_rk3",
+    /// "rkei", "bug", "midpoint_bug", "conservative_bug",
+    /// "blanes_moan"/"bm4", "rkn6", "adaptive"/"adaptive_strang",
+    /// "parallel_bug"/"pbug", "rk_bug"/"rk_bug3", "lawson"/"lawson_rk4",
+    /// "cosmological"/"cosmological_strang", "instrumented"/"instrumented_strang"
     #[serde(default = "default_splitting")]
     pub integrator: String,
-    /// "standard_svd", "lomac", "macro_micro", "none"
+    /// Conservation framework. Options: "none" (default), "lomac", "macro_micro"
     #[serde(default = "default_conservation")]
     pub conservation: String,
     // Sub-solver configs

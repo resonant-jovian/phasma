@@ -71,7 +71,10 @@ tempfile = "3.27.0"
 default = []
 notifications = ["notify-rust"]
 jemalloc = ["caustic/jemalloc"]
+mimalloc = ["caustic/mimalloc-alloc"]
+dhat = ["caustic/dhat-heap"]
 tracy = ["caustic/tracy"]
+mpi = ["caustic/mpi"]
 
 [build-dependencies]
 anyhow = "1.0.102"
