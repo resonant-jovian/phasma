@@ -48,8 +48,11 @@ impl AnnotationStore {
     /// Add a bookmark at the given simulation time.
     pub fn add(&mut self, time: f64, label: String) {
         self.annotations.push(Annotation { time, label });
-        self.annotations
-            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+        self.annotations.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Remove annotation at index.

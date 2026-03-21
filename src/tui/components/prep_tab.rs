@@ -138,11 +138,10 @@ impl Component for PrepTab {
             KeyCode::Up => {
                 self.browser_selected = self.browser_selected.saturating_sub(1);
             }
-            KeyCode::Down
-                if !self.available_configs.is_empty() => {
-                    self.browser_selected =
-                        (self.browser_selected + 1).min(self.available_configs.len() - 1);
-                }
+            KeyCode::Down if !self.available_configs.is_empty() => {
+                self.browser_selected =
+                    (self.browser_selected + 1).min(self.available_configs.len() - 1);
+            }
             KeyCode::Enter => {
                 if let Some(path) = self.available_configs.get(self.browser_selected).cloned() {
                     self.try_load_config(path);
@@ -151,10 +150,9 @@ impl Component for PrepTab {
             KeyCode::Char('l') => {
                 self.refresh_config_list();
             }
-            KeyCode::Char('r')
-                if !self.sim_running && self.config_loaded => {
-                    return Ok(Some(Action::SimStart));
-                }
+            KeyCode::Char('r') if !self.sim_running && self.config_loaded => {
+                return Ok(Some(Action::SimStart));
+            }
             _ => {}
         }
         Ok(None)
@@ -168,10 +166,9 @@ impl Component for PrepTab {
             Action::SimStop => {
                 self.sim_running = false;
             }
-            Action::SimUpdate(state)
-                if state.exit_reason.is_some() => {
-                    self.sim_running = false;
-                }
+            Action::SimUpdate(state) if state.exit_reason.is_some() => {
+                self.sim_running = false;
+            }
             _ => {}
         }
         Ok(None)

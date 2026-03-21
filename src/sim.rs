@@ -862,7 +862,11 @@ fn build_from_config(
             "Assembling simulation: G={g}, t_final={}, cfl={}, conservation={}",
             cfg.time.t_final.to_f64().unwrap_or(10.0),
             cfg.time.cfl_factor.to_f64().unwrap_or(0.5),
-            if enable_lomac { "lomac" } else { &cfg.solver.conservation }
+            if enable_lomac {
+                "lomac"
+            } else {
+                &cfg.solver.conservation
+            }
         ));
     }
     let t0 = Instant::now();
@@ -1430,16 +1434,18 @@ fn extract_sim_state(
     // Only compute every Nth step (controlled by compute_phase flag); caller reuses cached slices.
     const PHASE_SNAPSHOT_THRESHOLD: usize = 64 * 64 * 64 * 64 * 64 * 64;
     let total_elements = sim.domain.total_cells();
-    let (phase_slices, phase_nx, phase_nv) =
-        if compute_phase && sim.repr.can_materialize() && total_elements <= PHASE_SNAPSHOT_THRESHOLD {
-            let snap = sim.repr.to_snapshot(sim.time);
-            let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
-            let s = [sx1, sx2, sx3, sv1, sv2, sv3];
-            let slices = compute_all_phase_slices(&snap.data, s);
-            (slices, sx1, sv1)
-        } else {
-            (vec![vec![]; 9], 0, 0)
-        };
+    let (phase_slices, phase_nx, phase_nv) = if compute_phase
+        && sim.repr.can_materialize()
+        && total_elements <= PHASE_SNAPSHOT_THRESHOLD
+    {
+        let snap = sim.repr.to_snapshot(sim.time);
+        let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
+        let s = [sx1, sx2, sx3, sv1, sv2, sv3];
+        let slices = compute_all_phase_slices(&snap.data, s);
+        (slices, sx1, sv1)
+    } else {
+        (vec![vec![]; 9], 0, 0)
+    };
 
     // Repr memory via trait method (works for all representations)
     let repr_mem = sim.repr.memory_bytes();
