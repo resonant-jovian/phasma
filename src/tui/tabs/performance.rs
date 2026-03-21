@@ -5,7 +5,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{Axis as PltAxis, Bounds, LinePlot, Series};
+use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Histogram as PltHistogram, LinePlot, Series};
+use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 use std::collections::VecDeque;
 
 use crate::{
@@ -204,7 +205,7 @@ impl PerformanceTab {
             return;
         }
 
-        // Wide mode (160+): 3-column layout for more breathing room
+        // Wide mode (160+): 3-column layout for more breathing room + histogram
         if area.width >= 156 {
             let [top, bottom] =
                 Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -217,10 +218,11 @@ impl PerformanceTab {
             ])
             .areas(top);
 
-            let [wall_area, dt_area, cumul_area] = Layout::horizontal([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+            let [wall_area, dt_area, cumul_area, hist_area] = Layout::horizontal([
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
             ])
             .areas(bottom);
 
@@ -230,6 +232,7 @@ impl PerformanceTab {
             self.draw_wall_time_chart(frame, wall_area, theme);
             self.draw_dt_chart(frame, dt_area, theme);
             self.draw_cumulative_chart(frame, cumul_area, theme);
+            self.draw_step_time_histogram(frame, hist_area, theme);
             return;
         }
 
@@ -396,17 +399,15 @@ impl PerformanceTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        let block = Block::bordered()
-            .title(" Phase Timings ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        // If SimState has phase timings, display them; otherwise show stub
         let state = data_provider.current_state();
         let has_timings = state.map(|s| s.step_wall_ms > 0.0).unwrap_or(false);
 
         if !has_timings {
+            let block = Block::bordered()
+                .title(" Phase Timings ")
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(""),
@@ -418,19 +419,6 @@ impl PerformanceTab {
                         "  not yet available",
                         Style::default().fg(theme.dim),
                     )),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "  Requires phase",
-                        Style::default().fg(theme.dim),
-                    )),
-                    Line::from(Span::styled(
-                        "  timing data from",
-                        Style::default().fg(theme.dim),
-                    )),
-                    Line::from(Span::styled(
-                        "  caustic runtime.",
-                        Style::default().fg(theme.dim),
-                    )),
                 ]),
                 inner,
             );
@@ -439,78 +427,59 @@ impl PerformanceTab {
 
         let Some(s) = state else { return };
         let total = s.step_wall_ms;
-        let timing_w = inner.width as usize;
-        let plw = if timing_w < 22 { 5 } else { 8 }; // phase label width
 
         const PHASE_NAMES: [&str; 7] = ["Drift", "Poissn", "Kick", "Dens", "Diag", "I/O", "Other"];
 
-        let lines = if let Some(ref timings) = s.phase_timings {
-            // Real phase timings from caustic instrumentation
-            let mut ls = Vec::new();
-            let bar_max = timing_w.saturating_sub(plw + 7); // label + " NNN%"
-            for (i, (&name, &ms)) in PHASE_NAMES.iter().zip(timings.iter()).enumerate() {
-                if ms <= 0.0 {
-                    continue;
-                }
-                let pct = if total > 0.0 { ms / total * 100.0 } else { 0.0 };
-                let bar_width = (pct / 100.0 * bar_max as f64) as usize;
-                let bar = "\u{2588}".repeat(bar_width.max(1));
-                ls.push(Line::from(vec![
-                    Span::styled(format!(" {:<plw$}", name), Style::default().fg(theme.dim)),
-                    Span::styled(bar, Style::default().fg(theme.chart[i % 6])),
-                    Span::styled(format!(" {pct:.0}%"), Style::default().fg(theme.fg)),
-                ]));
-            }
-            ls.push(Line::from(""));
-            ls.push(Line::from(vec![
-                Span::styled(
-                    format!(" {:<plw$}", "Total"),
-                    Style::default().fg(theme.dim),
-                ),
-                Span::styled(
-                    format!("{total:.1}ms"),
-                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            ls
-        } else {
-            // Estimated split (Strang: drift 33%, Poisson 34%, kick 33%)
-            vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Drift"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled("~33%", Style::default().fg(theme.chart[0])),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Poissn"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled("~34%", Style::default().fg(theme.chart[1])),
-                ]),
-                Line::from(vec![
-                    Span::styled(format!(" {:<plw$}", "Kick"), Style::default().fg(theme.dim)),
-                    Span::styled("~33%", Style::default().fg(theme.chart[2])),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Total"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled(
-                        format!("{total:.1}ms"),
-                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
-            ]
-        };
+        if let Some(ref timings) = s.phase_timings {
+            // Real phase timings → BarChart
+            let plt_theme = phasma_theme_to_plt(theme);
+            let categories: Vec<String> = PHASE_NAMES
+                .iter()
+                .zip(timings.iter())
+                .filter(|&(_, ms)| *ms > 0.0)
+                .map(|(&name, _)| name.to_string())
+                .collect();
+            let values: Vec<f64> = timings
+                .iter()
+                .filter(|&&ms| ms > 0.0)
+                .map(|&ms| if total > 0.0 { ms / total * 100.0 } else { 0.0 })
+                .collect();
 
-        frame.render_widget(Paragraph::new(lines), inner);
+            let chart = BarChart::new()
+                .categories(categories)
+                .dataset(BarDataset::new("% time", values, theme.chart[0]))
+                .orientation(Orientation::Horizontal)
+                .title(format!(" Phase Timings ({total:.1}ms) "))
+                .theme(plt_theme);
+
+            frame.render_widget(&chart, area);
+        } else {
+            // Estimated split (Strang) — text fallback
+            let block = Block::bordered()
+                .title(format!(" Phase Timings ({total:.1}ms) "))
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled(" Drift   ", Style::default().fg(theme.dim)),
+                        Span::styled("~33%", Style::default().fg(theme.chart[0])),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" Poissn  ", Style::default().fg(theme.dim)),
+                        Span::styled("~34%", Style::default().fg(theme.chart[1])),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" Kick    ", Style::default().fg(theme.dim)),
+                        Span::styled("~33%", Style::default().fg(theme.chart[2])),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
+                ]),
+                inner,
+            );
+        }
     }
 
     fn draw_stats(
@@ -690,6 +659,31 @@ impl PerformanceTab {
             .theme(plt_theme);
 
         frame.render_widget(&plot, area);
+    }
+
+    fn draw_step_time_histogram(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_merged.wall_data;
+        if data.len() < 10 {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Step Time Distribution ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let times: Vec<f64> = data.iter().map(|(_, ms)| *ms).collect();
+        let plt_theme = phasma_theme_to_plt(theme);
+        let hist = PltHistogram::new(times)
+            .bins(30)
+            .color(theme.chart[3])
+            .title(" Step Time Distribution ")
+            .x_axis(PltAxis::new().label("ms"))
+            .y_axis(PltAxis::new().label("count"))
+            .theme(plt_theme);
+
+        frame.render_widget(&hist, area);
     }
 
     fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {

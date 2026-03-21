@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LineStyle, LinePlot, Scale, Series,
+    Axis as PltAxis, Bounds, LegendPosition, LineStyle, LinePlot, ReferenceLine, Scale, Series,
 };
 
 use crate::{
@@ -494,28 +494,38 @@ impl ProfilesTab {
             return;
         }
 
+        // Split into profile + residual when analytic data is available
+        let (profile_area, residual_area) =
+            if self.show_analytic && !analytic_data.is_empty() && area.height >= 12 {
+                let [pa, ra] =
+                    Layout::vertical([Constraint::Percentage(75), Constraint::Percentage(25)])
+                        .areas(area);
+                (pa, Some(ra))
+            } else {
+                (area, None)
+            };
+
         let plt_theme = phasma_theme_to_plt(theme);
-        let x_label = if self.log_scale { "r" } else { "r" };
 
         let mut series_vec = vec![
             Series::new("sim")
-                .data(chart_data)
+                .data(chart_data.clone())
                 .color(color),
         ];
 
         if self.show_analytic && !analytic_data.is_empty() {
             series_vec.push(
                 Series::new("analytic")
-                    .data(analytic_data)
+                    .data(analytic_data.clone())
                     .color(theme.chart[5 % theme.chart.len()])
                     .line_style(LineStyle::dashed()),
             );
         }
 
         let x_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
-            PltAxis::new().label(x_label).scale(Scale::Log(10.0))
+            PltAxis::new().label("r").scale(Scale::Log(10.0))
         } else {
-            PltAxis::new().label(x_label)
+            PltAxis::new().label("r")
         };
 
         let y_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
@@ -529,9 +539,53 @@ impl ProfilesTab {
             .x_axis(x_axis)
             .y_axis(y_axis)
             .title(full_title)
-            .theme(plt_theme);
+            .show_legend(true)
+            .legend_position(LegendPosition::TopRight)
+            .theme(plt_theme.clone());
 
-        frame.render_widget(&plot, area);
+        frame.render_widget(&plot, profile_area);
+
+        // Residual sub-panel: (sim - analytic) / |analytic|
+        if let Some(res_area) = residual_area {
+            let residual: Vec<(f64, f64)> = chart_data
+                .iter()
+                .filter_map(|&(r, sim_val)| {
+                    // Find closest analytic point by r
+                    analytic_data
+                        .iter()
+                        .min_by_key(|&&(ar, _)| ((ar - r).abs() * 1e12) as u64)
+                        .and_then(|&(_, ana_val)| {
+                            if ana_val.abs() > 1e-30 {
+                                Some((r, (sim_val - ana_val) / ana_val.abs()))
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .collect();
+
+            if !residual.is_empty() {
+                let res_x = if self.log_scale && kind != ProfileKind::Anisotropy {
+                    PltAxis::new().label("r").scale(Scale::Log(10.0))
+                } else {
+                    PltAxis::new().label("r")
+                };
+
+                let res_plot = LinePlot::new()
+                    .series(
+                        Series::new("residual")
+                            .data(residual)
+                            .color(theme.chart[3 % theme.chart.len()]),
+                    )
+                    .x_axis(res_x)
+                    .y_axis(PltAxis::new())
+                    .title(" Residual ")
+                    .reference_line(ReferenceLine::hline(0.0, theme.dim))
+                    .theme(plt_theme);
+
+                frame.render_widget(&res_plot, res_area);
+            }
+        }
     }
 
     fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {

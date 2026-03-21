@@ -1,6 +1,10 @@
 //! Convergence study — run at increasing resolutions and compute convergence rates.
 
+use std::sync::Arc;
+
 use serde::Deserialize;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::sim::SimHandle;
 
@@ -17,6 +21,9 @@ pub struct ConvergenceSpec {
     pub resolutions: Vec<u32>,
     #[serde(default = "default_true")]
     pub velocity_scale: bool,
+    /// Maximum concurrent resolution runs (default: available_parallelism / 2).
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
 }
 
 fn default_output_dir() -> String {
@@ -39,17 +46,26 @@ pub async fn run_convergence(toml_path: &str) -> anyhow::Result<()> {
 
     let base_cfg = crate::config::load(&conv_cfg.base_config)?;
 
+    let resolutions = &conv_cfg.convergence.resolutions;
+    let n_res = resolutions.len();
     eprintln!(
         "phasma convergence: {} resolutions: {:?}",
-        conv_cfg.convergence.resolutions.len(),
-        conv_cfg.convergence.resolutions
+        n_res, resolutions
     );
 
     std::fs::create_dir_all(&conv_cfg.output_dir)?;
 
-    let mut results = Vec::new();
+    let max_concurrent = conv_cfg.convergence.max_concurrent.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(1))
+            .unwrap_or(2)
+    });
+    eprintln!("phasma convergence: max_concurrent = {max_concurrent}");
+    let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
-    for &res in &conv_cfg.convergence.resolutions {
+    // Prepare configs up front
+    let mut prepared: Vec<(u32, String)> = Vec::with_capacity(n_res);
+    for &res in resolutions {
         let mut cfg = base_cfg.clone();
         cfg.domain.spatial_resolution = res;
         if conv_cfg.convergence.velocity_scale {
@@ -63,38 +79,55 @@ pub async fn run_convergence(toml_path: &str) -> anyhow::Result<()> {
         let temp_config = run_dir.join("config.toml");
         let toml_str = toml::to_string_pretty(&cfg)?;
         std::fs::write(&temp_config, &toml_str)?;
+        prepared.push((res, temp_config.display().to_string()));
+    }
 
+    // Spawn resolution runs concurrently, gated by semaphore
+    let mut join_set = JoinSet::new();
+    for (res, config_str) in prepared {
+        let permit = Arc::clone(&semaphore).acquire_owned().await?;
         eprintln!("phasma convergence: running N={res}...");
-        let config_str = temp_config.display().to_string();
-        let mut handle = SimHandle::spawn_unbounded(config_str);
-        let mut final_state = None;
-        while let Some(state) = handle.state_rx.recv_async().await {
-            for msg in &state.log_messages {
-                eprintln!("  [verbose] {msg}");
+        join_set.spawn(async move {
+            let mut handle = SimHandle::spawn_unbounded(config_str);
+            let mut final_state = None;
+            while let Some(state) = handle.state_rx.recv_async().await {
+                for msg in &state.log_messages {
+                    eprintln!("  [N={res}] {msg}");
+                }
+                let is_exit = state.exit_reason.is_some();
+                final_state = Some(state);
+                if is_exit {
+                    break;
+                }
             }
-            let is_exit = state.exit_reason.is_some();
-            final_state = Some(state);
-            if is_exit {
-                break;
-            }
-        }
-        handle.task.abort();
+            handle.task.abort();
+            drop(permit);
 
-        if let Some(state) = final_state {
-            let initial_mass = if state.total_mass != 0.0 {
-                state.total_mass
-            } else {
-                1.0
-            };
-            results.push(RunResult {
-                resolution: res,
-                final_energy_drift: state.energy_drift().abs(),
-                final_mass_drift: (state.total_mass - initial_mass).abs() / initial_mass,
-                final_time: state.t,
-                steps: state.step,
-            });
+            final_state.map(|state| {
+                let initial_mass = if state.total_mass != 0.0 {
+                    state.total_mass
+                } else {
+                    1.0
+                };
+                RunResult {
+                    resolution: res,
+                    final_energy_drift: state.energy_drift().abs(),
+                    final_mass_drift: (state.total_mass - initial_mass).abs() / initial_mass,
+                    final_time: state.t,
+                    steps: state.step,
+                }
+            })
+        });
+    }
+
+    // Collect and sort by resolution
+    let mut results: Vec<RunResult> = Vec::with_capacity(n_res);
+    while let Some(res) = join_set.join_next().await {
+        if let Ok(Some(run_result)) = res {
+            results.push(run_result);
         }
     }
+    results.sort_by_key(|r| r.resolution);
 
     // Print results table
     eprintln!("\n{:-<80}", "");

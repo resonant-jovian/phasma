@@ -10,6 +10,7 @@ use ratatui::{
 };
 use ratatui_plt::prelude::{
     AspectRatio, Axis as PltAxis, Heatmap, Histogram as PltHistogram, LinearNorm, LogNorm, Series,
+    StairsDataset, StairsPlot,
 };
 
 use crate::{
@@ -344,7 +345,7 @@ impl PhaseSpaceTab {
             self.last_ny = vnv;
         }
 
-        // Velocity histogram panel — marginal velocity distribution
+        // Velocity histogram panel — marginal velocity distribution as StairsPlot
         if let Some(ha) = hist_area {
             if !self.last_data.is_empty() && self.last_nx > 0 && self.last_ny > 0 {
                 // Sum columns to get velocity marginal (sum over x for each v bin)
@@ -355,39 +356,30 @@ impl PhaseSpaceTab {
                             .sum()
                     })
                     .collect();
-                let vel_data: Vec<f64> = vel_marginal
-                    .iter()
-                    .flat_map(|&val| {
-                        // Repeat values to simulate binned data for the histogram
-                        let count = (val * 100.0).max(0.0) as usize;
-                        std::iter::repeat_n(0.0, count)
-                    })
-                    .collect();
 
-                // Use LinePlot for a cleaner velocity profile instead
                 let plt_theme = phasma_theme_to_plt(theme);
-                let vel_series_data: Vec<(f64, f64)> = vel_marginal
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &val)| {
-                        let v_frac = i as f64 / (self.last_ny.max(1) - 1).max(1) as f64;
-                        let v = -v_extent + 2.0 * v_extent * v_frac;
-                        (v, val)
-                    })
+
+                // Build bin edges (n+1 edges for n bins)
+                let n_bins = self.last_ny;
+                let dv = if n_bins > 0 {
+                    2.0 * v_extent / n_bins as f64
+                } else {
+                    1.0
+                };
+                let edges: Vec<f64> = (0..=n_bins)
+                    .map(|i| -v_extent + dv * i as f64)
                     .collect();
 
-                let hist_plot = ratatui_plt::prelude::LinePlot::new()
-                    .series(
-                        Series::new("f(v)")
-                            .data(vel_series_data)
-                            .color(theme.chart[0]),
-                    )
+                let stairs = StairsPlot::new()
+                    .dataset(StairsDataset::new("f(v)", edges, vel_marginal, theme.chart[0]))
                     .x_axis(PltAxis::new().label("v"))
                     .y_axis(PltAxis::new().label("f"))
                     .title(" Velocity Distribution ")
+                    .show_legend(false)
+                    .baseline(0.0)
                     .theme(plt_theme);
 
-                frame.render_widget(&hist_plot, ha);
+                frame.render_widget(&stairs, ha);
             }
         }
 

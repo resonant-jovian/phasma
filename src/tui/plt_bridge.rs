@@ -138,3 +138,12 @@ pub fn make_log_axis(label: Option<&str>, base: f64) -> PltAxis {
     }
     ax
 }
+
+/// Build a ratatui-plt `Axis` with auto bounds and an optional label.
+pub fn make_auto_axis(label: Option<&str>) -> PltAxis {
+    let mut ax = PltAxis::new();
+    if let Some(l) = label {
+        ax = ax.label(l);
+    }
+    ax
+}

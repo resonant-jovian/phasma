@@ -93,7 +93,7 @@ pub struct SimState {
     pub density_nz: usize,
     /// Phase-space projections f(x_i, v_j) for all 9 (i,j) combos.
     /// Indexed as phase_slices[dim_x * 3 + dim_v], each flat row-major nx×nv.
-    pub phase_slices: Vec<Vec<f64>>,
+    pub phase_slices: Arc<Vec<Vec<f64>>>,
     /// Legacy single slice (= phase_slices[0], x1-v1) for backward compat.
     pub phase_slice: Vec<f64>,
     pub phase_nx: usize,
@@ -357,7 +357,7 @@ fn run_caustic_sim(
     let mut diag_step: u64 = 0;
     const POISSON_DIAG_INTERVAL: u64 = 10;
     const PHASE_DIAG_INTERVAL: u64 = 5;
-    let mut cached_phase_slices: Vec<Vec<f64>> = vec![vec![]; 9];
+    let mut cached_phase_slices: Arc<Vec<Vec<f64>>> = Arc::new(vec![vec![]; 9]);
     let mut cached_phase_nx: usize = 0;
     let mut cached_phase_nv: usize = 0;
 
@@ -403,11 +403,11 @@ fn run_caustic_sim(
                 );
                 // Cache or reuse phase-space projections
                 if compute_phase && state.phase_nx > 0 {
-                    cached_phase_slices.clone_from(&state.phase_slices);
+                    cached_phase_slices = Arc::clone(&state.phase_slices);
                     cached_phase_nx = state.phase_nx;
                     cached_phase_nv = state.phase_nv;
                 } else if cached_phase_nx > 0 {
-                    state.phase_slices.clone_from(&cached_phase_slices);
+                    state.phase_slices = Arc::clone(&cached_phase_slices);
                     state.phase_nx = cached_phase_nx;
                     state.phase_nv = cached_phase_nv;
                 }
@@ -686,8 +686,8 @@ fn build_from_config(
                             "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
                         ));
                     }
-                    Box::new(TensorTrain::from_snapshot(
-                        &snap, max_rank, tolerance, &domain,
+                    Box::new(TensorTrain::from_snapshot_owned(
+                        snap, max_rank, tolerance, &domain,
                     ))
                 }
                 "spectral" | "velocity_ht" => {
@@ -1442,9 +1442,9 @@ fn extract_sim_state(
         let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
         let s = [sx1, sx2, sx3, sv1, sv2, sv3];
         let slices = compute_all_phase_slices(&snap.data, s);
-        (slices, sx1, sv1)
+        (Arc::new(slices), sx1, sv1)
     } else {
-        (vec![vec![]; 9], 0, 0)
+        (Arc::new(vec![vec![]; 9]), 0, 0)
     };
 
     // Repr memory via trait method (works for all representations)
@@ -1664,7 +1664,7 @@ fn error_state(msg: String) -> SimState {
         density_nx: 0,
         density_ny: 0,
         density_nz: 0,
-        phase_slices: vec![vec![]; 9],
+        phase_slices: Arc::new(vec![vec![]; 9]),
         phase_slice: vec![],
         phase_nx: 0,
         phase_nv: 0,
@@ -2325,7 +2325,7 @@ mod unit_tests {
             density_nx: 0,
             density_ny: 0,
             density_nz: 0,
-            phase_slices: vec![],
+            phase_slices: Arc::new(vec![]),
             phase_slice: vec![],
             phase_nx: 0,
             phase_nv: 0,

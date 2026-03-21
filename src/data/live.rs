@@ -409,7 +409,7 @@ mod tests {
             density_nx: 0,
             density_ny: 0,
             density_nz: 0,
-            phase_slices: vec![],
+            phase_slices: std::sync::Arc::new(vec![]),
             phase_slice: vec![],
             phase_nx: 0,
             phase_nv: 0,

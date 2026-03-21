@@ -91,26 +91,31 @@ impl PoissonDetailTab {
             return;
         }
 
-        // Layout: top = P(k) spectrum + Green's function stub,
-        //         bottom = residual chart + solver stats + Hadamard stub
+        // Layout: top = P_Φ(k) (40%) + P_ρ(k) (30%) + E(k) (30%)
+        //         bottom = residual (45%) + solver stats (30%) + Green's rank (25%)
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [top_left, top_right] =
-            Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).areas(top);
+        let [top_left, top_mid, top_right] = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ])
+        .areas(top);
 
         let [bottom_left, bottom_mid, bottom_right] = Layout::horizontal([
-            Constraint::Percentage(40),
-            Constraint::Percentage(35),
+            Constraint::Percentage(45),
+            Constraint::Percentage(30),
             Constraint::Percentage(25),
         ])
         .areas(bottom);
 
         self.draw_power_spectrum(frame, top_left, theme, data_provider);
-        Self::draw_green_rank_panel(frame, top_right, theme, data_provider);
+        Self::draw_density_spectrum(frame, top_mid, theme, data_provider);
+        Self::draw_field_energy_spectrum(frame, top_right, theme, data_provider);
         self.draw_residual_chart(frame, bottom_left, theme);
         self.draw_solver_stats(frame, bottom_mid, theme, data_provider);
-        Self::draw_hadamard_stub(frame, bottom_right, theme);
+        Self::draw_green_rank_panel(frame, bottom_right, theme, data_provider);
     }
 
     fn draw_power_spectrum(
@@ -167,6 +172,110 @@ impl PoissonDetailTab {
                         "  Waiting for spectrum data...",
                         Style::default().fg(theme.dim),
                     )])),
+                    inner,
+                );
+            }
+        }
+    }
+
+    fn draw_density_spectrum(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let state = data_provider.current_state();
+        let spec_data: Option<Vec<(f64, f64)>> = state.and_then(|s| {
+            s.density_power_spectrum.as_ref().map(|spec| {
+                spec.iter()
+                    .filter(|&&(k, p)| k > 0.0 && p > 0.0)
+                    .copied()
+                    .collect()
+            })
+        });
+
+        match spec_data {
+            Some(ref data) if data.len() >= 2 => {
+                let plt_theme = phasma_theme_to_plt(theme);
+                let plot = LinePlot::new()
+                    .series(
+                        Series::new("|\u{03c1}\u{0302}(k)|\u{00b2}")
+                            .data(data.clone())
+                            .color(theme.chart[1])
+                            .marker(MarkerShape::Circle),
+                    )
+                    .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
+                    .y_axis(
+                        PltAxis::new()
+                            .label("P\u{03c1}(k)")
+                            .scale(Scale::Log(10.0)),
+                    )
+                    .title(" P\u{03c1}(k) Density Spectrum ")
+                    .theme(plt_theme);
+
+                frame.render_widget(&plot, area);
+            }
+            _ => {
+                let block = Block::bordered()
+                    .title(" P\u{03c1}(k) Density Spectrum ")
+                    .border_style(Style::default().fg(theme.border));
+                let inner = block.inner(area);
+                frame.render_widget(block, area);
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "  Waiting for data...",
+                        Style::default().fg(theme.dim),
+                    ))),
+                    inner,
+                );
+            }
+        }
+    }
+
+    fn draw_field_energy_spectrum(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let state = data_provider.current_state();
+        let spec_data: Option<Vec<(f64, f64)>> = state.and_then(|s| {
+            s.field_energy_spectrum.as_ref().map(|spec| {
+                spec.iter()
+                    .filter(|&&(k, e)| k > 0.0 && e > 0.0)
+                    .copied()
+                    .collect()
+            })
+        });
+
+        match spec_data {
+            Some(ref data) if data.len() >= 2 => {
+                let plt_theme = phasma_theme_to_plt(theme);
+                let plot = LinePlot::new()
+                    .series(
+                        Series::new("E(k)")
+                            .data(data.clone())
+                            .color(theme.chart[2])
+                            .marker(MarkerShape::Circle),
+                    )
+                    .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
+                    .y_axis(PltAxis::new().label("E(k)").scale(Scale::Log(10.0)))
+                    .title(" E(k) Field Energy Spectrum ")
+                    .theme(plt_theme);
+
+                frame.render_widget(&plot, area);
+            }
+            _ => {
+                let block = Block::bordered()
+                    .title(" E(k) Field Energy Spectrum ")
+                    .border_style(Style::default().fg(theme.border));
+                let inner = block.inner(area);
+                frame.render_widget(block, area);
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "  Waiting for data...",
+                        Style::default().fg(theme.dim),
+                    ))),
                     inner,
                 );
             }
@@ -374,41 +483,6 @@ impl PoissonDetailTab {
         frame.render_widget(Paragraph::new(lines), inner);
     }
 
-    fn draw_hadamard_stub(frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Hadamard Rank ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    " \u{03c1}\u{0302} \u{2218} \u{011c} product",
-                    Style::default().fg(theme.accent),
-                )),
-                Line::from(Span::styled(
-                    " rank evolution.",
-                    Style::default().fg(theme.dim),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    " R_result(t): \u{2014}",
-                    Style::default().fg(theme.dim),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    " Requires HT cross",
-                    Style::default().fg(theme.dim),
-                )),
-                Line::from(Span::styled(
-                    " approximation data",
-                    Style::default().fg(theme.dim),
-                )),
-            ]),
-            inner,
-        );
-    }
 }
 
 /// Derive boundary condition label from the poisson_type string.
