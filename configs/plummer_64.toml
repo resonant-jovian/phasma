@@ -48,7 +48,7 @@ projection_tolerance = 1e-12
 [time]
 t_final = 200.0
 dt_mode = "adaptive"
-cfl_factor = 0.005
+cfl_factor = 0.3
 
 [output]
 directory = "output/plummer_64"
