@@ -275,7 +275,7 @@ pub fn validate(cfg: &PhasmaConfig) -> Vec<ValidationWarning> {
         });
     }
 
-    // LoMaC works with any representation but is most useful with HT
+    // LoMaC is incompatible with HT (requires full 6D materialization); works with uniform grids
     let valid_conservation = ["none", "lomac", "standard_svd", "macro_micro"];
     if !valid_conservation.contains(&cfg.solver.conservation.as_str()) {
         warnings.push(ValidationWarning {

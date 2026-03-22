@@ -927,8 +927,8 @@ fn plummer_64_has_solver_subconfigs() {
         "plummer_64.toml must have [solver.slar]"
     );
     assert!(
-        cfg.solver.lomac.is_some(),
-        "plummer_64.toml must have [solver.lomac]"
+        cfg.solver.lomac.is_none(),
+        "plummer_64.toml must not have [solver.lomac] (HT + LoMaC incompatible)"
     );
 }
 
@@ -944,8 +944,8 @@ fn plummer_128_has_solver_subconfigs() {
         "plummer_128.toml must have [solver.slar]"
     );
     assert!(
-        cfg.solver.lomac.is_some(),
-        "plummer_128.toml must have [solver.lomac]"
+        cfg.solver.lomac.is_none(),
+        "plummer_128.toml must not have [solver.lomac] (HT + LoMaC incompatible)"
     );
 }
 
@@ -961,8 +961,8 @@ fn plummer_ht_has_solver_subconfigs() {
         "plummer_ht.toml must have [solver.slar]"
     );
     assert!(
-        cfg.solver.lomac.is_some(),
-        "plummer_ht.toml must have [solver.lomac]"
+        cfg.solver.lomac.is_none(),
+        "plummer_ht.toml must not have [solver.lomac] (HT + LoMaC incompatible)"
     );
 }
 
@@ -1050,8 +1050,8 @@ fn plummer_instrumented_has_solver_subconfigs() {
         "plummer_instrumented.toml must have [solver.slar]"
     );
     assert!(
-        cfg.solver.lomac.is_some(),
-        "plummer_instrumented.toml must have [solver.lomac]"
+        cfg.solver.lomac.is_none(),
+        "plummer_instrumented.toml must not have [solver.lomac] (HT + LoMaC incompatible)"
     );
 }
 

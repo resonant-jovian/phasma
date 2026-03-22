@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn breakdown_ht_plummer_with_lomac() {
+    fn breakdown_ht_plummer_no_lomac() {
         let cfg = load_config("plummer_ht");
         let b = estimate_memory_breakdown(&cfg);
 
@@ -408,10 +408,10 @@ mod tests {
             "fft_isolated should have Poisson buffers"
         );
 
-        // LoMaC enabled: should add 5*N³*8 + phase_space clone
+        // LoMaC disabled for HT: no conservation memory
         assert!(
-            b.lomac_mb > 0.0,
-            "lomac conservation should contribute memory"
+            b.lomac_mb == 0.0,
+            "lomac should be zero for HT config (incompatible)"
         );
 
         // HT recompression for SLAR advection: 2x phase_space
