@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::runner::batch::load_run_dir;
+use crate::tui::plt_bridge::format_duration;
 
 pub struct RunSummary {
     pub dir: String,
@@ -127,12 +128,3 @@ pub fn run_batch_compare(dirs: &[String], report_path: Option<&str>) -> anyhow::
     Ok(())
 }
 
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else if secs < 3600.0 {
-        format!("{}m{:02}s", secs as u64 / 60, secs as u64 % 60)
-    } else {
-        format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
-    }
-}

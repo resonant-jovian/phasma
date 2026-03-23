@@ -16,7 +16,7 @@ use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
 use crate::tui::action::Action;
-use crate::tui::plt_bridge::phasma_theme_to_plt;
+use crate::tui::plt_bridge::{format_size, phasma_theme_to_plt};
 
 const NODE_LABELS: [&str; 11] = [
     "x\u{2081}",
@@ -528,7 +528,7 @@ impl RankTab {
                 Cell::from(""),
                 Cell::from("Memory")
                     .style(Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-                Cell::from(format_bytes(mem)).style(Style::default().fg(theme.chart[1])),
+                Cell::from(format_size(mem as f64)).style(Style::default().fg(theme.chart[1])),
             ]));
         }
 
@@ -780,18 +780,3 @@ impl RankTab {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-fn format_bytes(bytes: usize) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.2} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}

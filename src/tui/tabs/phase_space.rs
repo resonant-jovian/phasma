@@ -10,7 +10,7 @@ use ratatui::{
 };
 use ratatui_plt::prelude::{
     AspectRatio, Axis as PltAxis, Bounds, Heatmap, Histogram as PltHistogram, Kde, LinePlot,
-    LinearNorm, LogNorm, Series, StairsDataset, StairsPlot,
+    Series, StairsDataset, StairsPlot,
 };
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
     themes::ThemeColors,
     tui::{
         action::Action,
-        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        plt_bridge::{NormMode, flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
         widgets::data_cursor::DataCursor,
     },
 };
@@ -29,7 +29,7 @@ pub struct PhaseSpaceTab {
     dim_x: usize,
     /// Which velocity dimension for y-axis (0=v₁, 1=v₂, 2=v₃)
     dim_v: usize,
-    log_scale: bool,
+    norm_mode: NormMode,
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
@@ -55,7 +55,7 @@ impl Default for PhaseSpaceTab {
         Self {
             dim_x: 0,
             dim_v: 0,
-            log_scale: false,
+            norm_mode: NormMode::default(),
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
@@ -114,7 +114,7 @@ impl PhaseSpaceTab {
                 None
             }
             KeyCode::Char('l') => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
                 None
             }
             KeyCode::Char('i') => {
@@ -190,7 +190,7 @@ impl PhaseSpaceTab {
                 self.colormap = self.colormap.next();
             }
             Action::VizToggleLog => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
             }
             _ => {}
         }
@@ -266,10 +266,10 @@ impl PhaseSpaceTab {
             }
         };
         let title = format!(
-            " f({}, {}) {}{}",
+            " f({}, {}){}{}",
             dim_labels[self.dim_x],
             vel_labels[self.dim_v],
-            if self.log_scale { "[log]" } else { "" },
+            self.norm_mode.tag(),
             slice_info,
         );
 
@@ -329,11 +329,7 @@ impl PhaseSpaceTab {
             .show_colorbar(true)
             .theme(plt_theme);
 
-        if self.log_scale && vmin > 0.0 {
-            hm = hm.norm(LogNorm::new(vmin, vmax));
-        } else {
-            hm = hm.norm(LinearNorm::new(vmin, vmax));
-        }
+        hm = self.norm_mode.apply_to_heatmap(hm, vmin, vmax);
 
         frame.render_widget(&hm, heatmap_area);
 
@@ -473,7 +469,7 @@ impl PhaseSpaceTab {
             };
             let stream_tag = if self.show_stream_count { " S" } else { "" };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] log  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
+                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] norm  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(

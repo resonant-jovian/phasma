@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 
 use crate::{
     data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::phasma_theme_to_plt,
+    tui::plt_bridge::{format_duration, format_size, phasma_theme_to_plt},
 };
 
 const RECENT_CAP: usize = 500;
@@ -848,27 +848,3 @@ impl PerformanceTab {
     }
 }
 
-fn format_size(bytes: f64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    if bytes >= GB {
-        format!("{:.2} GB", bytes / GB)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes / MB)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes / KB)
-    } else {
-        format!("{:.0} B", bytes)
-    }
-}
-
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else if secs < 3600.0 {
-        format!("{}m{:02}s", secs as u64 / 60, secs as u64 % 60)
-    } else {
-        format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
-    }
-}

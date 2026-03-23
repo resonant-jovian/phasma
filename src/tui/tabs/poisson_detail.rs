@@ -6,7 +6,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{Axis as PltAxis, Bounds, LinePlot, MarkerShape, Scale, Series};
+use ratatui::style::Color;
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, LineStyle, LinePlot, MarkerShape, Scale, Series,
+};
+use ratatui_plt::statistics::poly_fit;
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
@@ -101,7 +105,7 @@ impl PoissonDetailTab {
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
                 let plt_theme = phasma_theme_to_plt(theme);
-                let plot = LinePlot::new()
+                let mut plot = LinePlot::new()
                     .series(
                         Series::new("|\u{03a6}\u{0302}(k)|\u{00b2}")
                             .data(data.clone())
@@ -111,7 +115,12 @@ impl PoissonDetailTab {
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
                     .y_axis(PltAxis::new().label("P(k)").scale(Scale::Log(10.0)))
                     .title(" P(k) Potential Power Spectrum ")
+                    .show_legend(true)
                     .theme(plt_theme);
+
+                if let Some((_slope, fit_series)) = spectral_slope_fit(data, Color::Gray) {
+                    plot = plot.series(fit_series);
+                }
 
                 frame.render_widget(&plot, area);
             }
@@ -151,7 +160,7 @@ impl PoissonDetailTab {
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
                 let plt_theme = phasma_theme_to_plt(theme);
-                let plot = LinePlot::new()
+                let mut plot = LinePlot::new()
                     .series(
                         Series::new("|\u{03c1}\u{0302}(k)|\u{00b2}")
                             .data(data.clone())
@@ -161,7 +170,12 @@ impl PoissonDetailTab {
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
                     .y_axis(PltAxis::new().label("P\u{03c1}(k)").scale(Scale::Log(10.0)))
                     .title(" P\u{03c1}(k) Density Spectrum ")
+                    .show_legend(true)
                     .theme(plt_theme);
+
+                if let Some((_slope, fit_series)) = spectral_slope_fit(data, Color::Gray) {
+                    plot = plot.series(fit_series);
+                }
 
                 frame.render_widget(&plot, area);
             }
@@ -201,7 +215,7 @@ impl PoissonDetailTab {
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
                 let plt_theme = phasma_theme_to_plt(theme);
-                let plot = LinePlot::new()
+                let mut plot = LinePlot::new()
                     .series(
                         Series::new("E(k)")
                             .data(data.clone())
@@ -211,7 +225,12 @@ impl PoissonDetailTab {
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
                     .y_axis(PltAxis::new().label("E(k)").scale(Scale::Log(10.0)))
                     .title(" E(k) Field Energy Spectrum ")
+                    .show_legend(true)
                     .theme(plt_theme);
+
+                if let Some((_slope, fit_series)) = spectral_slope_fit(data, Color::Gray) {
+                    plot = plot.series(fit_series);
+                }
 
                 frame.render_widget(&plot, area);
             }
@@ -483,6 +502,34 @@ impl PoissonDetailTab {
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
+}
+
+/// Fit a power law P(k) ~ k^alpha to log-log spectrum data.
+/// Returns a (slope, fit_series) pair for overlay, or None if insufficient data.
+fn spectral_slope_fit(data: &[(f64, f64)], color: Color) -> Option<(f64, Series)> {
+    if data.len() < 4 {
+        return None;
+    }
+    let log_k: Vec<f64> = data.iter().map(|(k, _)| k.ln()).collect();
+    let log_p: Vec<f64> = data.iter().map(|(_, p)| p.ln()).collect();
+    let fit = poly_fit(&log_k, &log_p, 1)?;
+
+    // coefficients: [a1, a0] where log(P) = a1*log(k) + a0
+    let slope = fit.coefficients[0];
+
+    // Generate fit line in original (k, P) space
+    let k_min = data.first().map(|(k, _)| *k)?;
+    let k_max = data.last().map(|(k, _)| *k)?;
+    let fit_data: Vec<(f64, f64)> = vec![
+        (k_min, (fit.eval(k_min.ln())).exp()),
+        (k_max, (fit.eval(k_max.ln())).exp()),
+    ];
+    let label = format!("k^{slope:.1}");
+    let series = Series::new(label)
+        .data(fit_data)
+        .color(color)
+        .line_style(LineStyle::dashed());
+    Some((slope, series))
 }
 
 /// Derive boundary condition label from the poisson_type string.

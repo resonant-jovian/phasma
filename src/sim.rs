@@ -1627,11 +1627,14 @@ fn extract_sim_state(
         && sim.repr.can_materialize()
         && total_elements <= PHASE_SNAPSHOT_THRESHOLD
     {
-        let snap = sim.repr.to_snapshot(sim.time);
-        let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
-        let s = [sx1, sx2, sx3, sv1, sv2, sv3];
-        let slices = compute_all_phase_slices(&snap.data, s);
-        (Arc::new(slices), sx1, sv1)
+        if let Some(snap) = sim.repr.to_snapshot(sim.time) {
+            let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
+            let s = [sx1, sx2, sx3, sv1, sv2, sv3];
+            let slices = compute_all_phase_slices(&snap.data, s);
+            (Arc::new(slices), sx1, sv1)
+        } else {
+            (Arc::new(vec![vec![]; 9]), 0, 0)
+        }
     } else {
         (Arc::new(vec![vec![]; 9]), 0, 0)
     };

@@ -8,9 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{
-    AspectRatio, Axis as PltAxis, ContourPlot, GridData, Heatmap, LinearNorm, LogNorm,
-};
+use ratatui_plt::prelude::{AspectRatio, Axis as PltAxis, ContourPlot, GridData, Heatmap};
 
 use crate::{
     colormaps::Colormap,
@@ -19,7 +17,7 @@ use crate::{
     tui::widgets::data_cursor::DataCursor,
     tui::{
         action::Action,
-        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        plt_bridge::{NormMode, flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
     },
 };
 
@@ -51,7 +49,7 @@ impl ContourMode {
 
 pub struct DensityTab {
     axis: usize, // 0=yz, 1=xz, 2=xy (default)
-    log_scale: bool,
+    norm_mode: NormMode,
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
@@ -68,7 +66,7 @@ impl Default for DensityTab {
     fn default() -> Self {
         Self {
             axis: 2,
-            log_scale: false,
+            norm_mode: NormMode::default(),
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
@@ -110,7 +108,7 @@ impl DensityTab {
                 None
             }
             KeyCode::Char('l') => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
                 None
             }
             KeyCode::Char('i') => {
@@ -180,7 +178,7 @@ impl DensityTab {
                 self.colormap = self.colormap.next();
             }
             Action::VizToggleLog => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
             }
             _ => {}
         }
@@ -222,9 +220,9 @@ impl DensityTab {
             "ρ(x,y)  [z-projection]",
         ];
         let title = axis_names[self.axis.min(2)];
-        let log_tag = if self.log_scale { " [log]" } else { "" };
+        let norm_tag = self.norm_mode.tag();
         let contour_tag = self.contour_mode.tag();
-        let full_title = format!(" {title}{log_tag}{contour_tag} ");
+        let full_title = format!(" {title}{norm_tag}{contour_tag} ");
 
         let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area)
@@ -255,11 +253,7 @@ impl DensityTab {
                     .show_colorbar(true)
                     .theme(plt_theme.clone());
 
-                if self.log_scale && vmin > 0.0 {
-                    hm = hm.norm(LogNorm::new(vmin, vmax));
-                } else {
-                    hm = hm.norm(LinearNorm::new(vmin, vmax));
-                }
+                hm = self.norm_mode.apply_to_heatmap(hm, vmin, vmax);
 
                 frame.render_widget(&hm, heatmap_area);
 
@@ -273,19 +267,14 @@ impl DensityTab {
                 }
             }
             ContourMode::FilledContour => {
-                let mut contour = ContourPlot::new(grid)
+                let contour = ContourPlot::new(grid)
                     .levels(10)
                     .filled(true)
                     .colormap(phasma_cmap_to_plt(effective_cmap))
                     .title(full_title.clone())
                     .aspect_ratio(AspectRatio::Equal)
                     .theme(plt_theme);
-
-                if self.log_scale && vmin > 0.0 {
-                    contour = contour.norm(LogNorm::new(vmin, vmax));
-                } else {
-                    contour = contour.norm(LinearNorm::new(vmin, vmax));
-                }
+                let contour = self.norm_mode.apply_to_contour(contour, vmin, vmax);
 
                 frame.render_widget(&contour, heatmap_area);
             }
@@ -309,7 +298,7 @@ impl DensityTab {
                 String::new()
             };
             let axis_hint = format!(
-                "[1/2/3] axis  [l] log  [Shift+c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
+                "[1/2/3] axis  [l] norm  [Shift+c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
             );
             frame.render_widget(
                 Paragraph::new(axis_hint).style(Style::default().fg(theme.dim)),

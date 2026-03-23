@@ -17,7 +17,7 @@ use std::borrow::Cow;
 
 use crate::{
     data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::phasma_theme_to_plt,
+    tui::plt_bridge::{make_symlog_axis, phasma_theme_to_plt},
 };
 
 type SeriesData<'a> = (&'a str, &'a [(f64, f64)], Color);
@@ -144,7 +144,8 @@ impl Default for CachedSpectrogram {
 pub struct EnergyTab {
     traces: TraceVisibility,
     show_drift: bool,      // show fractional drift or absolute values
-    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy, 4=psd, 5=momentum, 6=spectrogram, 7=symplecticity
+    symlog_drift: bool,    // SymLog y-axis for drift panel (linear near zero, log for tails)
+    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy, 4=psd, 5=momentum, 6=spectrogram, 7=symplecticity, 8=ecdf
     show_grid: bool,
     stacked_mode: bool,
     time_window: TimeWindow,
@@ -164,6 +165,7 @@ impl Default for EnergyTab {
                 potential_energy: true,
             },
             show_drift: false,
+            symlog_drift: false,
             selected_panel: 0,
             show_grid: false,
             stacked_mode: false,
@@ -193,6 +195,10 @@ impl EnergyTab {
             }
             KeyCode::Char('d') => {
                 self.show_drift = !self.show_drift;
+                None
+            }
+            KeyCode::Char('L') => {
+                self.symlog_drift = !self.symlog_drift;
                 None
             }
             KeyCode::Char('g') => {
@@ -229,6 +235,10 @@ impl EnergyTab {
             }
             KeyCode::Char('8') => {
                 self.selected_panel = 7;
+                None
+            }
+            KeyCode::Char('9') => {
+                self.selected_panel = 8;
                 None
             }
             KeyCode::Char('S') => {
@@ -356,7 +366,7 @@ impl EnergyTab {
             };
         }
 
-        // Compact mode: single panel (selected by panel key 1-7)
+        // Compact mode: single panel (selected by panel key 1-9)
         if area.width < 76 {
             match self.selected_panel {
                 0 => self.draw_energy_chart(frame, area, theme, data_provider),
@@ -367,6 +377,7 @@ impl EnergyTab {
                 5 => self.draw_momentum_chart(frame, area, theme),
                 6 => self.draw_spectrogram(frame, area, theme),
                 7 => self.draw_symplecticity_chart(frame, area, theme),
+                8 => self.draw_ecdf_chart(frame, area, theme),
                 _ => self.draw_psd_chart(frame, area, theme),
             }
             return;
@@ -391,6 +402,7 @@ impl EnergyTab {
             5 => self.draw_momentum_chart(frame, bottom_right, theme),
             6 => self.draw_spectrogram(frame, bottom_right, theme),
             7 => self.draw_symplecticity_chart(frame, bottom_right, theme),
+            8 => self.draw_ecdf_chart(frame, bottom_right, theme),
             _ => self.draw_entropy_chart(frame, bottom_right, theme),
         }
     }
@@ -416,6 +428,7 @@ impl EnergyTab {
                 threshold,
                 &self.time_window,
                 self.show_grid,
+                self.symlog_drift,
                 self.exit_event_time
                     .as_ref()
                     .map(|&t| (t, &self.exit_reason_label as &str)),
@@ -727,6 +740,7 @@ fn draw_energy_drift_with_regression(
     threshold: f64,
     time_window: &TimeWindow,
     show_grid: bool,
+    symlog: bool,
     exit_event: Option<(f64, &str)>,
 ) {
     if data.is_empty() {
@@ -781,6 +795,19 @@ fn draw_energy_drift_with_regression(
         .data(windowed.to_vec())
         .color(color);
 
+    let symlog_tag = if symlog { " [symlog]" } else { "" };
+
+    let y_axis = if symlog {
+        // Symmetric log scale: linear near zero, logarithmic for large values.
+        // lin_thresh ~ 10% of the data range gives a useful linear pocket.
+        let lin_thresh = (y_max - y_min).abs().max(1e-15) * 0.1;
+        make_symlog_axis(None, lin_thresh).grid(show_grid)
+    } else {
+        PltAxis::new()
+            .bounds(Bounds::Manual(y_min, y_max))
+            .grid(show_grid)
+    };
+
     let mut plot = LinePlot::new()
         .series(drift_series)
         .x_axis(
@@ -788,12 +815,8 @@ fn draw_energy_drift_with_regression(
                 .bounds(Bounds::Manual(x_min, x_max))
                 .grid(show_grid),
         )
-        .y_axis(
-            PltAxis::new()
-                .bounds(Bounds::Manual(y_min, y_max))
-                .grid(show_grid),
-        )
-        .title(" ΔE/E₀ ")
+        .y_axis(y_axis)
+        .title(format!(" ΔE/E₀{symlog_tag} "))
         .show_legend(true)
         .legend_position(LegendPosition::TopRight)
         .theme(plt_theme);

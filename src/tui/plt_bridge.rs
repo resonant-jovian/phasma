@@ -1,7 +1,7 @@
 use ratatui::style::Color;
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, ColorCycle, GridData, LinearNorm, LogNorm, Normalize, RefLineDash,
-    ReferenceLine, Scale, Series, Theme,
+    AsinhNorm, Axis as PltAxis, Bounds, ColorCycle, GridData, LinearNorm, LogNorm, Normalize,
+    PowerNorm, RefLineDash, ReferenceLine, Scale, Series, SymLogNorm, Theme,
 };
 
 use crate::colormaps::Colormap;
@@ -170,4 +170,136 @@ pub fn make_series(name: &str, data: Vec<(f64, f64)>, color: Color) -> Series {
 /// Build a dashed horizontal reference line.
 pub fn make_reference_hline(y: f64, color: Color) -> ReferenceLine {
     ReferenceLine::hline_dashed(y, color)
+}
+
+/// Build a dashed vertical reference line.
+pub fn make_reference_vline(x: f64, color: Color) -> ReferenceLine {
+    ReferenceLine::vline_dashed(x, color)
+}
+
+// ── Normalization helpers ──────────────────────────────────────────────
+
+/// Heatmap normalization modes available across density and phase-space tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NormMode {
+    #[default]
+    Linear,
+    Log,
+    Sqrt,
+    Asinh,
+}
+
+impl NormMode {
+    /// Cycle to the next normalization mode.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Linear => Self::Log,
+            Self::Log => Self::Sqrt,
+            Self::Sqrt => Self::Asinh,
+            Self::Asinh => Self::Linear,
+        }
+    }
+
+    /// Short tag for display in title bars.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Linear => "",
+            Self::Log => " [log]",
+            Self::Sqrt => " [sqrt]",
+            Self::Asinh => " [asinh]",
+        }
+    }
+
+    /// Apply this normalization mode to a ratatui-plt `Heatmap`.
+    /// Falls back to `LinearNorm` when the data range is unsuitable
+    /// (e.g., log with non-positive values).
+    pub fn apply_to_heatmap(
+        self,
+        hm: ratatui_plt::prelude::Heatmap,
+        vmin: f64,
+        vmax: f64,
+    ) -> ratatui_plt::prelude::Heatmap {
+        match self {
+            Self::Linear => hm.norm(LinearNorm::new(vmin, vmax)),
+            Self::Log => {
+                if vmin > 0.0 {
+                    hm.norm(LogNorm::new(vmin, vmax))
+                } else {
+                    hm.norm(LinearNorm::new(vmin, vmax))
+                }
+            }
+            Self::Sqrt => hm.norm(PowerNorm::new(0.5, vmin, vmax)),
+            Self::Asinh => {
+                let width = (vmax - vmin).abs() * 0.01;
+                let width = if width > 0.0 { width } else { 1.0 };
+                hm.norm(AsinhNorm::new(width, vmin, vmax))
+            }
+        }
+    }
+
+    /// Apply this normalization mode to a ratatui-plt `ContourPlot`.
+    pub fn apply_to_contour(
+        self,
+        ct: ratatui_plt::prelude::ContourPlot,
+        vmin: f64,
+        vmax: f64,
+    ) -> ratatui_plt::prelude::ContourPlot {
+        match self {
+            Self::Linear => ct.norm(LinearNorm::new(vmin, vmax)),
+            Self::Log => {
+                if vmin > 0.0 {
+                    ct.norm(LogNorm::new(vmin, vmax))
+                } else {
+                    ct.norm(LinearNorm::new(vmin, vmax))
+                }
+            }
+            Self::Sqrt => ct.norm(PowerNorm::new(0.5, vmin, vmax)),
+            Self::Asinh => {
+                let width = (vmax - vmin).abs() * 0.01;
+                let width = if width > 0.0 { width } else { 1.0 };
+                ct.norm(AsinhNorm::new(width, vmin, vmax))
+            }
+        }
+    }
+}
+
+/// Build a `SymLogNorm` for signed data that spans zero.
+pub fn make_symlog_norm(lin_thresh: f64, vmin: f64, vmax: f64) -> SymLogNorm {
+    SymLogNorm::new(lin_thresh, vmin, vmax)
+}
+
+// ── Color helpers ──────────────────────────────────────────────────────
+
+/// Pick a color from the theme chart palette, cycling automatically.
+pub fn cycle_color(idx: usize, theme: &ThemeColors) -> Color {
+    theme.chart[idx % theme.chart.len()]
+}
+
+// ── Format helpers ─────────────────────────────────────────────────────
+
+/// Format a byte count as a human-readable size string (KB/MB/GB).
+pub fn format_size(bytes: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if bytes >= GB {
+        format!("{:.2} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes / KB)
+    } else {
+        format!("{:.0} B", bytes)
+    }
+}
+
+/// Format a duration in seconds as a compact string (e.g., "3.2s", "5m03s", "2h15m").
+pub fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{secs:.1}s")
+    } else if secs < 3600.0 {
+        format!("{}m{:02}s", secs as u64 / 60, secs as u64 % 60)
+    } else {
+        format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
+    }
 }
