@@ -217,34 +217,14 @@ fn export_radial_profiles_csv(
     let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
     let n_bins = 64usize;
 
-    // Compute radial profile (inline — same algorithm as profiles.rs)
-    let cx = nx as f64 / 2.0;
-    let cy = ny as f64 / 2.0;
-    let max_r = cx.min(cy);
-    let bin_width = max_r / n_bins as f64;
-    let mut bin_sum = vec![0.0f64; n_bins];
-    let mut bin_count = vec![0u32; n_bins];
-    for iy in 0..ny {
-        for ix in 0..nx {
-            let ddx = ix as f64 + 0.5 - cx;
-            let ddy = iy as f64 + 0.5 - cy;
-            let r = (ddx * ddx + ddy * ddy).sqrt();
-            let bin = ((r / bin_width) as usize).min(n_bins - 1);
-            bin_sum[bin] += state.density_xy[iy * nx + ix];
-            bin_count[bin] += 1;
-        }
-    }
+    // Reuse the shared radial profile function (avoids inline duplication)
+    let profile =
+        crate::tui::tabs::profiles::compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
 
     let path = dir.join(format!("{stem}_radial_profiles.csv"));
-    let mut csv = String::from("r,density,count\n");
-    for i in 0..n_bins {
-        let r = (i as f64 + 0.5) * bin_width * dx;
-        let rho = if bin_count[i] > 0 {
-            bin_sum[i] / bin_count[i] as f64
-        } else {
-            0.0
-        };
-        csv.push_str(&format!("{r:.6e},{rho:.6e},{}\n", bin_count[i]));
+    let mut csv = String::from("r,density\n");
+    for &(r, rho) in &profile {
+        csv.push_str(&format!("{r:.6e},{rho:.6e}\n"));
     }
     std::fs::write(&path, csv).map_err(|e| format!("write: {e}"))?;
     Ok(path.display().to_string())

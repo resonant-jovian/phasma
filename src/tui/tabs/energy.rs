@@ -123,7 +123,7 @@ struct CachedSeries {
     symplecticity_error: Vec<(f64, f64)>,
     /// Linear regression fit for energy drift (populated when >= 10 points).
     energy_drift_fit: Option<CachedDriftFit>,
-    cached_at_len: usize,
+    cached_at_gen: u64,
 }
 
 /// Cached spectrogram data (recomputed periodically).
@@ -298,25 +298,22 @@ impl EnergyTab {
             return;
         }
 
-        // Rebuild cached series only when new data arrives
-        let current_len = diag.total_energy.len();
-        if current_len != self.cached.cached_at_len {
+        // Rebuild cached series only when new data arrives.
+        // Uses generation() (monotonic counter) instead of len() which
+        // plateaus when the recent ring buffer is full.
+        let current_gen = diag.generation();
+        if current_gen != self.cached.cached_at_gen {
             let energy_drift = diag.energy_drift_series();
             let mass_drift = diag.mass_drift_series();
             let c2_drift = diag.c2_drift_series();
 
-            let mut abs_energy = energy_drift.clone();
-            let mut abs_mass = mass_drift.clone();
-            let mut abs_c2 = c2_drift.clone();
-            for p in &mut abs_energy {
-                p.1 = p.1.abs();
-            }
-            for p in &mut abs_mass {
-                p.1 = p.1.abs();
-            }
-            for p in &mut abs_c2 {
-                p.1 = p.1.abs();
-            }
+            // Compute abs drift directly instead of clone+mutate
+            let abs_energy: Vec<(f64, f64)> =
+                energy_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_mass: Vec<(f64, f64)> =
+                mass_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_c2: Vec<(f64, f64)> =
+                c2_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
 
             // Compute linear regression fit when we have enough drift data points
             let energy_drift_fit = if energy_drift.len() >= 10 {
@@ -355,7 +352,7 @@ impl EnergyTab {
                 momentum_z: diag.momentum_z.iter_chart_data(),
                 symplecticity_error: diag.symplecticity_error.iter_chart_data(),
                 energy_drift_fit,
-                cached_at_len: current_len,
+                cached_at_gen: current_gen,
             };
         }
 

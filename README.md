@@ -755,6 +755,57 @@ while let Ok(None) = sim.step() {
 }
 ```
 
+## Development script
+
+`dev.sh` provides unified commands for testing, benchmarking, and profiling.
+
+### Prerequisites
+
+Install all profiling tools to get the full feature set:
+
+```bash
+# Cargo tools
+cargo install flamegraph samply
+
+# System packages (Arch Linux)
+sudo pacman -S --needed perf valgrind heaptrack kcachegrind massif-visualizer
+
+# Optional: Tracy profiler (AUR)
+yay -S tracy
+```
+
+<details>
+<summary>Ubuntu / Debian</summary>
+
+```bash
+cargo install flamegraph samply
+sudo apt install linux-tools-common linux-tools-$(uname -r) valgrind heaptrack kcachegrind massif-visualizer
+```
+</details>
+
+Run `./dev.sh doctor` to check which tools are installed and get install commands for missing ones.
+
+### Usage
+
+```bash
+./dev.sh doctor                      # check all prerequisites, show install commands
+./dev.sh test                        # run all tests (debug, parallel)
+./dev.sh test --release              # run in release mode
+./dev.sh test --all                  # test both phasma and caustic
+./dev.sh bench                       # run caustic benchmarks (from here)
+./dev.sh profile flamegraph          # generate flamegraph SVG
+./dev.sh profile tracy               # build with Tracy, run
+./dev.sh profile dhat                # heap profiling
+./dev.sh profile samply              # samply record (browser UI)
+./dev.sh profile valgrind            # callgrind analysis
+./dev.sh build --fast                # fast-release profile build
+./dev.sh build --profiling           # release + debug symbols
+./dev.sh info                        # show project info, features, profiles
+./dev.sh help                        # full usage
+```
+
+See `./dev.sh help` for all commands and flags.
+
 ## License
 
 GNU General Public License v3.0. See [LICENSE](LICENSE).

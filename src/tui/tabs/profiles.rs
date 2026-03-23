@@ -645,7 +645,7 @@ impl ProfilesTab {
 
 /// Compute azimuthally averaged radial density profile from a 2D density projection.
 /// Returns (physical_radius, density_value) pairs.
-fn compute_radial_profile(
+pub(crate) fn compute_radial_profile(
     data: &[f64],
     nx: usize,
     ny: usize,

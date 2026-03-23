@@ -1564,26 +1564,20 @@ fn extract_sim_state(
     let mut density_yz = vec![0.0f64; nx2 * nx3];
     let mut max_density = 0.0f64;
 
-    // Pass 1: density_xy and density_xz (ix1 outer — sequential writes for both)
+    // Single pass: all three 2D projections + max. The density_yz writes are
+    // scattered (indexed by ix2*nx3+ix3) but the array fits in L1/L2 cache
+    // for typical grid sizes (32³ or 64³), so this is faster than a
+    // separate second pass that re-reads the entire 3D density array.
     for ix1 in 0..nx1 {
         for ix2 in 0..nx2 {
             for ix3 in 0..nx3 {
                 let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
                 density_xy[ix1 * nx2 + ix2] += v;
                 density_xz[ix1 * nx3 + ix3] += v;
+                density_yz[ix2 * nx3 + ix3] += v;
                 if v > max_density {
                     max_density = v;
                 }
-            }
-        }
-    }
-
-    // Pass 2: density_yz (ix2 outer — sequential writes to density_yz[ix2 * nx3 + ix3])
-    for ix2 in 0..nx2 {
-        for ix1 in 0..nx1 {
-            for ix3 in 0..nx3 {
-                let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
-                density_yz[ix2 * nx3 + ix3] += v;
             }
         }
     }
