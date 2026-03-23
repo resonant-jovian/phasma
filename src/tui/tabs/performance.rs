@@ -5,7 +5,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Histogram as PltHistogram, LinePlot, Series};
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, Histogram as PltHistogram, LegendPosition, LinePlot, Scale, Series,
+    StackedArea, StemPlot,
+};
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 use std::collections::VecDeque;
 
@@ -203,11 +206,14 @@ impl PerformanceTab {
             return;
         }
 
-        // Wide mode (160+): 3-column layout for more breathing room + histogram
+        // Wide mode (160+): 3-row layout with extra charts
         if area.width >= 156 {
-            let [top, bottom] =
-                Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .areas(area);
+            let [top, mid, bottom] = Layout::vertical([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .areas(area);
 
             let [stats_area, timing_area, memory_area] = Layout::horizontal([
                 Constraint::Percentage(28),
@@ -222,6 +228,13 @@ impl PerformanceTab {
                 Constraint::Percentage(25),
                 Constraint::Percentage(25),
             ])
+            .areas(mid);
+
+            let [phase_area, adt_area, posv_area] = Layout::horizontal([
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
+            ])
             .areas(bottom);
 
             self.draw_stats(frame, stats_area, theme, data_provider);
@@ -231,12 +244,19 @@ impl PerformanceTab {
             self.draw_dt_chart(frame, dt_area, theme);
             self.draw_cumulative_chart(frame, cumul_area, theme);
             self.draw_step_time_histogram(frame, hist_area, theme);
+            Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
+            Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
+            Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
             return;
         }
 
-        // Standard 2×3 layout
-        let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+        // Standard 3-row layout
+        let [top, mid, bottom] = Layout::vertical([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .areas(area);
 
         let [stats_area, timing_area, memory_area, dt_area] = Layout::horizontal([
             Constraint::Percentage(28),
@@ -248,7 +268,14 @@ impl PerformanceTab {
 
         let [wall_area, cumul_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(bottom);
+                .areas(mid);
+
+        let [phase_area, adt_area, posv_area] = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ])
+        .areas(bottom);
 
         self.draw_stats(frame, stats_area, theme, data_provider);
         Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
@@ -256,6 +283,9 @@ impl PerformanceTab {
         self.draw_dt_chart(frame, dt_area, theme);
         self.draw_wall_time_chart(frame, wall_area, theme);
         self.draw_cumulative_chart(frame, cumul_area, theme);
+        Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
+        Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
+        Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
     }
 
     fn draw_memory_breakdown(
@@ -702,6 +732,119 @@ impl PerformanceTab {
             .theme(plt_theme);
 
         frame.render_widget(&plot, area);
+    }
+
+    fn draw_phase_timing_stacked(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let diag = data_provider.diagnostics();
+        let drift_data = diag.phase_timing_drift.iter_chart_data();
+        let poisson_data = diag.phase_timing_poisson.iter_chart_data();
+        let kick_data = diag.phase_timing_kick.iter_chart_data();
+
+        if drift_data.is_empty() && poisson_data.is_empty() && kick_data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Phase Timing Breakdown ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let stacked = StackedArea::new()
+            .series(
+                Series::new("Drift")
+                    .data(drift_data)
+                    .color(theme.chart[0]),
+            )
+            .series(
+                Series::new("Poisson")
+                    .data(poisson_data)
+                    .color(theme.chart[1]),
+            )
+            .series(
+                Series::new("Kick")
+                    .data(kick_data)
+                    .color(theme.chart[2]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("ms"))
+            .title(" Phase Timing Breakdown ")
+            .show_legend(true)
+            .legend_position(LegendPosition::TopRight)
+            .theme(plt_theme);
+
+        frame.render_widget(&stacked, area);
+    }
+
+    fn draw_adaptive_dt_chart(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider.diagnostics().adaptive_dt.iter_chart_data();
+
+        if data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Adaptive \u{0394}t ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("\u{0394}t")
+                    .data(data)
+                    .color(theme.chart[4]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("\u{0394}t").scale(Scale::Log(10.0)))
+            .title(" Adaptive \u{0394}t ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_positivity_violations(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider
+            .diagnostics()
+            .positivity_violations
+            .iter_chart_data();
+
+        if data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Positivity Violations ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let stem = StemPlot::new(data)
+            .color(theme.chart[5])
+            .title(" Positivity Violations ")
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("count"))
+            .theme(plt_theme);
+
+        frame.render_widget(&stem, area);
     }
 }
 

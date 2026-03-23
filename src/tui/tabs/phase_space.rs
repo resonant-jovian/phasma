@@ -9,8 +9,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 use ratatui_plt::prelude::{
-    AspectRatio, Axis as PltAxis, Heatmap, Histogram as PltHistogram, LinearNorm, LogNorm, Series,
-    StairsDataset, StairsPlot,
+    AspectRatio, Axis as PltAxis, Bounds, Heatmap, Histogram as PltHistogram, Kde, LinePlot,
+    LinearNorm, LogNorm, Series, StairsDataset, StairsPlot,
 };
 
 use crate::{
@@ -303,7 +303,10 @@ impl PhaseSpaceTab {
             .unwrap_or(vnv as f64 / 2.0);
 
         let aspect = if self.physical_aspect {
-            AspectRatio::Fixed(x_extent / v_extent)
+            // Convert float ratio to integer pair (2 decimal places of precision)
+            let ratio = x_extent / v_extent;
+            let w = (ratio * 100.0).round() as u16;
+            AspectRatio::Ratio(w, 100)
         } else {
             AspectRatio::Auto
         };
@@ -345,7 +348,7 @@ impl PhaseSpaceTab {
             self.last_ny = vnv;
         }
 
-        // Velocity histogram panel — marginal velocity distribution as StairsPlot
+        // Velocity histogram panel — marginal velocity distribution as StairsPlot + KDE overlay
         if let Some(ha) = hist_area {
             if !self.last_data.is_empty() && self.last_nx > 0 && self.last_ny > 0 {
                 // Sum columns to get velocity marginal (sum over x for each v bin)
@@ -377,7 +380,7 @@ impl PhaseSpaceTab {
                     .dataset(StairsDataset::new(
                         "f(v)",
                         edges,
-                        vel_marginal,
+                        vel_marginal.clone(),
                         theme.chart[0],
                     ))
                     .x_axis(PltAxis::new().label("v"))
@@ -385,9 +388,80 @@ impl PhaseSpaceTab {
                     .title(" Velocity Distribution ")
                     .show_legend(false)
                     .baseline(0.0)
-                    .theme(plt_theme);
+                    .theme(plt_theme.clone());
 
                 frame.render_widget(&stairs, ha);
+
+                // KDE overlay — expand binned marginal into weighted samples for KDE
+                let marginal_sum: f64 = vel_marginal.iter().sum();
+                if marginal_sum > 0.0 && n_bins >= 2 {
+                    // Build bin centers
+                    let bin_centers: Vec<f64> = (0..n_bins)
+                        .map(|i| -v_extent + dv * (i as f64 + 0.5))
+                        .collect();
+
+                    // Create weighted sample: replicate each bin center proportionally
+                    // to its marginal value (normalized to ~200 total samples for KDE)
+                    let target_samples = 200usize;
+                    let mut raw_velocity_data = Vec::with_capacity(target_samples + n_bins);
+                    for (i, &count) in vel_marginal.iter().enumerate() {
+                        let n_reps = ((count / marginal_sum) * target_samples as f64).round()
+                            as usize;
+                        for _ in 0..n_reps {
+                            raw_velocity_data.push(bin_centers[i]);
+                        }
+                    }
+
+                    if raw_velocity_data.len() >= 2 {
+                        let kde = Kde::default();
+                        let (eval_points, densities) = kde.fit(&raw_velocity_data);
+
+                        // Scale KDE densities to match histogram magnitude
+                        let kde_max = densities
+                            .iter()
+                            .cloned()
+                            .fold(0.0_f64, f64::max);
+                        let hist_max = vel_marginal
+                            .iter()
+                            .cloned()
+                            .fold(0.0_f64, f64::max);
+
+                        if kde_max > 0.0 {
+                            let scale = hist_max / kde_max;
+                            let kde_data: Vec<(f64, f64)> = eval_points
+                                .iter()
+                                .zip(densities.iter())
+                                .map(|(&x, &y)| (x, y * scale))
+                                .collect();
+
+                            let kde_color = if theme.chart.len() > 2 {
+                                theme.chart[2]
+                            } else {
+                                theme.chart[theme.chart.len() - 1]
+                            };
+                            let kde_series =
+                                Series::new("KDE").data(kde_data).color(kde_color);
+
+                            let kde_plot = LinePlot::new()
+                                .series(kde_series)
+                                .x_axis(
+                                    PltAxis::new()
+                                        .label("v")
+                                        .bounds(Bounds::Manual(-v_extent, v_extent)),
+                                )
+                                .y_axis(
+                                    PltAxis::new()
+                                        .label("f")
+                                        .bounds(Bounds::Manual(0.0, hist_max * 1.05)),
+                                )
+                                .title(" Velocity Distribution ")
+                                .show_legend(false)
+                                .theme(plt_theme);
+
+                            frame.render_widget(&kde_plot, ha);
+                        }
+                    }
+                }
             }
         }
 

@@ -3,6 +3,7 @@ pub mod csv;
 pub mod json;
 pub mod npy;
 pub mod parquet;
+pub mod plot_export;
 pub mod report;
 pub mod screenshot;
 pub mod vtk;
@@ -30,6 +31,7 @@ pub enum ExportFormat {
     PerformanceParquet,
     Zip,
     Hdf5,
+    ChartSvg,
 }
 
 impl ExportFormat {
@@ -48,6 +50,7 @@ impl ExportFormat {
             "radial" | "profiles" => Self::RadialProfilesCsv,
             "performance" | "perf" => Self::PerformanceParquet,
             "hdf5" | "h5" => Self::Hdf5,
+            "chart" | "charts" | "chart-svg" => Self::ChartSvg,
             _ => Self::Csv,
         }
     }
@@ -67,6 +70,7 @@ impl ExportFormat {
             Self::PerformanceParquet => "Performance data → Parquet",
             Self::Zip => "★ Export All → ZIP archive",
             Self::Hdf5 => "Snapshot → HDF5",
+            Self::ChartSvg => "Charts → SVG (energy, density, conservation)",
         }
     }
 
@@ -86,6 +90,7 @@ impl ExportFormat {
             Self::PerformanceParquet => "a",
             Self::Zip => "z",
             Self::Hdf5 => "h",
+            Self::ChartSvg => "c",
         }
     }
 }
@@ -117,6 +122,17 @@ pub fn export_diagnostics(
         ExportFormat::PerformanceParquet => export_performance_csv(dir, diagnostics, stem),
         ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
         ExportFormat::Hdf5 => export_hdf5(dir, state, stem),
+        ExportFormat::ChartSvg => {
+            use crate::colormaps::Colormap;
+            use crate::themes::Theme;
+            let theme_colors = Theme::default().colors();
+            let cmap = Colormap::default();
+            match plot_export::export_charts_batch(dir, diagnostics, state, &theme_colors, cmap, stem)
+            {
+                Ok(paths) => Ok(paths.join("\n")),
+                Err(e) => Err(e),
+            }
+        }
     }
 }
 
@@ -344,6 +360,7 @@ mod tests {
             ExportFormat::RadialProfilesCsv,
             ExportFormat::PerformanceParquet,
             ExportFormat::Zip,
+            ExportFormat::ChartSvg,
         ];
         for f in all {
             assert!(!f.name().is_empty(), "{f:?} should have non-empty name");
@@ -365,9 +382,10 @@ mod tests {
             ExportFormat::RadialProfilesCsv,
             ExportFormat::PerformanceParquet,
             ExportFormat::Zip,
+            ExportFormat::ChartSvg,
         ];
         let shortcuts: HashSet<_> = all.iter().map(|f| f.shortcut()).collect();
-        assert_eq!(shortcuts.len(), 12);
+        assert_eq!(shortcuts.len(), 13);
     }
 
     #[test]
@@ -385,6 +403,7 @@ mod tests {
             ExportFormat::RadialProfilesCsv,
             ExportFormat::PerformanceParquet,
             ExportFormat::Zip,
+            ExportFormat::ChartSvg,
         ];
         for f in all {
             assert!(
@@ -409,11 +428,12 @@ mod tests {
             "radial",
             "performance",
             "zip",
+            "chart",
         ];
         let reached: HashSet<_> = names
             .iter()
             .map(|n| std::mem::discriminant(&ExportFormat::from_name(n)))
             .collect();
-        assert_eq!(reached.len(), 12);
+        assert_eq!(reached.len(), 13);
     }
 }

@@ -73,6 +73,7 @@ pub struct ProfilesTab {
     kind: ProfileKind,
     log_scale: bool,
     show_analytic: bool,
+    show_lowess: bool,
     layout_mode: LayoutMode,
     /// Index into BIN_PRESETS.
     bin_preset_idx: usize,
@@ -93,6 +94,7 @@ impl Default for ProfilesTab {
             kind: ProfileKind::Density,
             log_scale: true,
             show_analytic: true,
+            show_lowess: false,
             layout_mode: LayoutMode::Stacked,
             bin_preset_idx: 2, // default 64 bins
             lagrangian_history: std::array::from_fn(|_| VecDeque::with_capacity(LAGRANGIAN_CAP)),
@@ -145,6 +147,10 @@ impl ProfilesTab {
             KeyCode::Char('b') => {
                 // Cycle bin count preset
                 self.bin_preset_idx = (self.bin_preset_idx + 1) % BIN_PRESETS.len();
+                None
+            }
+            KeyCode::Char('w') => {
+                self.show_lowess = !self.show_lowess;
                 None
             }
             _ => None,
@@ -514,6 +520,17 @@ impl ProfilesTab {
                     .color(theme.chart[5 % theme.chart.len()])
                     .line_style(LineStyle::dashed()),
             );
+        }
+
+        // LOWESS smoothing overlay (toggled with 'w')
+        if self.show_lowess && chart_data.len() >= 6 {
+            let x_vals: Vec<f64> = chart_data.iter().map(|(x, _)| *x).collect();
+            let y_vals: Vec<f64> = chart_data.iter().map(|(_, y)| *y).collect();
+            if let Some(result) = ratatui_plt::statistics::lowess(&x_vals, &y_vals, 0.3) {
+                series_vec.push(
+                    result.to_series("LOWESS", theme.chart[6 % theme.chart.len()]),
+                );
+            }
         }
 
         let x_axis = if self.log_scale && kind != ProfileKind::Anisotropy {

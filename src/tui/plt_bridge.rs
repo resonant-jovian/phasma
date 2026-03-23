@@ -1,6 +1,7 @@
 use ratatui::style::Color;
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, ColorCycle, GridData, LinearNorm, LogNorm, Normalize, Scale, Theme,
+    Axis as PltAxis, Bounds, ColorCycle, GridData, LinearNorm, LogNorm, Normalize, RefLineDash,
+    ReferenceLine, Scale, Series, Theme,
 };
 
 use crate::colormaps::Colormap;
@@ -146,4 +147,27 @@ pub fn make_auto_axis(label: Option<&str>) -> PltAxis {
         ax = ax.label(l);
     }
     ax
+}
+
+/// Build a ratatui-plt `Axis` with symmetric log scale.
+pub fn make_symlog_axis(label: Option<&str>, lin_thresh: f64) -> PltAxis {
+    let mut ax = PltAxis::new().scale(Scale::SymLog {
+        lin_thresh,
+        lin_scale: 1.0,
+        base: 10.0,
+    });
+    if let Some(l) = label {
+        ax = ax.label(l);
+    }
+    ax
+}
+
+/// Build a `Series` from name, data, and color (reduces boilerplate).
+pub fn make_series(name: &str, data: Vec<(f64, f64)>, color: Color) -> Series {
+    Series::new(name).data(data).color(color)
+}
+
+/// Build a dashed horizontal reference line.
+pub fn make_reference_hline(y: f64, color: Color) -> ReferenceLine {
+    ReferenceLine::hline_dashed(y, color)
 }

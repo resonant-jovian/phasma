@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
@@ -15,23 +13,10 @@ use crate::themes::ThemeColors;
 use crate::tui::action::Action;
 use crate::tui::plt_bridge::phasma_theme_to_plt;
 
-const MAX_HISTORY: usize = 500;
-
 /// F9 Poisson Detail tab — displays P(k) power spectrum,
-/// Poisson residual time series, and solver statistics.
-pub struct PoissonDetailTab {
-    residual_history: VecDeque<(f64, f64)>,
-    potential_history: VecDeque<(f64, f64)>,
-}
-
-impl Default for PoissonDetailTab {
-    fn default() -> Self {
-        Self {
-            residual_history: VecDeque::with_capacity(MAX_HISTORY),
-            potential_history: VecDeque::with_capacity(MAX_HISTORY),
-        }
-    }
-}
+/// Poisson residual time series, near-field correction, and solver statistics.
+#[derive(Default)]
+pub struct PoissonDetailTab {}
 
 impl PoissonDetailTab {
     pub fn handle_key_event(&mut self, _key: KeyEvent) -> Option<Action> {
@@ -51,48 +36,21 @@ impl PoissonDetailTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        // Update history from current state
-        if let Some(state) = data_provider.current_state() {
-            let t = state.t;
-
-            // Residual history
-            if let Some(residual) = state.poisson_residual_l2 {
-                let should_push = self
-                    .residual_history
-                    .back()
-                    .is_none_or(|(last_t, _)| t > *last_t);
-                if should_push {
-                    if self.residual_history.len() >= MAX_HISTORY {
-                        self.residual_history.pop_front();
-                    }
-                    self.residual_history.push_back((t, residual));
-                }
-            }
-
-            // Potential energy history (kept for solver stats W(t) display)
-            let w = state.potential_energy;
-            let should_push_w = self
-                .potential_history
-                .back()
-                .is_none_or(|(last_t, _)| t > *last_t);
-            if should_push_w {
-                if self.potential_history.len() >= MAX_HISTORY {
-                    self.potential_history.pop_front();
-                }
-                self.potential_history.push_back((t, w));
-            }
-        }
-
         // Compact mode: show only P(k) spectrum
         if area.width < 76 {
             self.draw_power_spectrum(frame, area, theme, data_provider);
             return;
         }
 
-        // Layout: top = P_Φ(k) (40%) + P_ρ(k) (30%) + E(k) (30%)
-        //         bottom = residual (45%) + solver stats (30%) + Green's rank (25%)
-        let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+        // Layout: top    = P_Φ(k) (40%) + P_ρ(k) (30%) + E(k) (30%)
+        //         middle = Poisson Residual L₂ (50%) + Near-field Correction (50%)
+        //         bottom = Solver Stats (50%) + Green's Fn Rank (50%)
+        let [top, middle, bottom] = Layout::vertical([
+            Constraint::Percentage(35),
+            Constraint::Percentage(30),
+            Constraint::Percentage(35),
+        ])
+        .areas(area);
 
         let [top_left, top_mid, top_right] = Layout::horizontal([
             Constraint::Percentage(40),
@@ -101,18 +59,24 @@ impl PoissonDetailTab {
         ])
         .areas(top);
 
-        let [bottom_left, bottom_mid, bottom_right] = Layout::horizontal([
-            Constraint::Percentage(45),
-            Constraint::Percentage(30),
-            Constraint::Percentage(25),
+        let [mid_left, mid_right] = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .areas(middle);
+
+        let [bottom_left, bottom_right] = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
         ])
         .areas(bottom);
 
         self.draw_power_spectrum(frame, top_left, theme, data_provider);
         Self::draw_density_spectrum(frame, top_mid, theme, data_provider);
         Self::draw_field_energy_spectrum(frame, top_right, theme, data_provider);
-        self.draw_residual_chart(frame, bottom_left, theme);
-        self.draw_solver_stats(frame, bottom_mid, theme, data_provider);
+        Self::draw_poisson_residual_chart(frame, mid_left, theme, data_provider);
+        Self::draw_near_field_correction_chart(frame, mid_right, theme, data_provider);
+        Self::draw_solver_stats(frame, bottom_left, theme, data_provider);
         Self::draw_green_rank_panel(frame, bottom_right, theme, data_provider);
     }
 
@@ -268,10 +232,20 @@ impl PoissonDetailTab {
         }
     }
 
-    fn draw_residual_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        if self.residual_history.len() < 2 {
+    fn draw_poisson_residual_chart(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider
+            .diagnostics()
+            .poisson_residual
+            .iter_chart_data();
+
+        if data.len() < 2 {
             let block = Block::bordered()
-                .title(" Poisson Residual ||\u{2207}\u{00b2}\u{03a6} \u{2212} 4\u{03c0}G\u{03c1}||\u{2082} ")
+                .title(" Poisson Residual L\u{2082} ")
                 .border_style(Style::default().fg(theme.border));
             let inner = block.inner(area);
             frame.render_widget(block, area);
@@ -285,25 +259,66 @@ impl PoissonDetailTab {
             return;
         }
 
-        let data: Vec<(f64, f64)> = self.residual_history.iter().copied().collect();
         let plt_theme = phasma_theme_to_plt(theme);
-
         let plot = LinePlot::new()
             .series(
                 Series::new("residual")
                     .data(data)
-                    .color(theme.chart[1]),
+                    .color(theme.chart[1])
+                    .marker(MarkerShape::Circle),
             )
             .x_axis(PltAxis::new().label("t"))
-            .y_axis(PltAxis::new())
-            .title(" Poisson Residual ||\u{2207}\u{00b2}\u{03a6} \u{2212} 4\u{03c0}G\u{03c1}||\u{2082} ")
+            .y_axis(PltAxis::new().label("L\u{2082}").scale(Scale::Log(10.0)))
+            .title(" Poisson Residual L\u{2082} ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_near_field_correction_chart(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider
+            .diagnostics()
+            .near_field_correction_l2
+            .iter_chart_data();
+
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" Near-field Correction ")
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![Span::styled(
+                    "  Waiting for data...",
+                    Style::default().fg(theme.dim),
+                )])),
+                inner,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("near-field")
+                    .data(data)
+                    .color(theme.chart[3])
+                    .marker(MarkerShape::Circle),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("L\u{2082}").scale(Scale::Log(10.0)))
+            .title(" Near-field Correction ")
             .theme(plt_theme);
 
         frame.render_widget(&plot, area);
     }
 
     fn draw_solver_stats(
-        &self,
         frame: &mut Frame,
         area: Rect,
         theme: &ThemeColors,

@@ -4,11 +4,13 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Cell, Paragraph, Row, Table},
 };
-use ratatui_plt::prelude::{Axis as PltAxis, LinePlot, Scale, Series, StemPlot, TwinAxes};
+use ratatui_plt::prelude::{
+    Axis as PltAxis, LinePlot, ReferenceLine, Scale, Series, StemPlot, TwinAxes,
+};
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 
 use crate::data::DataProvider;
@@ -45,6 +47,14 @@ struct CachedRankData {
     at_len: usize,
 }
 
+/// Cached chart data for diagnostics-sourced series (rank growth rate, SVD count, HTACA evals).
+struct CachedDiagData {
+    rank_growth_rate: Vec<(f64, f64)>,
+    svd_count: Vec<(f64, f64)>,
+    htaca_evaluations: Vec<(f64, f64)>,
+    at_len: usize,
+}
+
 impl Default for CachedRankData {
     fn default() -> Self {
         Self {
@@ -56,6 +66,17 @@ impl Default for CachedRankData {
             x_max: 1.0,
             y_min: 0.0,
             y_max: 1.0,
+            at_len: usize::MAX,
+        }
+    }
+}
+
+impl Default for CachedDiagData {
+    fn default() -> Self {
+        Self {
+            rank_growth_rate: Vec::new(),
+            svd_count: Vec::new(),
+            htaca_evaluations: Vec::new(),
             at_len: usize::MAX,
         }
     }
@@ -77,6 +98,8 @@ pub struct RankTab {
     selected_node: usize,
     /// Cached chart data (rebuilt when history length changes).
     cached_rank: CachedRankData,
+    /// Cached diagnostics-sourced chart data (rank growth rate, SVD count, HTACA evals).
+    cached_diag: CachedDiagData,
 }
 
 impl Default for RankTab {
@@ -89,6 +112,7 @@ impl Default for RankTab {
             last_step: u64::MAX,
             selected_node: 0,
             cached_rank: CachedRankData::default(),
+            cached_diag: CachedDiagData::default(),
         }
     }
 }
@@ -241,27 +265,56 @@ impl RankTab {
             };
         }
 
+        // Rebuild cached diagnostics data when new data arrives
+        let diag = data_provider.diagnostics();
+        let diag_len = diag.rank_growth_rate.len()
+            + diag.svd_count.len()
+            + diag.htaca_evaluations.len();
+        if diag_len != self.cached_diag.at_len {
+            self.cached_diag = CachedDiagData {
+                rank_growth_rate: diag.rank_growth_rate.iter_chart_data(),
+                svd_count: diag.svd_count.iter_chart_data(),
+                htaca_evaluations: diag.htaca_evaluations.iter_chart_data(),
+                at_len: diag_len,
+            };
+        }
+
         // Compact mode: show only rank evolution chart
         if area.width < 76 {
             self.draw_rank_evolution(frame, area, theme);
             return;
         }
 
-        // Layout: top row (evolution chart + table) and bottom row (bar chart + SV spectrum).
-        let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+        // Layout: top row (evolution chart + table), middle row (bar chart + SV spectrum),
+        // bottom row (rank growth rate + SVD count + HTACA evaluations).
+        let [top, middle, bottom] = Layout::vertical([
+            Constraint::Percentage(38),
+            Constraint::Percentage(32),
+            Constraint::Percentage(30),
+        ])
+        .areas(area);
 
         let [top_left, top_right] =
             Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top);
 
-        let [bottom_left, bottom_right] =
+        let [mid_left, mid_right] =
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .areas(bottom);
+                .areas(middle);
+
+        let [bot_left, bot_center, bot_right] = Layout::horizontal([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .areas(bottom);
 
         self.draw_rank_evolution(frame, top_left, theme);
         self.draw_per_node_table(frame, top_right, theme, state);
-        self.draw_rank_bars(frame, bottom_left, theme, state);
-        self.draw_sv_spectrum(frame, bottom_right, theme, state);
+        self.draw_rank_bars(frame, mid_left, theme, state);
+        self.draw_sv_spectrum(frame, mid_right, theme, state);
+        self.draw_rank_growth_rate(frame, bot_left, theme);
+        self.draw_svd_count(frame, bot_center, theme);
+        self.draw_htaca_evaluations(frame, bot_right, theme);
     }
 
     // ── Panels ──────────────────────────────────────────────────────────
@@ -646,6 +699,82 @@ impl RankTab {
         }
 
         frame.render_widget(Paragraph::new(lines), text_area);
+    }
+
+    fn draw_rank_growth_rate(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.rank_growth_rate;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" Rank Growth Rate ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("growth rate")
+                    .data(data.clone())
+                    .color(theme.chart[3 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("rate"))
+            .reference_line(ReferenceLine::hline_dashed(0.5, Color::Red))
+            .title(" Rank Growth Rate ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_svd_count(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.svd_count;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" SVD Operations / Step ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("SVD count")
+                    .data(data.clone())
+                    .color(theme.chart[4 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("count"))
+            .title(" SVD Operations / Step ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_htaca_evaluations(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.htaca_evaluations;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" HTACA Evaluations / Step ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("HTACA evals")
+                    .data(data.clone())
+                    .color(theme.chart[5 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("evals"))
+            .title(" HTACA Evaluations / Step ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
     }
 }
 

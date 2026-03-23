@@ -110,6 +110,19 @@ pub struct DiagnosticsStore {
     pub casimir_c2: TimeSeriesStore,
     pub entropy: TimeSeriesStore,
     pub virial_ratio: TimeSeriesStore,
+    // ── Extended diagnostics (Layer 3) ──
+    pub svd_count: TimeSeriesStore,
+    pub htaca_evaluations: TimeSeriesStore,
+    pub positivity_violations: TimeSeriesStore,
+    pub symplecticity_error: TimeSeriesStore,
+    pub rank_growth_rate: TimeSeriesStore,
+    pub near_field_correction_l2: TimeSeriesStore,
+    pub poisson_residual: TimeSeriesStore,
+    pub adaptive_dt: TimeSeriesStore,
+    pub wall_time_per_step: TimeSeriesStore,
+    pub phase_timing_drift: TimeSeriesStore,
+    pub phase_timing_poisson: TimeSeriesStore,
+    pub phase_timing_kick: TimeSeriesStore,
 }
 
 impl DiagnosticsStore {
@@ -125,6 +138,31 @@ impl DiagnosticsStore {
         self.casimir_c2.push(t, state.casimir_c2);
         self.entropy.push(t, state.entropy);
         self.virial_ratio.push(t, state.virial_ratio);
+        // Extended diagnostics
+        self.svd_count.push(t, state.svd_count as f64);
+        self.htaca_evaluations.push(t, state.htaca_evaluations as f64);
+        if let Some(v) = state.positivity_violations {
+            self.positivity_violations.push(t, v as f64);
+        }
+        if let Some(v) = state.symplecticity_error {
+            self.symplecticity_error.push(t, v);
+        }
+        if let Some(v) = state.rank_growth_rate {
+            self.rank_growth_rate.push(t, v);
+        }
+        if let Some(v) = state.near_field_correction_l2 {
+            self.near_field_correction_l2.push(t, v);
+        }
+        if let Some(v) = state.poisson_residual_l2 {
+            self.poisson_residual.push(t, v);
+        }
+        self.adaptive_dt.push(t, state.dt);
+        self.wall_time_per_step.push(t, state.step_wall_ms);
+        if let Some(ref timings) = state.phase_timings {
+            self.phase_timing_drift.push(t, timings[0]);
+            self.phase_timing_poisson.push(t, timings[1]);
+            self.phase_timing_kick.push(t, timings[2]);
+        }
     }
 
     pub fn is_empty(&self) -> bool {

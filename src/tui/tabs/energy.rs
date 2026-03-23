@@ -8,9 +8,10 @@ use ratatui::{
 };
 use ratatui_plt::fft::stft;
 use ratatui_plt::prelude::{
-    Annotation, Axis as PltAxis, Bounds, LegendPosition, LinePlot, PsdPlot, RefLineDash,
+    Annotation, Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, PsdPlot, RefLineDash,
     ReferenceLine, Scale, Series, Spectrogram, StackedArea,
 };
+use ratatui_plt::statistics::linear_regression;
 
 use std::borrow::Cow;
 
@@ -92,6 +93,16 @@ impl TimeWindow {
     }
 }
 
+/// Cached linear regression fit for the energy drift series.
+struct CachedDriftFit {
+    /// Two-point line data for rendering the regression overlay.
+    line_data: Vec<(f64, f64)>,
+    /// R-squared value for legend label.
+    r_squared: f64,
+    /// Slope (drift rate) for legend label.
+    slope: f64,
+}
+
 /// Cached time-series data rebuilt only when new diagnostics arrive.
 #[derive(Default)]
 struct CachedSeries {
@@ -109,6 +120,9 @@ struct CachedSeries {
     momentum_x: Vec<(f64, f64)>,
     momentum_y: Vec<(f64, f64)>,
     momentum_z: Vec<(f64, f64)>,
+    symplecticity_error: Vec<(f64, f64)>,
+    /// Linear regression fit for energy drift (populated when >= 10 points).
+    energy_drift_fit: Option<CachedDriftFit>,
     cached_at_len: usize,
 }
 
@@ -130,7 +144,7 @@ impl Default for CachedSpectrogram {
 pub struct EnergyTab {
     traces: TraceVisibility,
     show_drift: bool,      // show fractional drift or absolute values
-    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy, 4=psd, 5=momentum, 6=spectrogram
+    selected_panel: usize, // 0=energy, 1=mass, 2=virial, 3=entropy, 4=psd, 5=momentum, 6=spectrogram, 7=symplecticity
     show_grid: bool,
     stacked_mode: bool,
     time_window: TimeWindow,
@@ -211,6 +225,10 @@ impl EnergyTab {
             }
             KeyCode::Char('7') => {
                 self.selected_panel = 6;
+                None
+            }
+            KeyCode::Char('8') => {
+                self.selected_panel = 7;
                 None
             }
             KeyCode::Char('S') => {
@@ -300,6 +318,26 @@ impl EnergyTab {
                 p.1 = p.1.abs();
             }
 
+            // Compute linear regression fit when we have enough drift data points
+            let energy_drift_fit = if energy_drift.len() >= 10 {
+                let x_vals: Vec<f64> = energy_drift.iter().map(|(t, _)| *t).collect();
+                let y_vals: Vec<f64> = energy_drift.iter().map(|(_, d)| *d).collect();
+                linear_regression(&x_vals, &y_vals).map(|fit| {
+                    let x_first = x_vals[0];
+                    let x_last = x_vals.last().copied().unwrap_or(x_first);
+                    CachedDriftFit {
+                        line_data: vec![
+                            (x_first, fit.intercept + fit.slope * x_first),
+                            (x_last, fit.intercept + fit.slope * x_last),
+                        ],
+                        r_squared: fit.r_squared,
+                        slope: fit.slope,
+                    }
+                })
+            } else {
+                None
+            };
+
             self.cached = CachedSeries {
                 total_energy: diag.total_energy.iter_chart_data(),
                 kinetic_energy: diag.kinetic_energy.iter_chart_data(),
@@ -315,6 +353,8 @@ impl EnergyTab {
                 momentum_x: diag.momentum_x.iter_chart_data(),
                 momentum_y: diag.momentum_y.iter_chart_data(),
                 momentum_z: diag.momentum_z.iter_chart_data(),
+                symplecticity_error: diag.symplecticity_error.iter_chart_data(),
+                energy_drift_fit,
                 cached_at_len: current_len,
             };
         }
@@ -329,6 +369,7 @@ impl EnergyTab {
                 4 => self.draw_psd_chart(frame, area, theme),
                 5 => self.draw_momentum_chart(frame, area, theme),
                 6 => self.draw_spectrogram(frame, area, theme),
+                7 => self.draw_symplecticity_chart(frame, area, theme),
                 _ => self.draw_psd_chart(frame, area, theme),
             }
             return;
@@ -352,6 +393,7 @@ impl EnergyTab {
         match self.selected_panel {
             5 => self.draw_momentum_chart(frame, bottom_right, theme),
             6 => self.draw_spectrogram(frame, bottom_right, theme),
+            7 => self.draw_symplecticity_chart(frame, bottom_right, theme),
             _ => self.draw_entropy_chart(frame, bottom_right, theme),
         }
     }
@@ -368,14 +410,13 @@ impl EnergyTab {
                 .config()
                 .map(|c| c.exit.energy_drift_tolerance)
                 .unwrap_or(0.5);
-            draw_single_series_with_threshold(
+            draw_energy_drift_with_regression(
                 frame,
                 area,
-                " ΔE/E₀ ",
                 &self.cached.energy_drift,
-                theme.chart[3],
+                self.cached.energy_drift_fit.as_ref(),
                 theme,
-                Some(threshold),
+                threshold,
                 &self.time_window,
                 self.show_grid,
                 self.exit_event_time
@@ -436,11 +477,18 @@ impl EnergyTab {
     }
 
     fn draw_mass_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let series: Vec<SeriesData> = vec![
+        let mut series: Vec<SeriesData> = vec![
             ("ΔE/E", &self.cached.abs_energy_drift, theme.chart[0]),
             ("ΔM/M", &self.cached.abs_mass_drift, theme.chart[1]),
             ("ΔC₂/C₂", &self.cached.abs_c2_drift, theme.chart[2]),
         ];
+        if !self.cached.symplecticity_error.is_empty() {
+            series.push((
+                "Sympl",
+                &self.cached.symplecticity_error,
+                theme.chart[7 % theme.chart.len()],
+            ));
+        }
         draw_multi_series_windowed(
             frame,
             area,
@@ -482,6 +530,61 @@ impl EnergyTab {
         );
     }
 
+    fn draw_symplecticity_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        if self.cached.symplecticity_error.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Symplecticity Error ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let color = theme.chart[7 % theme.chart.len()];
+
+        let (raw_x_min, raw_x_max, _, _) = data_bounds(&self.cached.symplecticity_error);
+        let (x_min, x_max) = self.time_window.apply(raw_x_min, raw_x_max);
+
+        let is_fit_all = self.time_window.t_end.is_none() && self.time_window.width.is_none();
+        let windowed: Vec<(f64, f64)> = if is_fit_all {
+            self.cached.symplecticity_error.clone()
+        } else {
+            self.cached
+                .symplecticity_error
+                .iter()
+                .copied()
+                .filter(|(x, _)| *x >= x_min && *x <= x_max)
+                .collect()
+        };
+
+        let plt_theme = phasma_theme_to_plt(theme);
+
+        let plot = LinePlot::new()
+            .series(
+                Series::new("Symplecticity Error")
+                    .data(windowed)
+                    .color(color),
+            )
+            .x_axis(
+                PltAxis::new()
+                    .bounds(Bounds::Manual(x_min, x_max))
+                    .grid(self.show_grid),
+            )
+            .y_axis(
+                PltAxis::new()
+                    .scale(Scale::Log(10.0))
+                    .grid(self.show_grid),
+            )
+            .reference_line(ReferenceLine::hline_dashed(1e-10, theme.warn))
+            .title(" Symplecticity Error ")
+            .show_legend(true)
+            .legend_position(LegendPosition::TopRight)
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
     fn draw_psd_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
         if self.cached.total_energy.len() < 8 {
             frame.render_widget(
@@ -493,67 +596,26 @@ impl EnergyTab {
             return;
         }
 
-        // Compute PSD of the total energy time series using FFT
+        // Extract signal and compute sample rate
         let n = self.cached.total_energy.len();
         let dt = if n >= 2 {
-            let t0 = self
-                .cached
-                .total_energy
-                .first()
-                .map(|(t, _)| *t)
-                .unwrap_or(0.0);
-            let tn = self
-                .cached
-                .total_energy
-                .last()
-                .map(|(t, _)| *t)
-                .unwrap_or(1.0);
+            let t0 = self.cached.total_energy.first().map(|(t, _)| *t).unwrap_or(0.0);
+            let tn = self.cached.total_energy.last().map(|(t, _)| *t).unwrap_or(1.0);
             (tn - t0) / (n - 1) as f64
         } else {
             1.0
         };
         let sample_rate = if dt > 0.0 { 1.0 / dt } else { 1.0 };
+        let signal: Vec<f64> = self.cached.total_energy.iter().map(|(_, e)| *e).collect();
 
-        // Remove mean and compute FFT
-        let mean: f64 = self.cached.total_energy.iter().map(|(_, e)| e).sum::<f64>() / n as f64;
-        let mut input: Vec<rustfft::num_complex::Complex<f64>> = self
-            .cached
-            .total_energy
-            .iter()
-            .map(|(_, e)| rustfft::num_complex::Complex::new(e - mean, 0.0))
-            .collect();
-
-        let mut planner = rustfft::FftPlanner::new();
-        let fft = planner.plan_fft_forward(n);
-        fft.process(&mut input);
-
-        // Compute one-sided PSD: |X(f)|² / (N * fs)
-        let n_half = n / 2 + 1;
-        let psd_data: Vec<(f64, f64)> = (1..n_half)
-            .filter_map(|i| {
-                let freq = i as f64 * sample_rate / n as f64;
-                let power = (input[i].norm_sqr()) / (n as f64 * sample_rate);
-                if freq > 0.0 && power > 0.0 {
-                    Some((freq, power))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if psd_data.len() < 2 {
-            frame.render_widget(
-                Block::bordered()
-                    .title(" PSD — Energy ")
-                    .border_style(Style::default().fg(theme.border)),
-                area,
-            );
-            return;
-        }
+        // Use ratatui-plt's Welch-method PSD (Hann-windowed, averaged segments)
+        let mut psd_series = ratatui_plt::fft::psd(&signal, sample_rate);
+        psd_series.name = "E(f)".into();
+        psd_series.color = theme.chart[0];
 
         let plt_theme = phasma_theme_to_plt(theme);
         let psd = PsdPlot::new()
-            .series(Series::new("E(f)").data(psd_data).color(theme.chart[0]))
+            .series(psd_series)
             .x_axis(PltAxis::new().label("frequency").scale(Scale::Log(10.0)))
             .y_axis(PltAxis::new().label("PSD").scale(Scale::Log(10.0)))
             .title(" PSD — Energy ")
@@ -652,6 +714,123 @@ fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
     }
     let ypad = (y_max - y_min) * 0.05;
     (x_min, x_max, y_min - ypad, y_max + ypad)
+}
+
+/// Draw energy drift chart with an optional linear regression trendline overlay.
+///
+/// When the drift series has >= 10 points and a regression fit is available,
+/// a dashed gray line is drawn showing the systematic drift rate, with the
+/// slope and R² value shown in the legend.
+fn draw_energy_drift_with_regression(
+    frame: &mut Frame,
+    area: Rect,
+    data: &[(f64, f64)],
+    drift_fit: Option<&CachedDriftFit>,
+    theme: &ThemeColors,
+    threshold: f64,
+    time_window: &TimeWindow,
+    show_grid: bool,
+    exit_event: Option<(f64, &str)>,
+) {
+    if data.is_empty() {
+        frame.render_widget(
+            Block::bordered()
+                .title(" ΔE/E₀ ")
+                .border_style(Style::default().fg(theme.border)),
+            area,
+        );
+        return;
+    }
+
+    let (raw_x_min, raw_x_max, y_min_raw, y_max_raw) = data_bounds(data);
+    let (x_min, x_max) = time_window.apply(raw_x_min, raw_x_max);
+
+    // Filter data to window
+    let windowed: Cow<'_, [(f64, f64)]> =
+        if time_window.t_end.is_none() && time_window.width.is_none() {
+            Cow::Borrowed(data)
+        } else {
+            Cow::Owned(
+                data.iter()
+                    .copied()
+                    .filter(|(x, _)| *x >= x_min && *x <= x_max)
+                    .collect(),
+            )
+        };
+    let (_, _, y_min, y_max) = if windowed.is_empty() {
+        (x_min, x_max, y_min_raw, y_max_raw)
+    } else {
+        data_bounds(&windowed)
+    };
+
+    // Expand y bounds to include threshold if close to the data range
+    let data_range = (y_max - y_min).abs().max(1e-15);
+    let data_center = (y_max + y_min) / 2.0;
+    let effective_threshold =
+        Some(threshold).filter(|&thr| (thr - data_center).abs() < data_range * 5.0);
+    let (y_min, y_max) = if let Some(thr) = effective_threshold {
+        (
+            y_min.min(thr - data_range * 0.05),
+            y_max.max(thr + data_range * 0.05),
+        )
+    } else {
+        (y_min, y_max)
+    };
+
+    let color = theme.chart[3];
+    let plt_theme = phasma_theme_to_plt(theme);
+
+    let drift_series = Series::new("ΔE/E₀")
+        .data(windowed.to_vec())
+        .color(color);
+
+    let mut plot = LinePlot::new()
+        .series(drift_series)
+        .x_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(x_min, x_max))
+                .grid(show_grid),
+        )
+        .y_axis(
+            PltAxis::new()
+                .bounds(Bounds::Manual(y_min, y_max))
+                .grid(show_grid),
+        )
+        .title(" ΔE/E₀ ")
+        .show_legend(true)
+        .legend_position(LegendPosition::TopRight)
+        .theme(plt_theme);
+
+    // Add regression trendline when available
+    if let Some(fit) = drift_fit {
+        // Clip the regression line endpoints to the current window
+        let fit_data: Vec<(f64, f64)> = vec![
+            (x_min, fit.slope * x_min + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
+            (x_max, fit.slope * x_max + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
+        ];
+        let fit_series = Series::new(format!("fit R²={:.4}", fit.r_squared))
+            .data(fit_data)
+            .color(Color::Gray)
+            .line_style(LineStyle::dashed());
+        plot = plot.series(fit_series);
+    }
+
+    // Add dashed threshold line
+    plot = plot.reference_line(ReferenceLine::hline_dashed(threshold, theme.warn));
+
+    // Add exit event annotation
+    if let Some((t, label)) = exit_event {
+        if t >= x_min && t <= x_max {
+            let y_val = windowed
+                .iter()
+                .min_by_key(|(x, _)| ((x - t).abs() * 1e9) as u64)
+                .map(|(_, y)| *y)
+                .unwrap_or((y_min + y_max) / 2.0);
+            plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn));
+        }
+    }
+
+    frame.render_widget(&plot, area);
 }
 
 fn draw_single_series_with_threshold(
