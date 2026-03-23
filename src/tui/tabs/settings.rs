@@ -299,7 +299,8 @@ impl SettingsTab {
             let mut upper_spans: Vec<Span> = Vec::with_capacity(bar_width);
             for i in 0..bar_width {
                 let t = i as f64 / (bar_width - 1).max(1) as f64;
-                let color = crate::colormaps::lookup(cur_cmap, t);
+                let cmap_plt = crate::tui::plt_bridge::phasma_cmap_to_plt(cur_cmap);
+                let color = ratatui_plt::colormap::Colormap::color_at(&cmap_plt, t);
                 upper_spans.push(Span::styled("█", Style::default().fg(color)));
             }
             lines.push(Line::from(vec![Span::raw("  ")]).patch_style(Style::default()));

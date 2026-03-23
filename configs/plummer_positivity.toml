@@ -1,0 +1,44 @@
+# Plummer — Positivity-preserving limiter
+#
+# 8^3 x 8^3 uniform grid.
+# Enables the positivity limiter which clips f < 0
+# after advection and truncation steps. Prevents
+# unphysical negative distribution function values
+# that can arise from interpolation or rank truncation.
+#
+# Watch F5 Energy for conservation impact of clipping.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+positivity_limiter = true
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_positivity"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

@@ -1,0 +1,51 @@
+# Plummer — HT Poisson solver
+#
+# 16^3 x 16^3 uniform grid.
+# Uses HtPoisson: solves Poisson equation in Hierarchical Tucker
+# format via exponential sum approximation of the Green's function.
+# The Green's function is decomposed as a sum of separable Gaussians,
+# each represented in HT format, enabling O(N k^3) Poisson solves.
+#
+# Watch F9 Poisson Detail for HT rank of the potential.
+# Watch F5 Energy for conservation.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 32.0
+velocity_extent = 16.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "ht_poisson"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[solver.ht]
+max_rank = 50
+tolerance = 1e-6
+
+[solver.exponential_sum]
+accuracy = 1e-6
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.01
+
+[output]
+directory = "output/plummer_ht_poisson"
+prefix = "run"
+snapshot_interval = 0.5
+
+[exit]
+energy_drift_tolerance = 100.0
+mass_drift_tolerance = 0.5

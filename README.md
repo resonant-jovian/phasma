@@ -1,27 +1,48 @@
 # phasma
 
-**Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov-Poisson solver.**
+**Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov–Poisson solver.**
 
 [![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
+[![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
+[![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
+> [!IMPORTANT]
+> Pre-0.1.0 — the interface and configuration format may change without notice. Until version 1.0.0 it should not be relied upon for production workloads.
 
 ---
 
-phasma is a terminal application built with [ratatui](https://ratatui.rs/) for setting up, running, and monitoring 6D Vlasov-Poisson simulations using the caustic solver library. It runs entirely in the terminal — over SSH, in tmux, on headless compute nodes.
+### Highlights
 
-It provides real-time density and phase-space heatmaps, energy conservation charts, radial profiles, performance dashboards, history scrubbing, batch execution, parameter sweeps, convergence studies, playback, comparison, and export — all without leaving the terminal.
+- **10 live TUI tabs** — density heatmaps, phase-space projections (all 9 x-v marginals), energy conservation, radial profiles, HT/TT rank evolution, performance breakdown, Poisson diagnostics
+- **14 execution modes** — interactive TUI, auto-run, batch (headless/HPC), playback, side-by-side comparison, live monitoring, parameter sweep, convergence study, regression testing, config wizard
+- **10 physical models** — Plummer, Hernquist, King, NFW, Zel'dovich pancake, mergers, tidal streams, exponential disk, uniform perturbation, custom 6D arrays
+- **7 Poisson solvers, 14 time integrators** — FFT (periodic + isolated), VGF, tensor, multigrid, spherical harmonics, Barnes-Hut tree; Strang/Yoshida/Lie splitting, unsplit RK2-4, BUG, Lawson, RKN6, and more
+- **LoMaC conservation** — optional mass/momentum/energy-preserving framework
+- **12 export formats** — CSV, JSON, Parquet, VTK, SVG, NumPy (.npy), Markdown report, animation frames, ZIP archive
+- **26 preset configs** — ready-to-run TOML files for every model and solver combination
+- **4 themes, 7 colormaps** — dark/light/solarized/gruvbox; viridis/inferno/plasma/magma/grayscale/cubehelix/coolwarm
+- **Responsive layout** — adapts to terminal size (compact 40x12, normal 80x24, wide 160x50+)
+- **HPC-ready** — headless batch mode with structured output for SLURM, PBS, or any job scheduler
 
-> **Note:** This application has not yet reached version 0.1.0. The interface and configuration format are unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+---
 
-## Installation
+## Contents
 
-### From crates.io
+- [For Everyone](#for-everyone) — What phasma does, install, TUI basics, keyboard controls
+- [For Researchers](#for-researchers) — Models, config, batch/sweep/convergence, presets, export, citation
+- [For Developers](#for-developers) — CLI, modes, keyboard detail, project structure, architecture
+- [Development](#development) | [License](#license)
 
-```bash
-cargo install phasma
-```
+---
 
-### From source
+## For Everyone
+
+phasma is a [ratatui](https://ratatui.rs/)-based terminal application for running and visualizing 6D Vlasov–Poisson simulations powered by the [caustic](https://github.com/resonant-jovian/caustic) solver library. It runs entirely in the terminal — over SSH, in tmux, on headless compute nodes — with real-time density and phase-space heatmaps, energy conservation charts, radial profiles, performance dashboards, history scrubbing, and export to 12 formats.
+
+### Install
+
+#### From source
 
 ```bash
 git clone https://github.com/resonant-jovian/phasma
@@ -30,20 +51,26 @@ cargo build --release
 ./target/release/phasma
 ```
 
-### Man page
+#### From crates.io
+
+```bash
+cargo install phasma
+```
+
+#### Man page
 
 ```bash
 phasma --generate-man > phasma.1
 sudo mv phasma.1 /usr/share/man/man1/
 ```
 
-### Dependencies
+#### Dependencies
 
+- **Rust 1.85+** (edition 2024)
 - **caustic** — the solver library, pulled automatically as a cargo dependency
-- **ratatui** + **crossterm** — terminal rendering (no external deps)
-- Rust 1.85+ (edition 2024)
+- **ratatui** + **crossterm** — terminal rendering (no external dependencies)
 
-## Quick start
+### Quick start
 
 ```bash
 # Launch the TUI — browse and load configs from the Setup tab
@@ -69,107 +96,41 @@ A minimal config:
 type = "plummer"
 ```
 
-All fields have sensible defaults. Smart defaults auto-fill boundary conditions, Poisson solver, domain extent, and t_final based on model type.
+> [!NOTE]
+> All fields have sensible defaults. Smart defaults auto-fill boundary conditions, Poisson solver, domain extent, and t_final based on model type.
 
-## Modes of operation
+### First run
 
-| Mode | Flag | Description |
-|---|---|---|
-| Interactive TUI | (default) | Browse configs, run, monitor live |
-| Auto-run | `--run` | Load config and start sim immediately |
-| Batch | `--batch` | Headless, saves to disk, suitable for HPC |
-| Playback | `--playback DIR` | Replay saved snapshots with scrubbing |
-| Comparison | `--compare DIR DIR` | Side-by-side two-run comparison |
-| Monitor | `--monitor DIR` | Watch a running batch job live |
-| Tail | `--tail DIR` | Like monitor, auto-advances |
-| Wizard | `--wizard` | Guided interactive config generation |
-| Sweep | `--sweep TOML` | Parameter sweep (Cartesian product) |
-| Convergence | `--convergence TOML` | Resolution convergence study |
-| Regression | `--regression-test DIR` | CI-compatible regression test (exit 0/1) |
-| Batch compare | `--batch-compare DIR...` | Markdown comparison report |
+Launch phasma with no arguments to enter the interactive TUI:
 
-## CLI reference
-
-| Flag | Argument | Description |
-|---|---|---|
-| `-c`, `--config` | `PATH` | Path to simulation config file (TOML) |
-| `--run` | — | Start simulation immediately |
-| `--batch` | — | Headless batch mode |
-| `-v`, `--verbose` | — | Detailed logging of every build step and per-step diagnostics. In batch mode prints to stderr; in TUI mode appears in the F2 log panel |
-| `--playback` | `DIR` | Replay saved snapshots in TUI |
-| `--compare` | `DIR DIR` | Side-by-side comparison of two runs |
-| `--sweep` | `TOML` | Parameter sweep |
-| `--convergence` | `TOML` | Convergence study |
-| `--regression-test` | `DIR` | Regression test (exit 0 on pass, 1 on fail) |
-| `--monitor` | `DIR` | Watch a batch job's output directory |
-| `--tail` | `DIR` | Like `--monitor`, auto-advances to latest |
-| `--wizard` | — | Interactive config wizard |
-| `--save-preset` | `NAME` | Save loaded config as a named preset |
-| `--batch-compare` | `DIR DIR [...]` | Markdown comparison report across runs |
-| `--report` | `PATH` | Output path for `--batch-compare` (default: `comparison_report.md`) |
-| `--generate-man` | — | Print roff man page to stdout |
-
-### Verbose mode
-
-`--verbose` / `-v` enables detailed logging during simulation startup and stepping:
-
-```
-  [verbose] Loading config from: configs/balanced.toml
-  [verbose] Config loaded: model=plummer, repr=uniform, poisson=fft_isolated, integrator=yoshida
-  [verbose] Domain: spatial_extent=10, velocity_extent=3, N_x=16, N_v=16
-  [verbose] Phase-space grid: 16^3 × 16^3 = 16777216 cells (128.0 MB)
-  [verbose] Boundary conditions: isolated|truncated
-  [verbose] Building domain...
-  [verbose] Domain built in 0.3 ms
-  [verbose] Building IC: model=plummer, M=1, a=1
-  [verbose] IC sampled in 1842.1 ms — 8388608 non-zero cells out of 16777216
-  [verbose] Building phase-space representation: uniform
-  [verbose] Representation built in 0.0 ms
-  [verbose] Building Poisson solver: fft_isolated
-  [verbose] Poisson solver built in 12.4 ms
-  [verbose] Building integrator: yoshida
-  [verbose] Assembling simulation: G=1, t_final=15, cfl=0.35, conservation=none
-  [verbose] Simulation assembled in 45.3 ms
-  [verbose] Exit conditions wired: 3 active (energy_drift_tol=0.5, mass_drift_tol=0.1)
-  [verbose] Build complete in 1902.8 ms
+```bash
+phasma
 ```
 
-In TUI mode these messages appear in the F2 Run Control tab log panel. Per-step verbose messages show step number, time, timestep, wall time, and energy drift.
+You land on the **Setup tab** (F1). Press `Ctrl+P` to open the preset selector, pick `plummer` (a good starting point), and press `Enter` to load it. The setup tab shows a structured summary of the loaded config, including a memory estimate.
 
-### Batch output directory layout
+Press `Space` to start the simulation. The run starts on a background thread and all tabs update in real time.
 
-```
-output/<prefix>_YYYYMMDD_HHMMSS/
-  config.toml          -- copy of input config
-  diagnostics.csv      -- time series (appended each step)
-  snapshots/
-    state_000000.json   -- periodic SimState snapshots
-    state_000001.json
-    ...
-    state_final.json    -- last state
-  metadata.json         -- version, timing, exit reason, snapshot count
-```
+### Navigating the TUI
 
-This directory is the input for `--playback`, `--monitor`, `--compare`, `--regression-test`, and `--batch-compare`.
+Switch between tabs using `F1`-`F10` or `Tab`/`Shift+Tab`:
 
-## TUI tabs
+| Tab | Key | What you see |
+|-----|-----|--------------|
+| Setup | F1 | Config browser, memory estimate, preset selector |
+| Run Control | F2 | Progress bar, density/phase-space thumbnails, energy chart, log stream |
+| Density | F3 | 2D projected density heatmap (xy/xz/yz), zoom, log scale |
+| Phase Space | F4 | All 9 x_i-v_j marginal projections |
+| Energy | F5 | Conservation time series: E(t), T(t), W(t), drift, mass, Casimir, entropy |
+| Rank | F6 | HT/TT rank evolution, singular value spectrum |
+| Profiles | F7 | Radial density, velocity dispersion, enclosed mass, circular velocity |
+| Performance | F8 | Step timing breakdown, timestep chart, memory usage |
+| Poisson | F9 | Residual, potential power spectrum |
+| Settings | F10 | Theme and colormap selector |
 
-| Tab | Key | Content |
-|---|---|---|
-| Setup | F1 | Config browser, structured config summary, memory estimate, preset selector (Ctrl+P) |
-| Run Control | F2 | Progress gauge, aspect-corrected density/phase-space thumbnails, energy chart, diagnostics sidebar, log stream |
-| Density | F3 | 2D projected density heatmap with aspect correction, axis selection (x/y/z), zoom, log scale, contour overlay |
-| Phase Space | F4 | f(x_i, v_j) marginal projections for all 9 dimension pairs, physical aspect ratio (default on, `p` to toggle), data cursor |
-| Energy | F5 | Conservation time series: E(t), T(t), W(t), drift, mass, Casimir, entropy — 4 panels |
-| Rank | F6 | HT/TT rank evolution, per-node table, singular value spectrum, truncation error (dimmed when repr=uniform) |
-| Profiles | F7 | Radial density, velocity dispersion, enclosed mass, circular velocity, anisotropy, Lagrangian radii, analytic overlays |
-| Performance | F8 | Step timing breakdown, adaptive timestep chart, memory breakdown, cumulative wall time |
-| Poisson | F9 | Poisson residual, potential power spectrum, Green's function detail (dimmed when poisson != fft_isolated) |
-| Settings | F10 | Theme and colormap selection |
+Use `Left`/`Right` arrows to scrub through simulation history. Press `Backspace` to jump back to live. Press `?` for the help overlay, `q` to quit.
 
-## Keyboard controls
-
-### Global
+### Keyboard controls
 
 | Key | Action |
 |---|---|
@@ -190,71 +151,67 @@ This directory is the input for `--playback`, `--monitor`, `--compare`, `--regre
 | `Ctrl+B` | Toggle bookmark panel |
 | `q` | Quit (with confirmation if sim is running) |
 
-### Run Control (F2)
+> [!TIP]
+> **Writing TOML configs?** See [For Researchers](#for-researchers) for the full config reference, models, and presets.
+> **Building on phasma?** See [For Developers](#for-developers) for the project structure, CLI reference, and architecture.
 
-| Key | Action |
-|---|---|
-| `p` / `Space` | Pause / resume |
-| `s` | Stop simulation |
-| `r` | Restart simulation |
-| `1`–`3` | Log filter: all / warn+ / error only |
+---
 
-### Density (F3)
+## For Researchers
 
-| Key | Action |
-|---|---|
-| `x` / `y` / `z` | Change projection axis |
-| `+` / `-` / scroll | Zoom in / out |
-| `r` | Reset zoom |
-| `l` | Toggle log scale |
-| `c` | Cycle colormap |
-| `i` | Toggle info bar |
+### Supported models
 
-### Phase Space (F4)
+| Model | Config key | Description |
+|---|---|---|
+| Plummer | `plummer` | Isotropic sphere with analytic DF, f(E) |
+| Hernquist | `hernquist` | Galaxy model with closed-form DF |
+| King | `king` | Tidally truncated (Poisson-Boltzmann ODE + RK4) |
+| NFW | `nfw` | Dark matter halo (numerical Eddington inversion) |
+| Zel'dovich | `zeldovich` | Single-mode cosmological pancake |
+| Merger | `merger` | Two-body superposition of equilibrium ICs |
+| Tidal | `tidal` | Progenitor in external host potential |
+| Disk | `disk_exponential` / `disk_stability` | Exponential disk with Shu DF and Toomre Q |
+| Uniform perturbation | `uniform_perturbation` | Perturbed Maxwellian (Jeans instability) |
+| Custom file | `custom_file` | User-provided 6D .npy array |
 
-| Key | Action |
-|---|---|
-| `1`–`3` | Select spatial dimension (x, y, z) |
-| `4`–`6` | Select velocity dimension (vx, vy, vz) |
-| `+` / `-` / scroll | Zoom in / out |
-| `r` / `0` | Reset zoom |
-| `l` | Toggle log scale |
-| `c` | Cycle colormap / comparison view |
-| `p` | Toggle physical aspect ratio (default on) |
-| `s` | Toggle stream-count overlay |
-| `i` | Toggle info bar |
+### Your first config
 
-### Energy (F5)
+Start from a preset and modify it. Create a file `my_sim.toml`:
 
-| Key | Action |
-|---|---|
-| `t` / `k` / `w` | Toggle traces: total / kinetic / potential |
-| `d` | Toggle drift view |
-| `1`–`4` | Select panel: energy, mass, Casimir, entropy |
+```toml
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
 
-### Profiles (F7)
+[domain]
+spatial_extent = 10.0
+velocity_extent = 3.0
+spatial_resolution = 16
+velocity_resolution = 16
+boundary = "isolated|truncated"
 
-| Key | Action |
-|---|---|
-| `1`–`5` | Select profile: density, dispersion, mass, v_circ, anisotropy |
-| `l` | Toggle log scale |
-| `a` | Toggle analytic overlay |
-| `b` | Adjust bin count |
+[solver]
+poisson = "fft_isolated"
+integrator = "yoshida"
 
-### Playback keys (when in playback mode)
+[time]
+t_final = 15.0
+cfl_factor = 0.35
+```
 
-| Key | Action |
-|---|---|
-| `[` / `]` | Step backward / forward one frame |
-| `{` / `}` | Jump 10 frames |
-| `Home` / `End` | Jump to start / end |
-| `<` / `>` | Decrease / increase playback speed |
+The three most important sections:
+- **`[model]`** — what you are simulating (type, mass, scale radius)
+- **`[domain]`** — the 6D box (spatial/velocity extent and resolution, boundary conditions)
+- **`[solver]`** — numerical methods (Poisson solver, time integrator, representation)
 
-## Config file reference
+The 26 preset files in `configs/` are good templates — copy one and adjust.
+
+### Config file reference
 
 All sections and fields are optional — sensible defaults are provided. The full config has 10 top-level sections.
 
-### `[domain]` — Simulation domain
+#### `[domain]` — Simulation domain
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -266,7 +223,8 @@ All sections and fields are optional — sensible defaults are provided. The ful
 | `coordinates` | string | `"cartesian"` | Coordinate system |
 | `gravitational_constant` | float | `1.0` | Value of G |
 
-Memory: `N_x^3 * N_v^3 * 8 bytes`. A 16^3 x 16^3 grid = 128 MB. A 32^3 x 32^3 grid = 8 GB.
+> [!TIP]
+> Memory: `N_x^3 * N_v^3 * 8 bytes`. A 16^3 x 16^3 grid = 128 MB. A 32^3 x 32^3 grid = 8 GB.
 
 ```toml
 [domain]
@@ -278,17 +236,13 @@ boundary = "isolated|truncated"
 gravitational_constant = 1.0
 ```
 
----
-
-### `[model]` — Initial conditions
+#### `[model]` — Initial conditions
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | `"plummer"` | IC model type |
 | `total_mass` | float | `1.0` | Total system mass |
 | `scale_radius` | float | `1.0` | Characteristic scale radius |
-
-#### Sub-tables for specific models
 
 **`[model.king]`** — Tidally truncated King model
 
@@ -359,9 +313,7 @@ gravitational_constant = 1.0
 | `file_path` | yes | Path to .npy file |
 | `format` | yes | `"npy"` |
 
----
-
-### `[solver]` — Numerical methods
+#### `[solver]` — Numerical methods
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -371,7 +323,7 @@ gravitational_constant = 1.0
 | `integrator` | string | `"strang"` | Time integrator |
 | `conservation` | string | `"none"` | Conservation scheme |
 
-#### Phase-space representations
+**Phase-space representations**
 
 | Value | Description | Memory |
 |---|---|---|
@@ -383,7 +335,7 @@ gravitational_constant = 1.0
 | `amr` | Adaptive mesh refinement | varies |
 | `hybrid` | Sheet/grid hybrid | varies |
 
-#### Poisson solvers
+**Poisson solvers**
 
 | Value | Description | BC |
 |---|---|---|
@@ -395,7 +347,7 @@ gravitational_constant = 1.0
 | `spherical` / `spherical_harmonics` | Legendre decomposition + radial ODE | spherical |
 | `tree` / `barnes_hut` | Barnes-Hut octree | isolated |
 
-#### Time integrators
+**Time integrators**
 
 | Value | Order | Sub-steps | Description |
 |---|---|---|---|
@@ -408,13 +360,13 @@ gravitational_constant = 1.0
 | `rkei` | 3rd | 3 | SSP-RK3 exponential integrator (unsplit) |
 | `adaptive` / `adaptive_strang` | 2nd | 3 | Strang with adaptive timestep control |
 | `blanes_moan` / `bm4` | 4th | — | Blanes-Moan optimized splitting |
-| `rkn6` | 6th | — | 6th-order Runge-Kutta-Nyström splitting |
+| `rkn6` | 6th | — | 6th-order Runge-Kutta-Nystrom splitting |
 | `bug` | varies | — | Basis Update & Galerkin (BUG) for HT tensors |
 | `rk_bug` / `rk_bug3` | varies | — | Runge-Kutta BUG variant |
 | `parallel_bug` / `pbug` | varies | — | Parallelized BUG |
 | `lawson` / `lawson_rk4` | varies | — | Lawson Runge-Kutta exponential integrator |
 
-#### HT/TT solver options `[solver.ht]`
+**HT/TT solver options `[solver.ht]`**
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -431,9 +383,7 @@ integrator = "yoshida"
 conservation = "none"         # or "lomac" for mass/momentum/energy conservation
 ```
 
----
-
-### `[time]` — Time stepping
+#### `[time]` — Time stepping
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -444,9 +394,7 @@ conservation = "none"         # or "lomac" for mass/momentum/energy conservation
 | `dt_min` | float | `1e-6` | Minimum timestep (adaptive) |
 | `dt_max` | float | `1.0` | Maximum timestep (adaptive) |
 
----
-
-### `[output]` — Output settings
+#### `[output]` — Output settings
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -457,11 +405,10 @@ conservation = "none"         # or "lomac" for mass/momentum/energy conservation
 | `diagnostics_interval` | float | `0.1` | Time between diagnostics rows |
 | `format` | string | `"binary"` | Snapshot format |
 
----
+#### `[exit]` — Termination conditions
 
-### `[exit]` — Termination conditions
-
-The simulation exits when **any** enabled condition triggers.
+> [!IMPORTANT]
+> The simulation exits when **any** enabled condition triggers.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -476,9 +423,7 @@ The simulation exits when **any** enabled condition triggers.
 | `casimir_drift_tolerance` | float | `0.0` | Max Casimir drift (0 = disabled) |
 | `caustic_formation` | bool | `false` | Exit when first caustic forms |
 
----
-
-### `[performance]` — Performance tuning
+#### `[performance]` — Performance tuning
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -487,9 +432,7 @@ The simulation exits when **any** enabled condition triggers.
 | `simd` | bool | `true` | Enable SIMD |
 | `allocator` | string | `"system"` | `"system"`, `"jemalloc"`, `"mimalloc"` |
 
----
-
-### `[playback]` — Playback settings
+#### `[playback]` — Playback settings
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -497,9 +440,7 @@ The simulation exits when **any** enabled condition triggers.
 | `fps` | float | `10.0` | Playback frames per second |
 | `loop_playback` | bool | `false` | Loop at end |
 
----
-
-### `[logging]` — Logging
+#### `[logging]` — Logging
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -507,9 +448,7 @@ The simulation exits when **any** enabled condition triggers.
 | `file` | string | none | Log file path |
 | `structured` | bool | `false` | Structured JSON logging |
 
----
-
-### `[appearance]` — TUI appearance
+#### `[appearance]` — TUI appearance
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -521,67 +460,37 @@ The simulation exits when **any** enabled condition triggers.
 | `min_columns` | integer | `80` | Minimum terminal width |
 | `min_rows` | integer | `24` | Minimum terminal height |
 
-## Preset configurations
+### Batch simulations
 
-phasma ships with 26 preset TOML configurations in `configs/`:
+For long or headless runs, use `--batch`:
 
-### Plummer sphere variants
+```bash
+phasma --config my_sim.toml --batch
+```
 
-| Preset | Grid | Integrator/Solver | Notes |
-|---|---|---|---|
-| `plummer` | 16^3 x 16^3 | Strang | Default Plummer starting point |
-| `plummer_64` | 16^3 x 16^3 | Strang | 64-cell spatial grid variant |
-| `plummer_128` | 16^3 x 16^3 | Strang | 128-cell spatial grid variant |
-| `plummer_hires` | 32^3 x 32^3 | Yoshida | High-resolution (~8 GB) |
-| `plummer_yoshida` | 16^3 x 16^3 | Yoshida | 4th-order integrator comparison |
-| `plummer_unsplit` | 16^3 x 16^3 | Unsplit RK4 | Method-of-lines integrator |
+This runs without a TUI and writes structured output:
 
-### Advanced representations
+```
+output/<prefix>_YYYYMMDD_HHMMSS/
+  config.toml          -- copy of input config
+  diagnostics.csv      -- time series (appended each step)
+  snapshots/
+    state_000000.json   -- periodic SimState snapshots
+    state_000001.json
+    ...
+    state_final.json    -- last state
+  metadata.json         -- version, timing, exit reason, snapshot count
+```
 
-| Preset | Model | Solver | Notes |
-|---|---|---|---|
-| `plummer_ht` | Plummer | HT tensor | Hierarchical Tucker compressed |
-| `plummer_tt` | Plummer | TT decomposition | Tensor-train representation |
-| `plummer_spectral` | Plummer | Spectral velocity | Hermite velocity basis |
-| `plummer_lomac` | Plummer | LoMaC conservation | Mass/momentum/energy preserving |
+Replay a batch run in the TUI:
 
-### Alternative Poisson solvers
+```bash
+phasma --playback output/run_20260310_143022/
+```
 
-| Preset | Model | Poisson solver | Notes |
-|---|---|---|---|
-| `plummer_tensor_poisson` | Plummer | Exp-sum tensor | Braess-Hackbusch isolated |
-| `plummer_multigrid` | Plummer | V-cycle multigrid | Red-black Gauss-Seidel |
-| `plummer_spherical` | Plummer | Spherical harmonics | Legendre + radial ODE |
-| `nfw_tree` | NFW | Barnes-Hut tree | Octree gravity |
+### Parameter sweeps and convergence studies
 
-### Other equilibrium models
-
-| Preset | Model | Notes |
-|---|---|---|
-| `hernquist` | Hernquist | Galaxy model |
-| `king` | King (W0=6) | Tidally truncated equilibrium |
-| `nfw` | NFW (c=10) | Dark matter halo |
-
-### Multi-body and cosmological
-
-| Preset | Model | Notes |
-|---|---|---|
-| `merger_equal` | 2x Plummer (equal mass) | Head-on collision |
-| `merger_unequal` | 2x Plummer (3:1) | Unequal mass ratio |
-| `zeldovich` | Zel'dovich | Caustic formation |
-| `disk_bar` | Exponential disk | Disk stability (Toomre Q) |
-| `tidal_point` | Tidal Plummer | Point-mass host stream generation |
-| `tidal_nfw` | Tidal + NFW host | NFW host potential |
-
-### Stability and testing
-
-| Preset | Notes |
-|---|---|
-| `jeans_unstable` | Gravitational instability growth rate |
-| `jeans_stable` | Stable mode (should not grow) |
-| `debug` | Minimal 4^3 x 4^3 grid for debugging |
-
-## Sweep config
+**Sweep** — run every combination in a Cartesian product of parameter values:
 
 ```toml
 base_config = "configs/balanced.toml"
@@ -595,9 +504,11 @@ parameters = ["domain.spatial_resolution", "solver.integrator"]
 "solver.integrator" = ["strang", "yoshida"]
 ```
 
-Runs a batch simulation for every combination in the Cartesian product. Parameter paths use dot notation matching the config structure.
+```bash
+phasma --sweep sweep.toml
+```
 
-## Convergence config
+**Convergence study** — run at increasing resolutions and compute convergence rates:
 
 ```toml
 base_config = "configs/balanced.toml"
@@ -609,24 +520,94 @@ velocity_scale = true
 metrics = ["energy_drift", "mass_drift"]
 ```
 
-Runs at increasing resolutions and computes convergence rates as `log2(error_N / error_2N)`.
+```bash
+phasma --convergence convergence.toml
+```
 
-## Supported models
+Convergence rates are computed as `log2(error_N / error_2N)`.
 
-| Model | Config key | Description |
+### Monitoring and comparison
+
+Watch a running batch job live:
+
+```bash
+phasma --monitor output/run_20260310_143022/   # manual refresh
+phasma --tail output/run_20260310_143022/      # auto-advances to latest
+```
+
+Compare two completed runs side-by-side:
+
+```bash
+phasma --compare output/run_A/ output/run_B/
+```
+
+Generate a markdown comparison report across multiple runs:
+
+```bash
+phasma --batch-compare output/run_A/ output/run_B/ output/run_C/ --report comparison.md
+```
+
+### Preset configurations
+
+phasma ships with 26 preset TOML configurations in `configs/`:
+
+#### Plummer sphere variants
+
+| Preset | Grid | Integrator/Solver | Notes |
+|---|---|---|---|
+| `plummer` | 16^3 x 16^3 | Strang | Default Plummer starting point |
+| `plummer_64` | 16^3 x 16^3 | Strang | 64-cell spatial grid variant |
+| `plummer_128` | 16^3 x 16^3 | Strang | 128-cell spatial grid variant |
+| `plummer_hires` | 32^3 x 32^3 | Yoshida | High-resolution (~8 GB) |
+| `plummer_yoshida` | 16^3 x 16^3 | Yoshida | 4th-order integrator comparison |
+| `plummer_unsplit` | 16^3 x 16^3 | Unsplit RK4 | Method-of-lines integrator |
+
+#### Advanced representations
+
+| Preset | Model | Solver | Notes |
+|---|---|---|---|
+| `plummer_ht` | Plummer | HT tensor | Hierarchical Tucker compressed |
+| `plummer_tt` | Plummer | TT decomposition | Tensor-train representation |
+| `plummer_spectral` | Plummer | Spectral velocity | Hermite velocity basis |
+| `plummer_lomac` | Plummer | LoMaC conservation | Mass/momentum/energy preserving |
+
+#### Alternative Poisson solvers
+
+| Preset | Model | Poisson solver | Notes |
+|---|---|---|---|
+| `plummer_tensor_poisson` | Plummer | Exp-sum tensor | Braess-Hackbusch isolated |
+| `plummer_multigrid` | Plummer | V-cycle multigrid | Red-black Gauss-Seidel |
+| `plummer_spherical` | Plummer | Spherical harmonics | Legendre + radial ODE |
+| `nfw_tree` | NFW | Barnes-Hut tree | Octree gravity |
+
+#### Other equilibrium models
+
+| Preset | Model | Notes |
 |---|---|---|
-| Plummer | `plummer` | Isotropic sphere with analytic DF, f(E) |
-| Hernquist | `hernquist` | Galaxy model with closed-form DF |
-| King | `king` | Tidally truncated (Poisson-Boltzmann ODE + RK4) |
-| NFW | `nfw` | Dark matter halo (numerical Eddington inversion) |
-| Zel'dovich | `zeldovich` | Single-mode cosmological pancake |
-| Merger | `merger` | Two-body superposition of equilibrium ICs |
-| Tidal | `tidal` | Progenitor in external host potential |
-| Disk | `disk_exponential` / `disk_stability` | Exponential disk with Shu DF and Toomre Q |
-| Uniform perturbation | `uniform_perturbation` | Perturbed Maxwellian (Jeans instability) |
-| Custom file | `custom_file` | User-provided 6D .npy array |
+| `hernquist` | Hernquist | Galaxy model |
+| `king` | King (W0=6) | Tidally truncated equilibrium |
+| `nfw` | NFW (c=10) | Dark matter halo |
 
-## Export formats
+#### Multi-body and cosmological
+
+| Preset | Model | Notes |
+|---|---|---|
+| `merger_equal` | 2x Plummer (equal mass) | Head-on collision |
+| `merger_unequal` | 2x Plummer (3:1) | Unequal mass ratio |
+| `zeldovich` | Zel'dovich | Caustic formation |
+| `disk_bar` | Exponential disk | Disk stability (Toomre Q) |
+| `tidal_point` | Tidal Plummer | Point-mass host stream generation |
+| `tidal_nfw` | Tidal + NFW host | NFW host potential |
+
+#### Stability and testing
+
+| Preset | Notes |
+|---|---|
+| `jeans_unstable` | Gravitational instability growth rate |
+| `jeans_stable` | Stable mode (should not grow) |
+| `debug` | Minimal 4^3 x 4^3 grid for debugging |
+
+### Export formats
 
 Press `e` to open the export menu:
 
@@ -645,7 +626,168 @@ Press `e` to open the export menu:
 | `a` | Parquet performance | Step timing data |
 | `z` | ZIP archive | Everything: config, diagnostics, snapshots, scripts |
 
-## Layout modes
+### Companion: caustic
+
+[caustic](https://github.com/resonant-jovian/caustic) is the solver library that powers phasma. It provides the 6D Vlasov–Poisson simulation engine, phase-space representations, Poisson solvers, time integrators, IC generators, diagnostics, and the LoMaC conservation framework. phasma contains no solver logic — it constructs a `caustic::Simulation` from config and renders live diagnostics.
+
+### Citation
+
+```bibtex
+@software{phasma,
+  title  = {phasma: Terminal interface for the caustic Vlasov-Poisson solver},
+  url    = {https://github.com/resonant-jovian/phasma},
+  year   = {2026}
+}
+```
+
+---
+
+## For Developers
+
+### Modes of operation
+
+| Mode | Flag | Description |
+|---|---|---|
+| Interactive TUI | (default) | Browse configs, run, monitor live |
+| Auto-run | `--run` | Load config and start sim immediately |
+| Batch | `--batch` | Headless, saves to disk, suitable for HPC |
+| Playback | `--playback DIR` | Replay saved snapshots with scrubbing |
+| Comparison | `--compare DIR DIR` | Side-by-side two-run comparison |
+| Monitor | `--monitor DIR` | Watch a running batch job live |
+| Tail | `--tail DIR` | Like monitor, auto-advances |
+| Wizard | `--wizard` | Guided interactive config generation |
+| Sweep | `--sweep TOML` | Parameter sweep (Cartesian product) |
+| Convergence | `--convergence TOML` | Resolution convergence study |
+| Regression | `--regression-test DIR` | CI-compatible regression test (exit 0/1) |
+| Batch compare | `--batch-compare DIR...` | Markdown comparison report |
+
+### CLI reference
+
+| Flag | Argument | Description |
+|---|---|---|
+| `-c`, `--config` | `PATH` | Path to simulation config file (TOML) |
+| `--run` | — | Start simulation immediately |
+| `--batch` | — | Headless batch mode |
+| `-v`, `--verbose` | — | Detailed logging of every build step and per-step diagnostics |
+| `--playback` | `DIR` | Replay saved snapshots in TUI |
+| `--compare` | `DIR DIR` | Side-by-side comparison of two runs |
+| `--sweep` | `TOML` | Parameter sweep |
+| `--convergence` | `TOML` | Convergence study |
+| `--regression-test` | `DIR` | Regression test (exit 0 on pass, 1 on fail) |
+| `--monitor` | `DIR` | Watch a batch job's output directory |
+| `--tail` | `DIR` | Like `--monitor`, auto-advances to latest |
+| `--wizard` | — | Interactive config wizard |
+| `--save-preset` | `NAME` | Save loaded config as a named preset |
+| `--batch-compare` | `DIR DIR [...]` | Markdown comparison report across runs |
+| `--report` | `PATH` | Output path for `--batch-compare` (default: `comparison_report.md`) |
+| `--generate-man` | — | Print roff man page to stdout |
+
+### Verbose mode
+
+`--verbose` / `-v` enables detailed logging during simulation startup and stepping:
+
+```
+  [verbose] Loading config from: configs/balanced.toml
+  [verbose] Config loaded: model=plummer, repr=uniform, poisson=fft_isolated, integrator=yoshida
+  [verbose] Domain: spatial_extent=10, velocity_extent=3, N_x=16, N_v=16
+  [verbose] Phase-space grid: 16^3 x 16^3 = 16777216 cells (128.0 MB)
+  [verbose] Boundary conditions: isolated|truncated
+  [verbose] Building domain...
+  [verbose] Domain built in 0.3 ms
+  [verbose] Building IC: model=plummer, M=1, a=1
+  [verbose] IC sampled in 1842.1 ms — 8388608 non-zero cells out of 16777216
+  [verbose] Building phase-space representation: uniform
+  [verbose] Representation built in 0.0 ms
+  [verbose] Building Poisson solver: fft_isolated
+  [verbose] Poisson solver built in 12.4 ms
+  [verbose] Building integrator: yoshida
+  [verbose] Assembling simulation: G=1, t_final=15, cfl=0.35, conservation=none
+  [verbose] Simulation assembled in 45.3 ms
+  [verbose] Exit conditions wired: 3 active (energy_drift_tol=0.5, mass_drift_tol=0.1)
+  [verbose] Build complete in 1902.8 ms
+```
+
+In TUI mode these messages appear in the F2 Run Control tab log panel.
+
+### Keyboard controls (per-tab)
+
+#### Run Control (F2)
+
+| Key | Action |
+|---|---|
+| `p` / `Space` | Pause / resume |
+| `s` | Stop simulation |
+| `r` | Restart simulation |
+| `1`–`3` | Log filter: all / warn+ / error only |
+
+#### Density (F3)
+
+| Key | Action |
+|---|---|
+| `x` / `y` / `z` | Change projection axis |
+| `+` / `-` / scroll | Zoom in / out |
+| `r` | Reset zoom |
+| `l` | Toggle log scale |
+| `c` | Cycle colormap |
+| `i` | Toggle info bar |
+
+#### Phase Space (F4)
+
+| Key | Action |
+|---|---|
+| `1`–`3` | Select spatial dimension (x, y, z) |
+| `4`–`6` | Select velocity dimension (vx, vy, vz) |
+| `+` / `-` / scroll | Zoom in / out |
+| `r` / `0` | Reset zoom |
+| `l` | Toggle log scale |
+| `c` | Cycle colormap / comparison view |
+| `p` | Toggle physical aspect ratio (default on) |
+| `s` | Toggle stream-count overlay |
+| `i` | Toggle info bar |
+
+#### Energy (F5)
+
+| Key | Action |
+|---|---|
+| `t` / `k` / `w` | Toggle traces: total / kinetic / potential |
+| `d` | Toggle drift view |
+| `1`–`4` | Select panel: energy, mass, Casimir, entropy |
+
+#### Profiles (F7)
+
+| Key | Action |
+|---|---|
+| `1`–`5` | Select profile: density, dispersion, mass, v_circ, anisotropy |
+| `l` | Toggle log scale |
+| `a` | Toggle analytic overlay |
+| `b` | Adjust bin count |
+
+#### Playback
+
+| Key | Action |
+|---|---|
+| `[` / `]` | Step backward / forward one frame |
+| `{` / `}` | Jump 10 frames |
+| `Home` / `End` | Jump to start / end |
+| `<` / `>` | Decrease / increase playback speed |
+
+### Batch output layout
+
+```
+output/<prefix>_YYYYMMDD_HHMMSS/
+  config.toml          -- copy of input config
+  diagnostics.csv      -- time series (appended each step)
+  snapshots/
+    state_000000.json   -- periodic SimState snapshots
+    state_000001.json
+    ...
+    state_final.json    -- last state
+  metadata.json         -- version, timing, exit reason, snapshot count
+```
+
+This directory is the input for `--playback`, `--monitor`, `--compare`, `--regression-test`, and `--batch-compare`.
+
+### Layout modes
 
 phasma adapts to terminal size:
 
@@ -657,7 +799,7 @@ phasma adapts to terminal size:
 
 Panels below minimum size show a "(too small)" placeholder.
 
-## Project structure
+### Project structure
 
 ```
 phasma/
@@ -674,9 +816,9 @@ phasma/
     ├── config/
     │   ├── mod.rs              # PhasmaConfig schema (serde, all sections)
     │   ├── defaults.rs         # Memory estimation, smart defaults
-    │   ├── presets.rs           # Preset save/load
-    │   ├── validate.rs          # Config validation
-    │   └── history.rs           # Recent config tracking
+    │   ├── presets.rs          # Preset save/load
+    │   ├── validate.rs         # Config validation
+    │   └── history.rs          # Recent config tracking
     ├── runner/
     │   ├── batch.rs            # Headless batch runner
     │   ├── wizard.rs           # Interactive config wizard
@@ -708,11 +850,9 @@ phasma/
     └── session.rs              # Session state persistence
 ```
 
-## Relationship to caustic
+### Relationship to caustic
 
 phasma is a **consumer** of the caustic library. It provides no solver logic — it constructs a `caustic::Simulation` from user input, runs it on a background thread, and renders live diagnostics.
-
-**`caustic` (lib)** <-- depends on <-- **`phasma` (bin)**
 
 | caustic provides | phasma provides |
 |---|---|
@@ -755,16 +895,62 @@ while let Ok(None) = sim.step() {
 }
 ```
 
+> [!NOTE]
+> **Code quality**: `warnings = "forbid"` — all rustc warnings are hard errors. `clippy::unwrap_used`, `expect_used`, `panic` = `"deny"` in non-test code.
+
+---
+
+## Development
+
+`dev.sh` provides unified commands for testing, benchmarking, and profiling:
+
+```bash
+./dev.sh doctor                      # check all prerequisites, show install commands
+./dev.sh test                        # run all tests (debug, parallel)
+./dev.sh test --release              # run in release mode
+./dev.sh test --all                  # test both phasma and caustic
+./dev.sh bench                       # run caustic benchmarks (from here)
+./dev.sh profile flamegraph          # generate flamegraph SVG
+./dev.sh profile tracy               # build with Tracy, run
+./dev.sh profile dhat                # heap profiling
+./dev.sh profile samply              # samply record (browser UI)
+./dev.sh build --fast                # fast-release profile build
+./dev.sh build --profiling           # release + debug symbols
+./dev.sh lint                        # clippy + fmt --check
+./dev.sh info                        # show project info, features, profiles
+```
+
+<details>
+<summary>Prerequisites</summary>
+
+```bash
+# Cargo tools
+cargo install flamegraph samply
+
+# System packages (Arch Linux)
+sudo pacman -S --needed perf valgrind heaptrack kcachegrind massif-visualizer
+
+# Optional: Tracy profiler (AUR)
+yay -S tracy
+```
+
+**Ubuntu / Debian:**
+
+```bash
+cargo install flamegraph samply
+sudo apt install linux-tools-common linux-tools-$(uname -r) valgrind heaptrack kcachegrind massif-visualizer
+```
+
+Run `./dev.sh doctor` to check which tools are installed.
+
+</details>
+
+---
+
+## Minimum supported Rust version
+
+Rust edition 2024, targeting **stable Rust 1.85+**.
+
 ## License
 
 GNU General Public License v3.0. See [LICENSE](LICENSE).
-
-## Citation
-
-```bibtex
-@software{phasma,
-  title  = {phasma: Terminal interface for the caustic Vlasov-Poisson solver},
-  url    = {https://github.com/resonant-jovian/phasma},
-  year   = {2026}
-}
-```

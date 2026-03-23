@@ -4,16 +4,19 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    symbols,
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Cell, Chart, Dataset, Paragraph, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
+use ratatui_plt::prelude::{
+    Axis as PltAxis, LinePlot, ReferenceLine, Scale, Series, StemPlot, TwinAxes,
+};
+use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
 use crate::tui::action::Action;
-use crate::tui::chart_utils::{data_bounds, densify};
+use crate::tui::plt_bridge::{format_size, phasma_theme_to_plt};
 
 const NODE_LABELS: [&str; 11] = [
     "x\u{2081}",
@@ -44,6 +47,14 @@ struct CachedRankData {
     at_len: usize,
 }
 
+/// Cached chart data for diagnostics-sourced series (rank growth rate, SVD count, HTACA evals).
+struct CachedDiagData {
+    rank_growth_rate: Vec<(f64, f64)>,
+    svd_count: Vec<(f64, f64)>,
+    htaca_evaluations: Vec<(f64, f64)>,
+    at_len: usize,
+}
+
 impl Default for CachedRankData {
     fn default() -> Self {
         Self {
@@ -55,6 +66,17 @@ impl Default for CachedRankData {
             x_max: 1.0,
             y_min: 0.0,
             y_max: 1.0,
+            at_len: usize::MAX,
+        }
+    }
+}
+
+impl Default for CachedDiagData {
+    fn default() -> Self {
+        Self {
+            rank_growth_rate: Vec::new(),
+            svd_count: Vec::new(),
+            htaca_evaluations: Vec::new(),
             at_len: usize::MAX,
         }
     }
@@ -76,6 +98,8 @@ pub struct RankTab {
     selected_node: usize,
     /// Cached chart data (rebuilt when history length changes).
     cached_rank: CachedRankData,
+    /// Cached diagnostics-sourced chart data (rank growth rate, SVD count, HTACA evals).
+    cached_diag: CachedDiagData,
 }
 
 impl Default for RankTab {
@@ -88,8 +112,39 @@ impl Default for RankTab {
             last_step: u64::MAX,
             selected_node: 0,
             cached_rank: CachedRankData::default(),
+            cached_diag: CachedDiagData::default(),
         }
     }
+}
+
+/// Compute data bounds with 5% y-padding.
+fn data_bounds(data: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    for &(x, y) in data {
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
+    }
+    if x_min >= x_max {
+        x_max = x_min + 1.0;
+    }
+    if y_min >= y_max {
+        y_max = y_min + 1.0;
+    }
+    let ypad = (y_max - y_min) * 0.05;
+    (x_min, x_max, y_min - ypad, y_max + ypad)
 }
 
 impl RankTab {
@@ -187,22 +242,16 @@ impl RankTab {
             } else {
                 (0.0, 1.0, 0.0, 1.0)
             };
+            // Store raw values — TwinAxes handles dual scaling
             let trunc_data: Vec<(f64, f64)> = self
                 .trunc_error_history
                 .iter()
                 .filter(|&&(_, e)| e > 0.0)
-                .map(|&(t, e)| (t, e.log10() * 10.0 + y_max))
+                .copied()
                 .collect();
-            let poisson_amp: Vec<(f64, f64)> = self
-                .poisson_amp_history
-                .iter()
-                .map(|&(t, a)| (t, a * y_max / 2.0))
-                .collect();
-            let advection_amp: Vec<(f64, f64)> = self
-                .advection_amp_history
-                .iter()
-                .map(|&(t, a)| (t, a * y_max / 2.0))
-                .collect();
+            let poisson_amp: Vec<(f64, f64)> = self.poisson_amp_history.iter().copied().collect();
+            let advection_amp: Vec<(f64, f64)> =
+                self.advection_amp_history.iter().copied().collect();
             self.cached_rank = CachedRankData {
                 chart_data,
                 trunc_data,
@@ -216,27 +265,56 @@ impl RankTab {
             };
         }
 
+        // Rebuild cached diagnostics data when new data arrives
+        let diag = data_provider.diagnostics();
+        let diag_len = diag.rank_growth_rate.len()
+            + diag.svd_count.len()
+            + diag.htaca_evaluations.len();
+        if diag_len != self.cached_diag.at_len {
+            self.cached_diag = CachedDiagData {
+                rank_growth_rate: diag.rank_growth_rate.iter_chart_data(),
+                svd_count: diag.svd_count.iter_chart_data(),
+                htaca_evaluations: diag.htaca_evaluations.iter_chart_data(),
+                at_len: diag_len,
+            };
+        }
+
         // Compact mode: show only rank evolution chart
         if area.width < 76 {
             self.draw_rank_evolution(frame, area, theme);
             return;
         }
 
-        // Layout: top row (evolution chart + table) and bottom row (bar chart + SV spectrum).
-        let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+        // Layout: top row (evolution chart + table), middle row (bar chart + SV spectrum),
+        // bottom row (rank growth rate + SVD count + HTACA evaluations).
+        let [top, middle, bottom] = Layout::vertical([
+            Constraint::Percentage(38),
+            Constraint::Percentage(32),
+            Constraint::Percentage(30),
+        ])
+        .areas(area);
 
         let [top_left, top_right] =
             Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top);
 
-        let [bottom_left, bottom_right] =
+        let [mid_left, mid_right] =
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .areas(bottom);
+                .areas(middle);
+
+        let [bot_left, bot_center, bot_right] = Layout::horizontal([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .areas(bottom);
 
         self.draw_rank_evolution(frame, top_left, theme);
         self.draw_per_node_table(frame, top_right, theme, state);
-        self.draw_rank_bars(frame, bottom_left, theme, state);
-        self.draw_sv_spectrum(frame, bottom_right, theme, state);
+        self.draw_rank_bars(frame, mid_left, theme, state);
+        self.draw_sv_spectrum(frame, mid_right, theme, state);
+        self.draw_rank_growth_rate(frame, bot_left, theme);
+        self.draw_svd_count(frame, bot_center, theme);
+        self.draw_htaca_evaluations(frame, bot_right, theme);
     }
 
     // ── Panels ──────────────────────────────────────────────────────────
@@ -295,11 +373,10 @@ impl RankTab {
     }
 
     fn draw_rank_evolution(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
-        let block = Block::bordered()
-            .title(" Rank Evolution ")
-            .border_style(Style::default().fg(theme.border));
-
         if self.cached_rank.chart_data.len() < 2 {
+            let block = Block::bordered()
+                .title(" Rank Evolution ")
+                .border_style(Style::default().fg(theme.border));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -312,75 +389,64 @@ impl RankTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = (
-            self.cached_rank.x_min,
-            self.cached_rank.x_max,
-            self.cached_rank.y_min,
-            self.cached_rank.y_max,
-        );
+        let plt_theme = phasma_theme_to_plt(theme);
 
-        let target = area.width.saturating_sub(2) as usize * 2;
-        let dense = densify(&self.cached_rank.chart_data, target);
-        let dense_trunc = densify(&self.cached_rank.trunc_data, target);
+        // Use TwinAxes: primary (left) = total rank, secondary (right) = truncation error + amplifications
+        let has_secondary = self.cached_rank.trunc_data.len() >= 2
+            || self.cached_rank.poisson_amp.len() >= 2
+            || self.cached_rank.advection_amp.len() >= 2;
 
-        let mut datasets = vec![
-            Dataset::default()
-                .name("total rank")
-                .marker(symbols::Marker::Braille)
-                .style(Style::default().fg(theme.chart[0]))
-                .data(&dense),
-        ];
+        if has_secondary {
+            let mut twin = TwinAxes::new()
+                .primary(
+                    Series::new("total rank")
+                        .data(self.cached_rank.chart_data.clone())
+                        .color(theme.chart[0]),
+                )
+                .x_axis(PltAxis::new().label("t"))
+                .primary_y_axis(PltAxis::new().label("rank"))
+                .secondary_y_axis(PltAxis::new().label("ε / amp").scale(Scale::Log(10.0)))
+                .title(" Rank Evolution ")
+                .theme(plt_theme);
 
-        if dense_trunc.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("ε_trunc")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[2]))
-                    .data(&dense_trunc),
-            );
+            if self.cached_rank.trunc_data.len() >= 2 {
+                twin = twin.secondary(
+                    Series::new("ε_trunc")
+                        .data(self.cached_rank.trunc_data.clone())
+                        .color(theme.chart[2]),
+                );
+            }
+            if self.cached_rank.poisson_amp.len() >= 2 {
+                twin = twin.secondary(
+                    Series::new("Poisson amp.")
+                        .data(self.cached_rank.poisson_amp.clone())
+                        .color(theme.chart[3 % theme.chart.len()]),
+                );
+            }
+            if self.cached_rank.advection_amp.len() >= 2 {
+                twin = twin.secondary(
+                    Series::new("Advect. amp.")
+                        .data(self.cached_rank.advection_amp.clone())
+                        .color(theme.chart[4 % theme.chart.len()]),
+                );
+            }
+
+            frame.render_widget(&twin, area);
+        } else {
+            // Fallback to simple LinePlot when no secondary data
+            let plot = LinePlot::new()
+                .series(
+                    Series::new("total rank")
+                        .data(self.cached_rank.chart_data.clone())
+                        .color(theme.chart[0]),
+                )
+                .x_axis(PltAxis::new().label("t"))
+                .y_axis(PltAxis::new().label("rank"))
+                .title(" Rank Evolution ")
+                .theme(plt_theme);
+
+            frame.render_widget(&plot, area);
         }
-
-        let dense_poisson_amp = densify(&self.cached_rank.poisson_amp, target);
-
-        if dense_poisson_amp.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("Poisson amp.")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[3 % theme.chart.len()]))
-                    .data(&dense_poisson_amp),
-            );
-        }
-
-        let dense_advection_amp = densify(&self.cached_rank.advection_amp, target);
-
-        if dense_advection_amp.len() >= 2 {
-            datasets.push(
-                Dataset::default()
-                    .name("Advect. amp.")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(theme.chart[4 % theme.chart.len()]))
-                    .data(&dense_advection_amp),
-            );
-        }
-
-        let chart = Chart::new(datasets)
-            .block(block)
-            .x_axis(
-                Axis::default()
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.3}"), format!("{x_max:.3}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{:.0}", y_min), format!("{:.0}", y_max)])
-                    .style(Style::default().fg(theme.dim)),
-            );
-
-        frame.render_widget(chart, area);
     }
 
     fn draw_per_node_table(
@@ -462,7 +528,7 @@ impl RankTab {
                 Cell::from(""),
                 Cell::from("Memory")
                     .style(Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-                Cell::from(format_bytes(mem)).style(Style::default().fg(theme.chart[1])),
+                Cell::from(format_size(mem as f64)).style(Style::default().fg(theme.chart[1])),
             ]));
         }
 
@@ -496,85 +562,31 @@ impl RankTab {
         theme: &ThemeColors,
         state: &crate::sim::SimState,
     ) {
-        let block = Block::bordered()
-            .title(" Rank Bar Chart ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
         let ranks = match &state.rank_per_node {
             Some(r) => r,
-            None => return,
+            None => {
+                let block = Block::bordered()
+                    .title(" Rank Bar Chart ")
+                    .border_style(Style::default().fg(theme.border));
+                frame.render_widget(block, area);
+                return;
+            }
         };
 
-        let max_rank = ranks.iter().copied().max().unwrap_or(1).max(1);
+        let plt_theme = phasma_theme_to_plt(theme);
+        let categories: Vec<String> = NODE_LABELS.iter().map(|s| s.to_string()).collect();
+        let values: Vec<f64> = (0..NODE_LABELS.len())
+            .map(|i| ranks.get(i).copied().unwrap_or(0) as f64)
+            .collect();
 
-        // Available width for the bar (minus label and value text)
-        let label_width: u16 = 14;
-        let value_width: u16 = 6;
-        let bar_max_width = inner.width.saturating_sub(label_width + value_width + 3);
+        let chart = BarChart::new()
+            .categories(categories)
+            .dataset(BarDataset::new("rank", values, theme.chart[0]))
+            .orientation(Orientation::Horizontal)
+            .title(" Rank Bar Chart ")
+            .theme(plt_theme);
 
-        // One row per node; if area is too short, truncate.
-        let rows_available = inner.height as usize;
-
-        for (i, label) in NODE_LABELS.iter().enumerate() {
-            if i >= rows_available {
-                break;
-            }
-            let rank_val = ranks.get(i).copied().unwrap_or(0);
-            let fraction = rank_val as f64 / max_rank as f64;
-            let bar_len =
-                ((fraction * bar_max_width as f64) as u16).max(if rank_val > 0 { 1 } else { 0 });
-
-            // Color by budget fraction: green < 50%, yellow 50-80%, red > 80%
-            let bar_color = if fraction < 0.5 {
-                theme.ok
-            } else if fraction < 0.8 {
-                theme.warn
-            } else {
-                theme.error
-            };
-
-            let y = inner.y + i as u16;
-            if y >= inner.y + inner.height {
-                break;
-            }
-
-            // Render label
-            let label_span =
-                Span::styled(format!("{:>12} ", label), Style::default().fg(theme.dim));
-            frame.render_widget(
-                Paragraph::new(Line::from(label_span)),
-                Rect::new(inner.x, y, label_width, 1),
-            );
-
-            // Render bar
-            if bar_len > 0 {
-                let bar_str: String = "\u{2588}".repeat(bar_len as usize);
-                frame.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        bar_str,
-                        Style::default().fg(bar_color),
-                    ))),
-                    Rect::new(inner.x + label_width, y, bar_len, 1),
-                );
-            }
-
-            // Render value
-            let val_str = format!(" {rank_val}");
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    val_str,
-                    Style::default().fg(theme.fg),
-                ))),
-                Rect::new(
-                    inner.x + label_width + bar_len,
-                    y,
-                    value_width + (bar_max_width - bar_len),
-                    1,
-                ),
-            );
-        }
+        frame.render_widget(&chart, area);
     }
     fn draw_sv_spectrum(
         &self,
@@ -586,11 +598,6 @@ impl RankTab {
         let node = self.selected_node;
         let node_label = NODE_LABELS.get(node).unwrap_or(&"?");
         let title = format!(" SV Spectrum — node {node} ({node_label}) [n/N] ");
-        let block = Block::bordered()
-            .title(title.as_str())
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
 
         let ranks = state.rank_per_node.as_ref();
         let rank_val = ranks.and_then(|r| r.get(node)).copied().unwrap_or(0);
@@ -599,8 +606,49 @@ impl RankTab {
             .as_ref()
             .and_then(|e| e.get(node))
             .copied();
-        let budget = 100usize; // TODO: from config
+        let budget = 100usize;
 
+        // Try to render StemPlot of singular values
+        let has_sv_plot = if let Some(ref svs) = state.singular_values
+            && let Some(sv_vec) = svs.get(node)
+            && sv_vec.len() >= 2
+        {
+            let [plot_area, text_area] =
+                Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(area);
+
+            let sv_data: Vec<(f64, f64)> = sv_vec
+                .iter()
+                .enumerate()
+                .filter(|&(_, v)| *v > 0.0)
+                .map(|(i, &v)| (i as f64, v))
+                .collect();
+
+            let plt_theme = phasma_theme_to_plt(theme);
+            let stem = StemPlot::new(sv_data)
+                .color(theme.chart[0])
+                .title(title.clone())
+                .x_axis(PltAxis::new().label("index"))
+                .y_axis(PltAxis::new().scale(Scale::Log(10.0)))
+                .theme(plt_theme);
+
+            frame.render_widget(&stem, plot_area);
+            Some(text_area)
+        } else {
+            None
+        };
+
+        // Text summary area (below stem plot, or full area if no SVs)
+        let text_area = has_sv_plot.unwrap_or_else(|| {
+            let block = Block::bordered()
+                .title(title.as_str())
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            inner
+        });
+
+        let node_type = if node < 6 { "leaf" } else { "transfer" };
         let mut lines = Vec::new();
         lines.push(Line::from(vec![
             Span::styled("  Rank: ", Style::default().fg(theme.dim)),
@@ -617,81 +665,118 @@ impl RankTab {
                 }),
             ),
         ]));
-
         if let Some(err) = trunc_err {
             lines.push(Line::from(vec![
                 Span::styled("  \u{03b5}_trunc: ", Style::default().fg(theme.dim)),
                 Span::styled(format!("{err:.2e}"), Style::default().fg(theme.fg)),
             ]));
         }
-
-        let node_type = if node < 6 { "leaf" } else { "transfer" };
         lines.push(Line::from(vec![
             Span::styled("  Type: ", Style::default().fg(theme.dim)),
             Span::styled(node_type, Style::default().fg(theme.fg)),
         ]));
 
-        lines.push(Line::from(""));
-        // Compute SV decay slope if singular values available
-        if let Some(ref svs) = state.singular_values {
-            if let Some(sv_vec) = svs.get(node) {
-                if sv_vec.len() >= 2 {
-                    let first = sv_vec[0].max(1e-300).ln();
-                    let last = sv_vec[sv_vec.len() - 1].max(1e-300).ln();
-                    let slope = (last - first) / (sv_vec.len() as f64 - 1.0);
-                    lines.push(Line::from(vec![
-                        Span::styled("  Decay slope: ", Style::default().fg(theme.dim)),
-                        Span::styled(
-                            format!("{slope:.2}"),
-                            Style::default().fg(if slope < -0.5 { theme.ok } else { theme.warn }),
-                        ),
-                    ]));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        "  Decay slope: (too few SVs)",
-                        Style::default().fg(theme.dim),
-                    )));
-                }
-            } else {
-                lines.push(Line::from(Span::styled(
-                    "  Decay slope: \u{2014}",
-                    Style::default().fg(theme.dim),
-                )));
-            }
+        // Decay slope
+        if let Some(ref svs) = state.singular_values
+            && let Some(sv_vec) = svs.get(node)
+            && sv_vec.len() >= 2
+        {
+            let first = sv_vec[0].max(1e-300).ln();
+            let last = sv_vec[sv_vec.len() - 1].max(1e-300).ln();
+            let slope = (last - first) / (sv_vec.len() as f64 - 1.0);
+            lines.push(Line::from(vec![
+                Span::styled("  Decay slope: ", Style::default().fg(theme.dim)),
+                Span::styled(
+                    format!("{slope:.2}"),
+                    Style::default().fg(if slope < -0.5 { theme.ok } else { theme.warn }),
+                ),
+            ]));
         } else {
             lines.push(Line::from(Span::styled(
                 "  Decay slope: \u{2014}",
                 Style::default().fg(theme.dim),
             )));
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Moment-carrying: \u{2014}/k",
-            Style::default().fg(theme.dim),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  (LoMaC conservation)",
-            Style::default().fg(theme.dim),
-        )));
 
-        frame.render_widget(Paragraph::new(lines), inner);
+        frame.render_widget(Paragraph::new(lines), text_area);
+    }
+
+    fn draw_rank_growth_rate(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.rank_growth_rate;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" Rank Growth Rate ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("growth rate")
+                    .data(data.clone())
+                    .color(theme.chart[3 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("rate"))
+            .reference_line(ReferenceLine::hline_dashed(0.5, Color::Red))
+            .title(" Rank Growth Rate ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_svd_count(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.svd_count;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" SVD Operations / Step ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("SVD count")
+                    .data(data.clone())
+                    .color(theme.chart[4 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("count"))
+            .title(" SVD Operations / Step ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_htaca_evaluations(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_diag.htaca_evaluations;
+        if data.len() < 2 {
+            let block = Block::bordered()
+                .title(" HTACA Evaluations / Step ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("HTACA evals")
+                    .data(data.clone())
+                    .color(theme.chart[5 % theme.chart.len()]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("evals"))
+            .title(" HTACA Evaluations / Step ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-fn format_bytes(bytes: usize) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.2} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}

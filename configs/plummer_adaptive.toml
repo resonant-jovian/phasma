@@ -1,0 +1,39 @@
+# Plummer — Adaptive time-stepping Strang splitting
+#
+# 8^3 x 8^3 uniform grid.
+# Uses adaptive Strang splitting that adjusts dt based
+# on local error estimates. Automatically refines the
+# step size near strong gradients or rapid evolution.
+#
+# Watch F8 Performance for step size variation.
+# Watch F5 Energy for conservation under adaptive stepping.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "adaptive_strang"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_adaptive"
+prefix = "run"
+snapshot_interval = 0.5

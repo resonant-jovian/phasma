@@ -93,7 +93,7 @@ pub struct SimState {
     pub density_nz: usize,
     /// Phase-space projections f(x_i, v_j) for all 9 (i,j) combos.
     /// Indexed as phase_slices[dim_x * 3 + dim_v], each flat row-major nx×nv.
-    pub phase_slices: Vec<Vec<f64>>,
+    pub phase_slices: Arc<Vec<Vec<f64>>>,
     /// Legacy single slice (= phase_slices[0], x1-v1) for backward compat.
     pub phase_slice: Vec<f64>,
     pub phase_nx: usize,
@@ -168,6 +168,22 @@ pub struct SimState {
     // ── Verbose log messages (--verbose) ──
     #[serde(default)]
     pub log_messages: Vec<String>,
+    // ── Positivity enforcement diagnostics ──
+    /// Number of negative-value violations detected and clipped this step.
+    #[serde(default)]
+    pub positivity_violations: Option<u64>,
+    // ── Near-field correction diagnostics ──
+    /// L2 norm of near-field correction applied during Poisson solve.
+    #[serde(default)]
+    pub near_field_correction_l2: Option<f64>,
+    // ── Symplecticity diagnostic ──
+    /// Per-step Casimir C₂ drift as a proxy for symplecticity violation.
+    #[serde(default)]
+    pub symplecticity_error: Option<f64>,
+    // ── Rank explosion early-warning ──
+    /// Exponential growth rate of max rank (> 0.5 = doubling every ~2 steps).
+    #[serde(default)]
+    pub rank_growth_rate: Option<f64>,
 }
 
 impl SimState {
@@ -357,7 +373,7 @@ fn run_caustic_sim(
     let mut diag_step: u64 = 0;
     const POISSON_DIAG_INTERVAL: u64 = 10;
     const PHASE_DIAG_INTERVAL: u64 = 5;
-    let mut cached_phase_slices: Vec<Vec<f64>> = vec![vec![]; 9];
+    let mut cached_phase_slices: Arc<Vec<Vec<f64>>> = Arc::new(vec![vec![]; 9]);
     let mut cached_phase_nx: usize = 0;
     let mut cached_phase_nv: usize = 0;
 
@@ -403,11 +419,11 @@ fn run_caustic_sim(
                 );
                 // Cache or reuse phase-space projections
                 if compute_phase && state.phase_nx > 0 {
-                    cached_phase_slices.clone_from(&state.phase_slices);
+                    cached_phase_slices = Arc::clone(&state.phase_slices);
                     cached_phase_nx = state.phase_nx;
                     cached_phase_nv = state.phase_nv;
                 } else if cached_phase_nx > 0 {
-                    state.phase_slices.clone_from(&cached_phase_slices);
+                    state.phase_slices = Arc::clone(&cached_phase_slices);
                     state.phase_nx = cached_phase_nx;
                     state.phase_nv = cached_phase_nv;
                 }
@@ -524,10 +540,11 @@ fn build_from_config(
 ) -> anyhow::Result<caustic::Simulation> {
     use caustic::{
         AmrGrid, CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, Domain,
-        FftIsolated, FftPoisson, HtTensor, HybridRepr, LieSplitting, MassLossCondition, Multigrid,
-        SemiLagrangian, SheetTracker, SpectralV, SphericalHarmonicsPoisson, SteadyStateCondition,
-        StrangSplitting, TensorPoisson, TensorTrain, TreePoisson, UniformGrid6D,
-        VirialRelaxedCondition, WallClockCondition, YoshidaSplitting,
+        FftIsolated, FftPoisson, FlowMapRepr, HtTensor, HybridRepr, LieSplitting,
+        MassLossCondition, Multigrid, SemiLagrangian, SheetTracker, SpectralV,
+        SphericalHarmonicsPoisson, SphericalRepr, SteadyStateCondition, StrangSplitting,
+        TensorPoisson, TensorTrain, TreePoisson, UniformGrid6D, VirialRelaxedCondition,
+        WallClockCondition, YoshidaSplitting,
     };
 
     let g = cfg.domain.gravitational_constant.to_f64().unwrap_or(1.0);
@@ -578,7 +595,7 @@ fn build_from_config(
 
     progress.set_phase(caustic::StepPhase::BuildIC);
     let t0 = Instant::now();
-    let repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
+    let mut repr: Box<dyn caustic::PhaseSpaceRepr> = match cfg.solver.representation.as_str() {
         "hierarchical_tucker" | "ht" => {
             let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
             let max_rank = cfg
@@ -609,6 +626,9 @@ fn build_from_config(
             };
             ht.max_rank = max_rank;
             ht.tolerance = tolerance;
+            if cfg.solver.positivity_limiter.unwrap_or(false) {
+                ht = ht.with_positivity_limiter(true);
+            }
             if verbose {
                 logs.push(format!(
                     "  HT total rank: {}, memory: {:.1} MB",
@@ -622,6 +642,38 @@ fn build_from_config(
         "sheet_tracker" => Box::new(SheetTracker::new(domain.clone())),
         "amr" => Box::new(AmrGrid::new(domain.clone(), 0.1, 3)),
         "hybrid" => Box::new(HybridRepr::new(domain.clone())),
+        "flow_map" => {
+            let snap = build_ic(cfg, &domain, g, Some(progress))?;
+            let n_lag = cfg
+                .solver
+                .flow_map
+                .as_ref()
+                .map(|f| f.lagrangian_resolution as usize)
+                .unwrap_or(16);
+            let nv_lag = cfg
+                .solver
+                .flow_map
+                .as_ref()
+                .map(|f| f.velocity_resolution as usize)
+                .unwrap_or(8);
+            Box::new(FlowMapRepr::from_snapshot(&snap, &domain, n_lag, nv_lag))
+        }
+        "spherical_repr" => {
+            let n = cfg.domain.spatial_resolution as usize;
+            let nv = cfg.domain.velocity_resolution as usize;
+            let r_max = cfg.domain.spatial_extent.to_f64().unwrap_or(10.0);
+            let v_max = cfg.domain.velocity_extent.to_f64().unwrap_or(5.0);
+            let l_max = r_max * v_max;
+            Box::new(SphericalRepr::new(
+                domain.clone(),
+                n,
+                nv,
+                n,
+                r_max,
+                v_max,
+                l_max,
+            ))
+        }
 
         // Representations that require the full N^6 grid in memory
         "uniform" | "uniform_grid" | "tensor_train" | "spectral" | "velocity_ht" => {
@@ -668,10 +720,12 @@ fn build_from_config(
                         Some("mp7") => caustic::AdvectionScheme::Mp7,
                         _ => caustic::AdvectionScheme::CatmullRom,
                     };
-                    Box::new(
-                        UniformGrid6D::from_snapshot(snap, domain.clone())
-                            .with_advection_scheme(scheme),
-                    )
+                    let mut grid = UniformGrid6D::from_snapshot(snap, domain.clone())
+                        .with_advection_scheme(scheme);
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        grid = grid.with_positivity_limiter(true);
+                    }
+                    Box::new(grid)
                 }
                 "tensor_train" => {
                     let max_rank = cfg
@@ -686,9 +740,12 @@ fn build_from_config(
                             "  TT params: max_rank={max_rank}, tolerance={tolerance:.1e}"
                         ));
                     }
-                    Box::new(TensorTrain::from_snapshot(
-                        &snap, max_rank, tolerance, &domain,
-                    ))
+                    let mut tt =
+                        TensorTrain::from_snapshot_owned(snap, max_rank, tolerance, &domain);
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        tt = tt.with_positivity_limiter(true);
+                    }
+                    Box::new(tt)
                 }
                 "spectral" | "velocity_ht" => {
                     let n_modes = cfg
@@ -700,7 +757,15 @@ fn build_from_config(
                     if verbose {
                         logs.push(format!("  Spectral n_modes={n_modes}"));
                     }
-                    Box::new(SpectralV::from_snapshot(&snap, n_modes, &domain))
+                    let mut sv = SpectralV::from_snapshot(&snap, n_modes, &domain);
+                    if cfg.solver.positivity_limiter.unwrap_or(false) {
+                        sv = sv.with_positivity_limiter(true);
+                    }
+                    if let Some(ref fil) = cfg.solver.filamentation {
+                        sv.hypercollision_nu = fil.hypercollision_nu;
+                        sv.hypercollision_order = fil.hypercollision_order as usize;
+                    }
+                    Box::new(sv)
                 }
                 _ => unreachable!(),
             }
@@ -712,6 +777,15 @@ fn build_from_config(
             "Representation built in {:.1} ms",
             t0.elapsed().as_secs_f64() * 1000.0
         ));
+    }
+
+    // Macro-micro conservation wrapper: wraps the inner representation by decomposing
+    // f into macro (Maxwellian from moments) and micro (deviation g = f - f_M) parts.
+    if cfg.solver.conservation == "macro_micro" {
+        if verbose {
+            logs.push("Wrapping representation with MacroMicroRepr".to_string());
+        }
+        repr = Box::new(caustic::MacroMicroRepr::from_repr(repr, &domain));
     }
 
     // Build Poisson solver
@@ -737,6 +811,35 @@ fn build_from_config(
                 logs.push(format!("  TensorPoisson: shape={shape:?}, dx={dx:?}"));
             }
             Box::new(TensorPoisson::new(shape, dx, 1e-6, 1e-6, 30))
+        }
+        "ht_poisson" => {
+            let shape = [
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+                cfg.domain.spatial_resolution as usize,
+            ];
+            let dx = domain.dx();
+            let accuracy = cfg
+                .solver
+                .exponential_sum
+                .as_ref()
+                .map(|e| e.accuracy)
+                .unwrap_or(1e-6);
+            let tolerance = cfg.solver.ht.as_ref().map(|h| h.tolerance).unwrap_or(1e-6);
+            let max_rank = cfg
+                .solver
+                .ht
+                .as_ref()
+                .map(|h| h.max_rank as usize)
+                .unwrap_or(50);
+            if verbose {
+                logs.push(format!(
+                    "  HtPoisson: shape={shape:?}, tolerance={tolerance:.1e}, max_rank={max_rank}"
+                ));
+            }
+            Box::new(caustic::HtPoisson::new(
+                shape, dx, accuracy, tolerance, max_rank,
+            ))
         }
         "multigrid" => {
             if verbose {
@@ -764,6 +867,54 @@ fn build_from_config(
                 logs.push("  VGF (spectral-accuracy isolated BC)".to_string());
             }
             Box::new(caustic::VgfPoisson::new(&domain))
+        }
+        "range_separated" => {
+            let split_radius = cfg
+                .solver
+                .range_separated
+                .as_ref()
+                .map(|r| r.split_radius)
+                .unwrap_or(3.0);
+            let inner_name = cfg
+                .solver
+                .range_separated
+                .as_ref()
+                .map(|r| r.inner_solver.as_str())
+                .unwrap_or("fft_periodic");
+            if verbose {
+                logs.push(format!(
+                    "  RangeSeparated: split_radius={split_radius}, inner={inner_name}"
+                ));
+            }
+            let inner: Box<dyn caustic::PoissonSolver + Send + Sync> = match inner_name {
+                "fft_periodic" | "fft" => Box::new(FftPoisson::new(&domain)),
+                "fft_isolated" => Box::new(FftIsolated::new(&domain)),
+                "vgf" | "vgf_isolated" => Box::new(caustic::VgfPoisson::new(&domain)),
+                other_inner => {
+                    logs.push(format!(
+                        "  WARNING: unknown inner solver '{other_inner}' for range_separated, \
+                         falling back to fft_periodic"
+                    ));
+                    Box::new(FftPoisson::new(&domain))
+                }
+            };
+            Box::new(caustic::RangeSeparatedPoisson::new(
+                &domain,
+                split_radius,
+                inner,
+            ))
+        }
+        "spherical_1d" => {
+            let nr = cfg.domain.spatial_resolution as usize;
+            let r_max = cfg.domain.spatial_extent.to_f64().unwrap_or(10.0);
+            let dr = r_max / nr as f64;
+            let r_min = dr; // avoid r=0 singularity
+            if verbose {
+                logs.push(format!(
+                    "  Spherical1D: nr={nr}, dr={dr:.4}, r_min={r_min:.4}"
+                ));
+            }
+            Box::new(caustic::Spherical1DPoisson::new(nr, dr, r_min))
         }
         other => anyhow::bail!("unsupported poisson solver '{other}'"),
     };
@@ -829,6 +980,42 @@ fn build_from_config(
             },
         )),
         "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
+        "cosmological" | "cosmological_strang" => {
+            // Pull cosmology parameters from Zeldovich config if available,
+            // otherwise use sensible defaults.
+            let scale_factor = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| 1.0 / (1.0 + z.redshift_initial.to_f64().unwrap_or(50.0)))
+                .unwrap_or(1.0);
+            let hubble = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| z.cosmology_h.to_f64().unwrap_or(0.7))
+                .unwrap_or(0.7);
+            let omega_m = cfg
+                .model
+                .zeldovich
+                .as_ref()
+                .map(|z| z.cosmology_omega_m.to_f64().unwrap_or(0.3))
+                .unwrap_or(0.3);
+            if verbose {
+                logs.push(format!(
+                    "  Cosmological: a={scale_factor:.4}, H={hubble:.2}, Omega_m={omega_m:.2}"
+                ));
+            }
+            Box::new(caustic::CosmologicalStrangSplitting::new(
+                g,
+                scale_factor,
+                hubble,
+                omega_m,
+            ))
+        }
+        "instrumented" | "instrumented_strang" => {
+            Box::new(caustic::InstrumentedStrangSplitting::new(g))
+        }
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
 
@@ -962,7 +1149,9 @@ fn build_ht_from_ic_aca(
     verbose: bool,
     logs: &mut Vec<String>,
 ) -> Option<caustic::HtTensor> {
-    use caustic::{HernquistIC, HtTensor, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC};
+    use caustic::{
+        HernquistIC, HtTensor, IsochroneIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC,
+    };
     use rust_decimal::prelude::ToPrimitive;
 
     let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
@@ -971,6 +1160,7 @@ fn build_ht_from_ic_aca(
     let ic: Box<dyn IsolatedEquilibrium + Sync> = match cfg.model.model_type.as_str() {
         "plummer" => Box::new(PlummerIC::new(m, a, g)),
         "hernquist" => Box::new(HernquistIC::new(m, a, g)),
+        "isochrone" => Box::new(IsochroneIC::new(m, a, g)),
         "king" => {
             let king = cfg.model.king.as_ref()?;
             let w0 = king.w0.to_f64().unwrap_or(7.0);
@@ -1016,8 +1206,8 @@ fn build_ic(
     progress: Option<&caustic::StepProgress>,
 ) -> anyhow::Result<caustic::PhaseSpaceSnapshot> {
     use caustic::{
-        CustomICArray, HernquistIC, KingIC, MergerIC, NfwIC, PlummerIC, ZeldovichSingleMode,
-        sample_on_grid_with_progress,
+        CustomICArray, HernquistIC, IsochroneIC, KingIC, MergerIC, NfwIC, PlummerIC,
+        ZeldovichSingleMode, sample_on_grid_with_progress,
     };
 
     let m = cfg.model.total_mass.to_f64().unwrap_or(1.0);
@@ -1030,6 +1220,10 @@ fn build_ic(
         }
         "hernquist" => {
             let ic = HernquistIC::new(m, a, g);
+            Ok(sample_on_grid_with_progress(&ic, domain, progress))
+        }
+        "isochrone" => {
+            let ic = IsochroneIC::new(m, a, g);
             Ok(sample_on_grid_with_progress(&ic, domain, progress))
         }
         "king" => {
@@ -1110,6 +1304,7 @@ fn build_ic(
                 match tc.progenitor_type.as_str() {
                     "plummer" => Box::new(caustic::PlummerIC::new(prog_mass, prog_scale, g)),
                     "hernquist" => Box::new(caustic::HernquistIC::new(prog_mass, prog_scale, g)),
+                    "isochrone" => Box::new(caustic::IsochroneIC::new(prog_mass, prog_scale, g)),
                     "king" => {
                         let w0 = cfg
                             .model
@@ -1369,26 +1564,20 @@ fn extract_sim_state(
     let mut density_yz = vec![0.0f64; nx2 * nx3];
     let mut max_density = 0.0f64;
 
-    // Pass 1: density_xy and density_xz (ix1 outer — sequential writes for both)
+    // Single pass: all three 2D projections + max. The density_yz writes are
+    // scattered (indexed by ix2*nx3+ix3) but the array fits in L1/L2 cache
+    // for typical grid sizes (32³ or 64³), so this is faster than a
+    // separate second pass that re-reads the entire 3D density array.
     for ix1 in 0..nx1 {
         for ix2 in 0..nx2 {
             for ix3 in 0..nx3 {
                 let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
                 density_xy[ix1 * nx2 + ix2] += v;
                 density_xz[ix1 * nx3 + ix3] += v;
+                density_yz[ix2 * nx3 + ix3] += v;
                 if v > max_density {
                     max_density = v;
                 }
-            }
-        }
-    }
-
-    // Pass 2: density_yz (ix2 outer — sequential writes to density_yz[ix2 * nx3 + ix3])
-    for ix2 in 0..nx2 {
-        for ix1 in 0..nx1 {
-            for ix3 in 0..nx3 {
-                let v = density.data[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
-                density_yz[ix2 * nx3 + ix3] += v;
             }
         }
     }
@@ -1438,13 +1627,16 @@ fn extract_sim_state(
         && sim.repr.can_materialize()
         && total_elements <= PHASE_SNAPSHOT_THRESHOLD
     {
-        let snap = sim.repr.to_snapshot(sim.time);
-        let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
-        let s = [sx1, sx2, sx3, sv1, sv2, sv3];
-        let slices = compute_all_phase_slices(&snap.data, s);
-        (slices, sx1, sv1)
+        if let Some(snap) = sim.repr.to_snapshot(sim.time) {
+            let [sx1, sx2, sx3, sv1, sv2, sv3] = snap.shape;
+            let s = [sx1, sx2, sx3, sv1, sv2, sv3];
+            let slices = compute_all_phase_slices(&snap.data, s);
+            (Arc::new(slices), sx1, sv1)
+        } else {
+            (Arc::new(vec![vec![]; 9]), 0, 0)
+        }
     } else {
-        (vec![vec![]; 9], 0, 0)
+        (Arc::new(vec![vec![]; 9]), 0, 0)
     };
 
     // Repr memory via trait method (works for all representations)
@@ -1537,6 +1729,10 @@ fn extract_sim_state(
         advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
+        positivity_violations: None,
+        near_field_correction_l2: None,
+        symplecticity_error: diag.symplecticity_error,
+        rank_growth_rate: None,
         log_messages: Vec::new(),
     }
 }
@@ -1569,6 +1765,9 @@ fn zero_diag() -> caustic::GlobalDiagnostics {
         casimir_c2: 0.0,
         casimir_c2_pre_lomac: None,
         casimir_c2_post_lomac: None,
+        near_field_correction_magnitude: None,
+        coarse_grained_entropy: None,
+        symplecticity_error: None,
         entropy: 0.0,
         mass_in_box: 0.0,
     }
@@ -1664,7 +1863,7 @@ fn error_state(msg: String) -> SimState {
         density_nx: 0,
         density_ny: 0,
         density_nz: 0,
-        phase_slices: vec![vec![]; 9],
+        phase_slices: Arc::new(vec![vec![]; 9]),
         phase_slice: vec![],
         phase_nx: 0,
         phase_nv: 0,
@@ -1693,6 +1892,10 @@ fn error_state(msg: String) -> SimState {
         advection_rank_amplification: None,
         green_function_rank: None,
         exp_sum_terms: None,
+        positivity_violations: None,
+        near_field_correction_l2: None,
+        symplecticity_error: None,
+        rank_growth_rate: None,
         log_messages: vec![format!("ERROR: {msg}")],
     }
 }
@@ -2325,7 +2528,7 @@ mod unit_tests {
             density_nx: 0,
             density_ny: 0,
             density_nz: 0,
-            phase_slices: vec![],
+            phase_slices: Arc::new(vec![]),
             phase_slice: vec![],
             phase_nx: 0,
             phase_nv: 0,
@@ -2354,6 +2557,10 @@ mod unit_tests {
             advection_rank_amplification: None,
             green_function_rank: None,
             exp_sum_terms: None,
+            positivity_violations: None,
+            near_field_correction_l2: None,
+            symplecticity_error: None,
+            rank_growth_rate: None,
             log_messages: vec![],
         }
     }
@@ -2492,6 +2699,22 @@ mod smoke_tests {
     smoke_test!(smoke_tidal_point, "tidal_point");
     smoke_test!(smoke_zeldovich, "zeldovich");
     smoke_test!(smoke_plummer_128, "plummer_128");
+    smoke_test!(smoke_isochrone, "isochrone");
+    smoke_test!(smoke_fujiwara, "fujiwara");
+    smoke_test!(smoke_plummer_flow_map, "plummer_flow_map");
+    smoke_test!(smoke_plummer_range_separated, "plummer_range_separated");
+    smoke_test!(smoke_plummer_macro_micro, "plummer_macro_micro");
+    smoke_test!(smoke_plummer_perturbation, "plummer_perturbation");
+    smoke_test!(smoke_sine_wave_collapse, "sine_wave_collapse");
+    smoke_test!(smoke_mixing, "mixing");
+    smoke_test!(smoke_plummer_bm4, "plummer_bm4");
+    smoke_test!(smoke_plummer_rkn6, "plummer_rkn6");
+    smoke_test!(smoke_plummer_adaptive, "plummer_adaptive");
+    smoke_test!(smoke_plummer_instrumented, "plummer_instrumented");
+    smoke_test!(smoke_plummer_ht_poisson, "plummer_ht_poisson");
+    smoke_test!(smoke_plummer_positivity, "plummer_positivity");
+    smoke_test!(smoke_plummer_lawson, "plummer_lawson");
+    smoke_test!(smoke_zeldovich_cosmological, "zeldovich_cosmological");
 
     /// Full smoke test — builds and steps every config without memory limit.
     /// Run with: `cargo test --release smoke_all_full -- --ignored --nocapture`
@@ -2523,6 +2746,22 @@ mod smoke_tests {
             "tidal_nfw",
             "tidal_point",
             "zeldovich",
+            "isochrone",
+            "fujiwara",
+            "plummer_flow_map",
+            "plummer_range_separated",
+            "plummer_macro_micro",
+            "plummer_perturbation",
+            "sine_wave_collapse",
+            "mixing",
+            "plummer_bm4",
+            "plummer_rkn6",
+            "plummer_adaptive",
+            "plummer_instrumented",
+            "plummer_ht_poisson",
+            "plummer_positivity",
+            "plummer_lawson",
+            "zeldovich_cosmological",
             // plummer_128 excluded — requires ~35 GB
         ];
         for config in configs {

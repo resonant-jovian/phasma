@@ -14,9 +14,9 @@ const SUBSAMPLE: usize = 100;
 
 pub struct TimeSeriesStore {
     /// High-resolution recent window: (time, value) pairs
-    recent: VecDeque<(f64, f64)>,
+    pub(crate) recent: VecDeque<(f64, f64)>,
     /// Down-sampled long-term history (unbounded — ~16 bytes per entry, grows slowly)
-    history: Vec<(f64, f64)>,
+    pub(crate) history: Vec<(f64, f64)>,
     /// The very first value ever pushed (for drift calculations)
     initial: Option<(f64, f64)>,
     subsample_count: usize,
@@ -94,6 +94,14 @@ impl TimeSeriesStore {
     pub fn is_empty(&self) -> bool {
         self.recent.is_empty() && self.history.is_empty()
     }
+
+    /// Earliest time in the recent ring buffer, or +∞ if empty.
+    pub fn recent_start_t(&self) -> f64 {
+        self.recent
+            .front()
+            .map(|(t, _)| *t)
+            .unwrap_or(f64::INFINITY)
+    }
 }
 
 // ── DiagnosticsStore ─────────────────────────────────────────────────────────
@@ -110,6 +118,23 @@ pub struct DiagnosticsStore {
     pub casimir_c2: TimeSeriesStore,
     pub entropy: TimeSeriesStore,
     pub virial_ratio: TimeSeriesStore,
+    // ── Extended diagnostics (Layer 3) ──
+    pub svd_count: TimeSeriesStore,
+    pub htaca_evaluations: TimeSeriesStore,
+    pub positivity_violations: TimeSeriesStore,
+    pub symplecticity_error: TimeSeriesStore,
+    pub rank_growth_rate: TimeSeriesStore,
+    pub near_field_correction_l2: TimeSeriesStore,
+    pub poisson_residual: TimeSeriesStore,
+    pub adaptive_dt: TimeSeriesStore,
+    pub wall_time_per_step: TimeSeriesStore,
+    pub phase_timing_drift: TimeSeriesStore,
+    pub phase_timing_poisson: TimeSeriesStore,
+    pub phase_timing_kick: TimeSeriesStore,
+    /// Monotonic counter incremented on each push_state() call.
+    /// Used for cache invalidation instead of `len()` which plateaus
+    /// when the recent buffer is full.
+    push_count: u64,
 }
 
 impl DiagnosticsStore {
@@ -125,6 +150,39 @@ impl DiagnosticsStore {
         self.casimir_c2.push(t, state.casimir_c2);
         self.entropy.push(t, state.entropy);
         self.virial_ratio.push(t, state.virial_ratio);
+        // Extended diagnostics
+        self.svd_count.push(t, state.svd_count as f64);
+        self.htaca_evaluations.push(t, state.htaca_evaluations as f64);
+        if let Some(v) = state.positivity_violations {
+            self.positivity_violations.push(t, v as f64);
+        }
+        if let Some(v) = state.symplecticity_error {
+            self.symplecticity_error.push(t, v);
+        }
+        if let Some(v) = state.rank_growth_rate {
+            self.rank_growth_rate.push(t, v);
+        }
+        if let Some(v) = state.near_field_correction_l2 {
+            self.near_field_correction_l2.push(t, v);
+        }
+        if let Some(v) = state.poisson_residual_l2 {
+            self.poisson_residual.push(t, v);
+        }
+        self.adaptive_dt.push(t, state.dt);
+        self.wall_time_per_step.push(t, state.step_wall_ms);
+        if let Some(ref timings) = state.phase_timings {
+            self.phase_timing_drift.push(t, timings[0]);
+            self.phase_timing_poisson.push(t, timings[1]);
+            self.phase_timing_kick.push(t, timings[2]);
+        }
+        self.push_count += 1;
+    }
+
+    /// Monotonic generation counter, incremented on each `push_state()`.
+    /// Use for cache invalidation instead of `len()` which plateaus
+    /// when the recent ring buffer is full.
+    pub fn generation(&self) -> u64 {
+        self.push_count
     }
 
     pub fn is_empty(&self) -> bool {
@@ -136,45 +194,39 @@ impl DiagnosticsStore {
     }
 
     pub fn energy_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(e0) = self.total_energy.first_value() else {
-            return Vec::new();
-        };
-        if e0 == 0.0 {
-            return Vec::new();
-        }
-        self.total_energy
-            .iter_chart_data()
-            .into_iter()
-            .map(|(t, e)| (t, (e - e0) / e0.abs()))
-            .collect()
+        Self::drift_series_from(&self.total_energy)
     }
 
     pub fn mass_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(m0) = self.total_mass.first_value() else {
-            return Vec::new();
-        };
-        if m0 == 0.0 {
-            return Vec::new();
-        }
-        self.total_mass
-            .iter_chart_data()
-            .into_iter()
-            .map(|(t, m)| (t, (m - m0) / m0.abs()))
-            .collect()
+        Self::drift_series_from(&self.total_mass)
     }
 
     pub fn c2_drift_series(&self) -> Vec<(f64, f64)> {
-        let Some(c0) = self.casimir_c2.first_value() else {
+        Self::drift_series_from(&self.casimir_c2)
+    }
+
+    /// Build a relative-drift series directly from a TimeSeriesStore,
+    /// avoiding the intermediate Vec allocation from `iter_chart_data()`.
+    fn drift_series_from(store: &TimeSeriesStore) -> Vec<(f64, f64)> {
+        let Some(v0) = store.first_value() else {
             return Vec::new();
         };
-        if c0 == 0.0 {
+        if v0 == 0.0 {
             return Vec::new();
         }
-        self.casimir_c2
-            .iter_chart_data()
-            .into_iter()
-            .map(|(t, c)| (t, (c - c0) / c0.abs()))
-            .collect()
+        let inv_v0 = 1.0 / v0.abs();
+        let recent_start_t = store.recent_start_t();
+        let cap = store.history.len() + store.recent.len();
+        let mut data = Vec::with_capacity(cap);
+        for &(t, v) in &store.history {
+            if t < recent_start_t {
+                data.push((t, (v - v0) * inv_v0));
+            }
+        }
+        for &(t, v) in &store.recent {
+            data.push((t, (v - v0) * inv_v0));
+        }
+        data
     }
 }
 
@@ -409,7 +461,7 @@ mod tests {
             density_nx: 0,
             density_ny: 0,
             density_nz: 0,
-            phase_slices: vec![],
+            phase_slices: std::sync::Arc::new(vec![]),
             phase_slice: vec![],
             phase_nx: 0,
             phase_nv: 0,
@@ -438,6 +490,10 @@ mod tests {
             exp_sum_terms: None,
             density_power_spectrum: None,
             field_energy_spectrum: None,
+            positivity_violations: None,
+            near_field_correction_l2: None,
+            symplecticity_error: None,
+            rank_growth_rate: None,
             log_messages: vec![],
         }
     }

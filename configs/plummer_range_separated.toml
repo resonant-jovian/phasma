@@ -1,0 +1,42 @@
+# Plummer — Range-separated Poisson solver
+#
+# Uses RangeSeparatedPoisson: splits the Green's function into
+# short-range (direct summation) + long-range (FFT-based).
+# Better accuracy near the singularity than pure FFT.
+#
+# Watch F9 Poisson Detail for residual comparison.
+# Watch F5 Energy for conservation.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "range_separated"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[solver.range_separated]
+split_radius = 3.0
+inner_solver = "fft_periodic"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_range_separated"
+prefix = "run"
+snapshot_interval = 0.5

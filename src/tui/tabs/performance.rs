@@ -2,17 +2,19 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Paragraph},
 };
+use ratatui_plt::prelude::{
+    Axis as PltAxis, Bounds, Histogram as PltHistogram, LegendPosition, LinePlot, Scale, Series,
+    StackedArea, StemPlot,
+};
+use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
 use std::collections::VecDeque;
 
 use crate::{
-    data::DataProvider,
-    themes::ThemeColors,
-    tui::action::Action,
-    tui::chart_utils::{data_bounds, densify},
+    data::DataProvider, themes::ThemeColors, tui::action::Action,
+    tui::plt_bridge::{format_duration, format_size, phasma_theme_to_plt},
 };
 
 const RECENT_CAP: usize = 500;
@@ -204,11 +206,14 @@ impl PerformanceTab {
             return;
         }
 
-        // Wide mode (160+): 3-column layout for more breathing room
+        // Wide mode (160+): 3-row layout with extra charts
         if area.width >= 156 {
-            let [top, bottom] =
-                Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .areas(area);
+            let [top, mid, bottom] = Layout::vertical([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .areas(area);
 
             let [stats_area, timing_area, memory_area] = Layout::horizontal([
                 Constraint::Percentage(28),
@@ -217,10 +222,18 @@ impl PerformanceTab {
             ])
             .areas(top);
 
-            let [wall_area, dt_area, cumul_area] = Layout::horizontal([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+            let [wall_area, dt_area, cumul_area, hist_area] = Layout::horizontal([
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+            ])
+            .areas(mid);
+
+            let [phase_area, adt_area, posv_area] = Layout::horizontal([
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
             ])
             .areas(bottom);
 
@@ -230,12 +243,20 @@ impl PerformanceTab {
             self.draw_wall_time_chart(frame, wall_area, theme);
             self.draw_dt_chart(frame, dt_area, theme);
             self.draw_cumulative_chart(frame, cumul_area, theme);
+            self.draw_step_time_histogram(frame, hist_area, theme);
+            Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
+            Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
+            Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
             return;
         }
 
-        // Standard 2×3 layout
-        let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+        // Standard 3-row layout
+        let [top, mid, bottom] = Layout::vertical([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .areas(area);
 
         let [stats_area, timing_area, memory_area, dt_area] = Layout::horizontal([
             Constraint::Percentage(28),
@@ -247,7 +268,14 @@ impl PerformanceTab {
 
         let [wall_area, cumul_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(bottom);
+                .areas(mid);
+
+        let [phase_area, adt_area, posv_area] = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ])
+        .areas(bottom);
 
         self.draw_stats(frame, stats_area, theme, data_provider);
         Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
@@ -255,6 +283,9 @@ impl PerformanceTab {
         self.draw_dt_chart(frame, dt_area, theme);
         self.draw_wall_time_chart(frame, wall_area, theme);
         self.draw_cumulative_chart(frame, cumul_area, theme);
+        Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
+        Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
+        Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
     }
 
     fn draw_memory_breakdown(
@@ -396,17 +427,15 @@ impl PerformanceTab {
         theme: &ThemeColors,
         data_provider: &dyn DataProvider,
     ) {
-        let block = Block::bordered()
-            .title(" Phase Timings ")
-            .border_style(Style::default().fg(theme.border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        // If SimState has phase timings, display them; otherwise show stub
         let state = data_provider.current_state();
         let has_timings = state.map(|s| s.step_wall_ms > 0.0).unwrap_or(false);
 
         if !has_timings {
+            let block = Block::bordered()
+                .title(" Phase Timings ")
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(""),
@@ -418,19 +447,6 @@ impl PerformanceTab {
                         "  not yet available",
                         Style::default().fg(theme.dim),
                     )),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "  Requires phase",
-                        Style::default().fg(theme.dim),
-                    )),
-                    Line::from(Span::styled(
-                        "  timing data from",
-                        Style::default().fg(theme.dim),
-                    )),
-                    Line::from(Span::styled(
-                        "  caustic runtime.",
-                        Style::default().fg(theme.dim),
-                    )),
                 ]),
                 inner,
             );
@@ -439,78 +455,59 @@ impl PerformanceTab {
 
         let Some(s) = state else { return };
         let total = s.step_wall_ms;
-        let timing_w = inner.width as usize;
-        let plw = if timing_w < 22 { 5 } else { 8 }; // phase label width
 
         const PHASE_NAMES: [&str; 7] = ["Drift", "Poissn", "Kick", "Dens", "Diag", "I/O", "Other"];
 
-        let lines = if let Some(ref timings) = s.phase_timings {
-            // Real phase timings from caustic instrumentation
-            let mut ls = Vec::new();
-            let bar_max = timing_w.saturating_sub(plw + 7); // label + " NNN%"
-            for (i, (&name, &ms)) in PHASE_NAMES.iter().zip(timings.iter()).enumerate() {
-                if ms <= 0.0 {
-                    continue;
-                }
-                let pct = if total > 0.0 { ms / total * 100.0 } else { 0.0 };
-                let bar_width = (pct / 100.0 * bar_max as f64) as usize;
-                let bar = "\u{2588}".repeat(bar_width.max(1));
-                ls.push(Line::from(vec![
-                    Span::styled(format!(" {:<plw$}", name), Style::default().fg(theme.dim)),
-                    Span::styled(bar, Style::default().fg(theme.chart[i % 6])),
-                    Span::styled(format!(" {pct:.0}%"), Style::default().fg(theme.fg)),
-                ]));
-            }
-            ls.push(Line::from(""));
-            ls.push(Line::from(vec![
-                Span::styled(
-                    format!(" {:<plw$}", "Total"),
-                    Style::default().fg(theme.dim),
-                ),
-                Span::styled(
-                    format!("{total:.1}ms"),
-                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            ls
-        } else {
-            // Estimated split (Strang: drift 33%, Poisson 34%, kick 33%)
-            vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Drift"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled("~33%", Style::default().fg(theme.chart[0])),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Poissn"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled("~34%", Style::default().fg(theme.chart[1])),
-                ]),
-                Line::from(vec![
-                    Span::styled(format!(" {:<plw$}", "Kick"), Style::default().fg(theme.dim)),
-                    Span::styled("~33%", Style::default().fg(theme.chart[2])),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {:<plw$}", "Total"),
-                        Style::default().fg(theme.dim),
-                    ),
-                    Span::styled(
-                        format!("{total:.1}ms"),
-                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
-            ]
-        };
+        if let Some(ref timings) = s.phase_timings {
+            // Real phase timings → BarChart
+            let plt_theme = phasma_theme_to_plt(theme);
+            let categories: Vec<String> = PHASE_NAMES
+                .iter()
+                .zip(timings.iter())
+                .filter(|&(_, ms)| *ms > 0.0)
+                .map(|(&name, _)| name.to_string())
+                .collect();
+            let values: Vec<f64> = timings
+                .iter()
+                .filter(|&&ms| ms > 0.0)
+                .map(|&ms| if total > 0.0 { ms / total * 100.0 } else { 0.0 })
+                .collect();
 
-        frame.render_widget(Paragraph::new(lines), inner);
+            let chart = BarChart::new()
+                .categories(categories)
+                .dataset(BarDataset::new("% time", values, theme.chart[0]))
+                .orientation(Orientation::Horizontal)
+                .title(format!(" Phase Timings ({total:.1}ms) "))
+                .theme(plt_theme);
+
+            frame.render_widget(&chart, area);
+        } else {
+            // Estimated split (Strang) — text fallback
+            let block = Block::bordered()
+                .title(format!(" Phase Timings ({total:.1}ms) "))
+                .border_style(Style::default().fg(theme.border));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled(" Drift   ", Style::default().fg(theme.dim)),
+                        Span::styled("~33%", Style::default().fg(theme.chart[0])),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" Poissn  ", Style::default().fg(theme.dim)),
+                        Span::styled("~34%", Style::default().fg(theme.chart[1])),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" Kick    ", Style::default().fg(theme.dim)),
+                        Span::styled("~33%", Style::default().fg(theme.chart[2])),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
+                ]),
+                inner,
+            );
+        }
     }
 
     fn draw_stats(
@@ -649,36 +646,15 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(Series::new("dt").data(data.clone()).color(theme.chart[4]))
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new())
+            .title(" dt(t) — adaptive timestep ")
+            .theme(plt_theme);
 
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[4]))
-            .data(&dense);
-
-        let chart = Chart::new(vec![ds])
-            .block(
-                Block::bordered()
-                    .title(" dt(t) — adaptive timestep ")
-                    .border_style(Style::default().fg(theme.border)),
-            )
-            .x_axis(
-                Axis::default()
-                    .title("t")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.2e}"), format!("{y_max:.2e}")])
-                    .style(Style::default().fg(theme.dim)),
-            );
-
-        frame.render_widget(chart, area);
+        frame.render_widget(&plot, area);
     }
 
     fn draw_wall_time_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
@@ -694,36 +670,44 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("ms/step")
+                    .data(data.clone())
+                    .color(theme.chart[3]),
+            )
+            .x_axis(PltAxis::new().label("step"))
+            .y_axis(PltAxis::new())
+            .title(" ms/step ")
+            .theme(plt_theme);
 
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[3]))
-            .data(&dense);
+        frame.render_widget(&plot, area);
+    }
 
-        let chart = Chart::new(vec![ds])
-            .block(
+    fn draw_step_time_histogram(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let data = &self.cached_merged.wall_data;
+        if data.len() < 10 {
+            frame.render_widget(
                 Block::bordered()
-                    .title(" ms/step ")
+                    .title(" Step Time Distribution ")
                     .border_style(Style::default().fg(theme.border)),
-            )
-            .x_axis(
-                Axis::default()
-                    .title("step")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.0}"), format!("{x_max:.0}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.1}"), format!("{y_max:.1}")])
-                    .style(Style::default().fg(theme.dim)),
+                area,
             );
+            return;
+        }
 
-        frame.render_widget(chart, area);
+        let times: Vec<f64> = data.iter().map(|(_, ms)| *ms).collect();
+        let plt_theme = phasma_theme_to_plt(theme);
+        let hist = PltHistogram::new(times)
+            .bins(30)
+            .color(theme.chart[3])
+            .title(" Step Time Distribution ")
+            .x_axis(PltAxis::new().label("ms"))
+            .y_axis(PltAxis::new().label("count"))
+            .theme(plt_theme);
+
+        frame.render_widget(&hist, area);
     }
 
     fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
@@ -739,61 +723,128 @@ impl PerformanceTab {
             return;
         }
 
-        let (x_min, x_max, y_min, y_max) = data_bounds(data);
-        let dense = densify(data, area.width.saturating_sub(2) as usize * 2);
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(Series::new("wall").data(data.clone()).color(theme.chart[1]))
+            .x_axis(PltAxis::new().label("sim t"))
+            .y_axis(PltAxis::new().label("wall s"))
+            .title(" Wall time vs sim time ")
+            .theme(plt_theme);
 
-        let ds = Dataset::default()
-            .marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme.chart[1]))
-            .data(&dense);
+        frame.render_widget(&plot, area);
+    }
 
-        let chart = Chart::new(vec![ds])
-            .block(
+    fn draw_phase_timing_stacked(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let diag = data_provider.diagnostics();
+        let drift_data = diag.phase_timing_drift.iter_chart_data();
+        let poisson_data = diag.phase_timing_poisson.iter_chart_data();
+        let kick_data = diag.phase_timing_kick.iter_chart_data();
+
+        if drift_data.is_empty() && poisson_data.is_empty() && kick_data.is_empty() {
+            frame.render_widget(
                 Block::bordered()
-                    .title(" Wall time vs sim time ")
+                    .title(" Phase Timing Breakdown ")
                     .border_style(Style::default().fg(theme.border)),
-            )
-            .x_axis(
-                Axis::default()
-                    .title("sim t")
-                    .bounds([x_min, x_max])
-                    .labels(vec![format!("{x_min:.2}"), format!("{x_max:.2}")])
-                    .style(Style::default().fg(theme.dim)),
-            )
-            .y_axis(
-                Axis::default()
-                    .title("wall s")
-                    .bounds([y_min, y_max])
-                    .labels(vec![format!("{y_min:.1}"), format!("{y_max:.1}")])
-                    .style(Style::default().fg(theme.dim)),
+                area,
             );
+            return;
+        }
 
-        frame.render_widget(chart, area);
+        let plt_theme = phasma_theme_to_plt(theme);
+        let stacked = StackedArea::new()
+            .series(
+                Series::new("Drift")
+                    .data(drift_data)
+                    .color(theme.chart[0]),
+            )
+            .series(
+                Series::new("Poisson")
+                    .data(poisson_data)
+                    .color(theme.chart[1]),
+            )
+            .series(
+                Series::new("Kick")
+                    .data(kick_data)
+                    .color(theme.chart[2]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("ms"))
+            .title(" Phase Timing Breakdown ")
+            .show_legend(true)
+            .legend_position(LegendPosition::TopRight)
+            .theme(plt_theme);
+
+        frame.render_widget(&stacked, area);
+    }
+
+    fn draw_adaptive_dt_chart(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider.diagnostics().adaptive_dt.iter_chart_data();
+
+        if data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Adaptive \u{0394}t ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let plot = LinePlot::new()
+            .series(
+                Series::new("\u{0394}t")
+                    .data(data)
+                    .color(theme.chart[4]),
+            )
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("\u{0394}t").scale(Scale::Log(10.0)))
+            .title(" Adaptive \u{0394}t ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_positivity_violations(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &ThemeColors,
+        data_provider: &dyn DataProvider,
+    ) {
+        let data = data_provider
+            .diagnostics()
+            .positivity_violations
+            .iter_chart_data();
+
+        if data.is_empty() {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" Positivity Violations ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let stem = StemPlot::new(data)
+            .color(theme.chart[5])
+            .title(" Positivity Violations ")
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("count"))
+            .theme(plt_theme);
+
+        frame.render_widget(&stem, area);
     }
 }
 
-fn format_size(bytes: f64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    if bytes >= GB {
-        format!("{:.2} GB", bytes / GB)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes / MB)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes / KB)
-    } else {
-        format!("{:.0} B", bytes)
-    }
-}
-
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else if secs < 3600.0 {
-        format!("{}m{:02}s", secs as u64 / 60, secs as u64 % 60)
-    } else {
-        format!("{}h{:02}m", secs as u64 / 3600, (secs as u64 % 3600) / 60)
-    }
-}

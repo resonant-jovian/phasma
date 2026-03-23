@@ -8,6 +8,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use ratatui_plt::prelude::{
+    AspectRatio, Axis as PltAxis, Bounds, Heatmap, Histogram as PltHistogram, Kde, LinePlot,
+    Series, StairsDataset, StairsPlot,
+};
 
 use crate::{
     colormaps::Colormap,
@@ -15,8 +19,8 @@ use crate::{
     themes::ThemeColors,
     tui::{
         action::Action,
-        aspect::AspectCorrection,
-        widgets::{data_cursor::DataCursor, heatmap::HeatmapWidget},
+        plt_bridge::{NormMode, flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        widgets::data_cursor::DataCursor,
     },
 };
 
@@ -25,7 +29,7 @@ pub struct PhaseSpaceTab {
     dim_x: usize,
     /// Which velocity dimension for y-axis (0=v₁, 1=v₂, 2=v₃)
     dim_v: usize,
-    log_scale: bool,
+    norm_mode: NormMode,
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
@@ -36,6 +40,8 @@ pub struct PhaseSpaceTab {
     physical_aspect: bool,
     /// Toggle stream-count overlay (§2.2 F4 `[s]`)
     show_stream_count: bool,
+    /// Toggle velocity distribution histogram panel
+    show_vel_histogram: bool,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
@@ -49,13 +55,14 @@ impl Default for PhaseSpaceTab {
         Self {
             dim_x: 0,
             dim_v: 0,
-            log_scale: false,
+            norm_mode: NormMode::default(),
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
             slice_offsets: [0.0; 4],
             physical_aspect: false,
             show_stream_count: false,
+            show_vel_histogram: false,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
@@ -107,7 +114,7 @@ impl PhaseSpaceTab {
                 None
             }
             KeyCode::Char('l') => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
                 None
             }
             KeyCode::Char('i') => {
@@ -169,6 +176,10 @@ impl PhaseSpaceTab {
                 self.show_stream_count = !self.show_stream_count;
                 None
             }
+            KeyCode::Char('v') => {
+                self.show_vel_histogram = !self.show_vel_histogram;
+                None
+            }
             _ => None,
         }
     }
@@ -179,7 +190,7 @@ impl PhaseSpaceTab {
                 self.colormap = self.colormap.next();
             }
             Action::VizToggleLog => {
-                self.log_scale = !self.log_scale;
+                self.norm_mode = self.norm_mode.next();
             }
             _ => {}
         }
@@ -255,17 +266,27 @@ impl PhaseSpaceTab {
             }
         };
         let title = format!(
-            " f({}, {}) {}{}",
+            " f({}, {}){}{}",
             dim_labels[self.dim_x],
             vel_labels[self.dim_v],
-            if self.log_scale { "[log]" } else { "" },
+            self.norm_mode.tag(),
             slice_info,
         );
 
-        let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
+        let [main_area, info_area] = if self.show_info && area.height > 4 {
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area)
         } else {
             [area, Rect::new(area.x, area.y, 0, 0)]
+        };
+
+        // Split main area for optional velocity histogram
+        let (heatmap_area, hist_area) = if self.show_vel_histogram && main_area.width >= 50 {
+            let [hm, hi] =
+                Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .areas(main_area);
+            (hm, Some(hi))
+        } else {
+            (main_area, None)
         };
 
         let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
@@ -273,26 +294,44 @@ impl PhaseSpaceTab {
         // Use physical extents for aspect ratio when enabled
         let state = data_provider.current_state();
         let cfg = data_provider.config();
-        let cell_ar = cfg.map(|c| c.appearance.cell_aspect_ratio).unwrap_or(0.5);
-        let asp = AspectCorrection::new(cell_ar);
+        let x_extent = state.map(|s| s.spatial_extent).unwrap_or(vnx as f64 / 2.0);
+        let v_extent = cfg
+            .map(|c| {
+                use rust_decimal::prelude::ToPrimitive;
+                c.domain.velocity_extent.to_f64().unwrap_or(5.0)
+            })
+            .unwrap_or(vnv as f64 / 2.0);
 
-        let mut widget = HeatmapWidget::new(&view_data, vnx, vnv, &title)
-            .colormap(effective_cmap)
-            .log_scale(self.log_scale)
-            .aspect(asp);
+        let aspect = if self.physical_aspect {
+            // Convert float ratio to integer pair (2 decimal places of precision)
+            let ratio = x_extent / v_extent;
+            let w = (ratio * 100.0).round() as u16;
+            AspectRatio::Ratio(w, 100)
+        } else {
+            AspectRatio::Auto
+        };
 
-        if self.physical_aspect {
-            let x_extent = state.map(|s| s.spatial_extent * 2.0).unwrap_or(vnx as f64);
-            let v_extent = cfg
-                .map(|c| {
-                    use rust_decimal::prelude::ToPrimitive;
-                    c.domain.velocity_extent.to_f64().unwrap_or(5.0) * 2.0
-                })
-                .unwrap_or(vnv as f64);
-            widget = widget.x_range(x_extent).y_range(v_extent);
-        }
+        let grid = flat_to_grid_data(
+            &view_data,
+            vnx,
+            vnv,
+            (-x_extent, x_extent),
+            (-v_extent, v_extent),
+        );
 
-        frame.render_widget(widget, heatmap_area);
+        let (vmin, vmax) = grid.value_bounds();
+        let plt_theme = phasma_theme_to_plt(theme);
+
+        let mut hm = Heatmap::new(grid)
+            .colormap(phasma_cmap_to_plt(effective_cmap))
+            .title(title.clone())
+            .aspect_ratio(aspect)
+            .show_colorbar(true)
+            .theme(plt_theme);
+
+        hm = self.norm_mode.apply_to_heatmap(hm, vmin, vmax);
+
+        frame.render_widget(&hm, heatmap_area);
 
         // Cache data for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = heatmap_area;
@@ -305,6 +344,123 @@ impl PhaseSpaceTab {
             self.last_ny = vnv;
         }
 
+        // Velocity histogram panel — marginal velocity distribution as StairsPlot + KDE overlay
+        if let Some(ha) = hist_area {
+            if !self.last_data.is_empty() && self.last_nx > 0 && self.last_ny > 0 {
+                // Sum columns to get velocity marginal (sum over x for each v bin)
+                let vel_marginal: Vec<f64> = (0..self.last_ny)
+                    .map(|iv| {
+                        (0..self.last_nx)
+                            .map(|ix| {
+                                self.last_data
+                                    .get(iv * self.last_nx + ix)
+                                    .copied()
+                                    .unwrap_or(0.0)
+                            })
+                            .sum()
+                    })
+                    .collect();
+
+                let plt_theme = phasma_theme_to_plt(theme);
+
+                // Build bin edges (n+1 edges for n bins)
+                let n_bins = self.last_ny;
+                let dv = if n_bins > 0 {
+                    2.0 * v_extent / n_bins as f64
+                } else {
+                    1.0
+                };
+                let edges: Vec<f64> = (0..=n_bins).map(|i| -v_extent + dv * i as f64).collect();
+
+                let stairs = StairsPlot::new()
+                    .dataset(StairsDataset::new(
+                        "f(v)",
+                        edges,
+                        vel_marginal.clone(),
+                        theme.chart[0],
+                    ))
+                    .x_axis(PltAxis::new().label("v"))
+                    .y_axis(PltAxis::new().label("f"))
+                    .title(" Velocity Distribution ")
+                    .show_legend(false)
+                    .baseline(0.0)
+                    .theme(plt_theme.clone());
+
+                frame.render_widget(&stairs, ha);
+
+                // KDE overlay — expand binned marginal into weighted samples for KDE
+                let marginal_sum: f64 = vel_marginal.iter().sum();
+                if marginal_sum > 0.0 && n_bins >= 2 {
+                    // Build bin centers
+                    let bin_centers: Vec<f64> = (0..n_bins)
+                        .map(|i| -v_extent + dv * (i as f64 + 0.5))
+                        .collect();
+
+                    // Create weighted sample: replicate each bin center proportionally
+                    // to its marginal value (normalized to ~200 total samples for KDE)
+                    let target_samples = 200usize;
+                    let mut raw_velocity_data = Vec::with_capacity(target_samples + n_bins);
+                    for (i, &count) in vel_marginal.iter().enumerate() {
+                        let n_reps = ((count / marginal_sum) * target_samples as f64).round()
+                            as usize;
+                        for _ in 0..n_reps {
+                            raw_velocity_data.push(bin_centers[i]);
+                        }
+                    }
+
+                    if raw_velocity_data.len() >= 2 {
+                        let kde = Kde::default();
+                        let (eval_points, densities) = kde.fit(&raw_velocity_data);
+
+                        // Scale KDE densities to match histogram magnitude
+                        let kde_max = densities
+                            .iter()
+                            .cloned()
+                            .fold(0.0_f64, f64::max);
+                        let hist_max = vel_marginal
+                            .iter()
+                            .cloned()
+                            .fold(0.0_f64, f64::max);
+
+                        if kde_max > 0.0 {
+                            let scale = hist_max / kde_max;
+                            let kde_data: Vec<(f64, f64)> = eval_points
+                                .iter()
+                                .zip(densities.iter())
+                                .map(|(&x, &y)| (x, y * scale))
+                                .collect();
+
+                            let kde_color = if theme.chart.len() > 2 {
+                                theme.chart[2]
+                            } else {
+                                theme.chart[theme.chart.len() - 1]
+                            };
+                            let kde_series =
+                                Series::new("KDE").data(kde_data).color(kde_color);
+
+                            let kde_plot = LinePlot::new()
+                                .series(kde_series)
+                                .x_axis(
+                                    PltAxis::new()
+                                        .label("v")
+                                        .bounds(Bounds::Manual(-v_extent, v_extent)),
+                                )
+                                .y_axis(
+                                    PltAxis::new()
+                                        .label("f")
+                                        .bounds(Bounds::Manual(0.0, hist_max * 1.05)),
+                                )
+                                .title(" Velocity Distribution ")
+                                .show_legend(false)
+                                .theme(plt_theme);
+
+                            frame.render_widget(&kde_plot, ha);
+                        }
+                    }
+                }
+            }
+        }
+
         if self.show_info && info_area.width > 0 {
             let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
                 format!("  SCRUB {}/{total}", idx + 1)
@@ -313,7 +469,7 @@ impl PhaseSpaceTab {
             };
             let stream_tag = if self.show_stream_count { " S" } else { "" };
             let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] log  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
+                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] norm  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(

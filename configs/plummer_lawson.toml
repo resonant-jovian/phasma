@@ -1,0 +1,40 @@
+# Plummer — Lawson RK4 exponential integrator
+#
+# 8^3 x 8^3 uniform grid.
+# Uses a Lawson-type exponential integrator that treats
+# the linear drift operator exactly via exponentiation
+# and applies RK4 to the nonlinear kick. Avoids CFL
+# restriction from the drift sub-step.
+#
+# Watch F5 Energy for conservation.
+# Watch F8 Performance for step timing.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 8
+velocity_resolution = 8
+boundary = "periodic|truncated"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "lawson_rk4"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_lawson"
+prefix = "run"
+snapshot_interval = 0.5

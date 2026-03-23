@@ -1,0 +1,42 @@
+# Plummer — Macro-micro decomposition
+#
+# Uses MacroMicroRepr: f = f_M + g where f_M is a local Maxwellian.
+# Low-rank approximation applied only to the deviation g.
+# Exact conservation of macroscopic quantities by construction.
+#
+# Watch F5 Energy for conservation.
+# Watch F7 Profiles for density profile stability.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+conservation = "macro_micro"
+
+[solver.macro_micro]
+inner_representation = "uniform"
+
+[time]
+t_final = 10.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_macro_micro"
+prefix = "run"
+snapshot_interval = 0.5

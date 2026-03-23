@@ -1,8 +1,11 @@
 //! Parameter sweep mode — vary config fields across a grid, run batch for each.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::config::PhasmaConfig;
 use crate::sim::SimHandle;
@@ -12,6 +15,9 @@ pub struct SweepConfig {
     pub base_config: String,
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
+    /// Maximum concurrent simulations (default: available_parallelism / 2).
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
     pub sweep: SweepSpec,
 }
 
@@ -34,66 +40,88 @@ pub async fn run_sweep(toml_path: &str) -> anyhow::Result<()> {
 
     // Generate Cartesian product of parameter values
     let combos = cartesian_product(&sweep_cfg.sweep.parameters, &sweep_cfg.sweep.values);
+    let n_combos = combos.len();
     eprintln!(
         "phasma sweep: {} combinations from {} parameters",
-        combos.len(),
+        n_combos,
         sweep_cfg.sweep.parameters.len()
     );
 
     std::fs::create_dir_all(&sweep_cfg.output_dir)?;
 
-    let mut results = Vec::new();
+    let max_concurrent = sweep_cfg.max_concurrent.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(1))
+            .unwrap_or(2)
+    });
+    eprintln!("phasma sweep: max_concurrent = {max_concurrent}");
+    let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
+    // Prepare all configs up front (override_field needs &mut PhasmaConfig)
+    let mut prepared: Vec<(usize, String, String)> = Vec::with_capacity(n_combos);
     for (i, combo) in combos.iter().enumerate() {
         let mut cfg = base_cfg.clone();
-
-        // Apply overrides
         let mut combo_desc = Vec::new();
         for (param, value) in combo {
             override_field(&mut cfg, param, value)?;
             combo_desc.push(format!("{param}={value}"));
         }
         let desc = combo_desc.join("_");
-        eprintln!("phasma sweep: [{}/{}] {desc}", i + 1, combos.len());
-
-        // Write temp config
         let temp_dir = PathBuf::from(&sweep_cfg.output_dir).join(format!("run_{i:04}"));
         std::fs::create_dir_all(&temp_dir)?;
         cfg.output.directory = temp_dir.display().to_string();
         let temp_config = temp_dir.join("config.toml");
         let toml_str = toml::to_string_pretty(&cfg)?;
         std::fs::write(&temp_config, &toml_str)?;
+        prepared.push((i, desc, temp_config.display().to_string()));
+    }
 
-        // Run simulation
-        let config_str = temp_config.display().to_string();
-        let mut handle = SimHandle::spawn_unbounded(config_str);
-        let mut final_state = None;
-        while let Some(state) = handle.state_rx.recv_async().await {
-            for msg in &state.log_messages {
-                eprintln!("  [verbose] {msg}");
+    // Spawn all simulations concurrently, gated by semaphore
+    let mut join_set = JoinSet::new();
+    for (i, desc, config_str) in prepared {
+        let permit = Arc::clone(&semaphore).acquire_owned().await?;
+        eprintln!("phasma sweep: [{}/{}] {desc}", i + 1, n_combos);
+        join_set.spawn(async move {
+            let mut handle = SimHandle::spawn_unbounded(config_str);
+            let mut final_state = None;
+            while let Some(state) = handle.state_rx.recv_async().await {
+                for msg in &state.log_messages {
+                    eprintln!("  [{desc}] {msg}");
+                }
+                let is_exit = state.exit_reason.is_some();
+                final_state = Some(state);
+                if is_exit {
+                    break;
+                }
             }
-            let is_exit = state.exit_reason.is_some();
-            final_state = Some(state);
-            if is_exit {
-                break;
-            }
-        }
-        handle.task.abort();
+            handle.task.abort();
+            drop(permit);
 
-        if let Some(state) = &final_state {
-            results.push((
-                desc.clone(),
-                state.step,
-                state.t,
-                state.energy_drift(),
-                state.total_mass,
-                state
-                    .exit_reason
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "—".into()),
-            ));
+            let result = final_state.map(|state| {
+                (
+                    desc.clone(),
+                    state.step,
+                    state.t,
+                    state.energy_drift(),
+                    state.total_mass,
+                    state
+                        .exit_reason
+                        .map(|r| r.to_string())
+                        .unwrap_or_else(|| "—".into()),
+                )
+            });
+            (i, result)
+        });
+    }
+
+    // Collect results and sort by original index
+    let mut results = Vec::with_capacity(n_combos);
+    while let Some(res) = join_set.join_next().await {
+        if let Ok((_, Some(row))) = res {
+            results.push(row);
         }
     }
+    results.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Print summary table
     eprintln!("\n{:-<80}", "");

@@ -1,0 +1,47 @@
+# Plummer — Perturbed equilibrium response
+#
+# 16^3 x 8^3 uniform grid.
+# Plummer equilibrium with small l=0 radial perturbation.
+# Tests self-consistent Vlasov-Poisson coupling:
+# oscillation frequencies should match linear perturbation theory.
+#
+# The perturbation is applied in phasma by modifying the IC
+# with a radial cosine modulation (ε = 0.05).
+#
+# Watch F3 Density for oscillating density pattern.
+# Watch F5 Energy for energy conservation during oscillation.
+# Watch F7 Profiles for radial density profile oscillation.
+
+[model]
+type = "plummer"
+total_mass = 1.0
+scale_radius = 1.0
+
+[domain]
+spatial_extent = 8.0
+velocity_extent = 2.5
+spatial_resolution = 16
+velocity_resolution = 8
+boundary = "periodic"
+coordinates = "cartesian"
+gravitational_constant = 1.0
+
+[solver]
+representation = "uniform"
+poisson = "fft_periodic"
+advection = "semi_lagrangian"
+integrator = "strang"
+
+[time]
+t_final = 8.0
+dt_mode = "adaptive"
+cfl_factor = 0.3
+
+[output]
+directory = "output/plummer_perturbation"
+prefix = "run"
+snapshot_interval = 0.1
+
+[exit]
+energy_drift_tolerance = 1.0
+mass_drift_tolerance = 0.5
