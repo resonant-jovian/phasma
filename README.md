@@ -3,7 +3,6 @@
 **Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov–Poisson solver.**
 
 [![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
-[![docs.rs](https://docs.rs/phasma/badge.svg)](https://docs.rs/phasma)
 [![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
 [![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
