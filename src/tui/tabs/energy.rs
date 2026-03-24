@@ -8,8 +8,8 @@ use ratatui::{
 };
 use ratatui_plt::fft::stft;
 use ratatui_plt::prelude::{
-    Annotation, Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, PsdPlot, RefLineDash,
-    ReferenceLine, Scale, Series, Spectrogram, StackedArea,
+    Annotation, Axis as PltAxis, Band, BandPlot, Bounds, LegendPosition, LinePlot, LineStyle,
+    PsdPlot, RefLineDash, ReferenceLine, Scale, Series, Spectrogram, StackedArea,
 };
 use ratatui_plt::statistics::linear_regression;
 use ratatui_plt::widgets::ecdf::{EcdfDataset, EcdfPlot};
@@ -897,6 +897,29 @@ fn draw_energy_drift_with_regression(
                 .unwrap_or((y_min + y_max) / 2.0);
             plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn));
         }
+    }
+
+    // Mean ± std band around the drift level
+    if windowed.len() >= 20 {
+        let y_vals: Vec<f64> = windowed.iter().map(|(_, d)| *d).collect();
+        let n = y_vals.len() as f64;
+        let mean = y_vals.iter().sum::<f64>() / n;
+        let var = y_vals.iter().map(|y| (y - mean).powi(2)).sum::<f64>() / n;
+        let std = var.sqrt();
+        let x: Vec<f64> = vec![x_min, x_max];
+        let y_lower: Vec<f64> = vec![mean - std, mean - std];
+        let y_upper: Vec<f64> = vec![mean + std, mean + std];
+        let band = Band::new("±σ", x, y_lower, y_upper).color(Color::DarkGray);
+        let ci_plot = BandPlot::new()
+            .band(band)
+            .x_axis(
+                PltAxis::new()
+                    .bounds(Bounds::Manual(x_min, x_max))
+                    .grid(show_grid),
+            )
+            .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)))
+            .theme(phasma_theme_to_plt(theme));
+        frame.render_widget(&ci_plot, area);
     }
 
     frame.render_widget(&plot, area);

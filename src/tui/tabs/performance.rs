@@ -11,7 +11,9 @@ use ratatui_plt::prelude::{
     StackedArea, StemPlot,
 };
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
+use ratatui_plt::widgets::box_plot::{BoxData, BoxPlot};
 use ratatui_plt::widgets::histogram::HistNorm;
+use ratatui_plt::widgets::violin_plot::{ViolinData, ViolinPlot};
 use std::collections::VecDeque;
 
 use crate::{
@@ -67,6 +69,8 @@ pub struct PerformanceTab {
     cached_merged: CachedMerged,
     /// Histogram normalization mode (count / density / probability).
     hist_norm: HistNorm,
+    /// Distribution view mode: 0=histogram, 1=violin, 2=boxplot.
+    dist_mode: u8,
 }
 
 impl Default for PerformanceTab {
@@ -84,6 +88,7 @@ impl Default for PerformanceTab {
             steps_per_sec_history: VecDeque::with_capacity(RECENT_CAP),
             cached_merged: CachedMerged::default(),
             hist_norm: HistNorm::Count,
+            dist_mode: 0,
         }
     }
 }
@@ -178,6 +183,10 @@ impl PerformanceTab {
                     HistNorm::Density => HistNorm::Probability,
                     HistNorm::Probability => HistNorm::Count,
                 };
+                None
+            }
+            KeyCode::Char('v') => {
+                self.dist_mode = (self.dist_mode + 1) % 3;
                 None
             }
             _ => None,
@@ -719,21 +728,45 @@ impl PerformanceTab {
 
         let times: Vec<f64> = data.iter().map(|(_, ms)| *ms).collect();
         let plt_theme = phasma_theme_to_plt(theme);
-        let norm_label = match &self.hist_norm {
-            HistNorm::Count => "count",
-            HistNorm::Density => "density",
-            HistNorm::Probability => "prob",
-        };
-        let hist = PltHistogram::new(times)
-            .bins(30)
-            .color(theme.chart[3])
-            .norm_mode(self.hist_norm.clone())
-            .title(format!(" Step Time Distribution [{norm_label}] "))
-            .x_axis(PltAxis::new().label("ms"))
-            .y_axis(PltAxis::new().label(norm_label))
-            .theme(plt_theme);
 
-        frame.render_widget(&hist, area);
+        match self.dist_mode {
+            1 => {
+                // ViolinPlot
+                let violin = ViolinPlot::new()
+                    .dataset(ViolinData::new("wall time", times, theme.chart[3]))
+                    .title(" Step Time Distribution [violin] ")
+                    .show_box(true)
+                    .theme(plt_theme);
+                frame.render_widget(&violin, area);
+            }
+            2 => {
+                // BoxPlot
+                let boxplot = BoxPlot::new()
+                    .box_data(BoxData::new("wall time", times, theme.chart[3]))
+                    .show_outliers(true)
+                    .show_means(true)
+                    .title(" Step Time Distribution [boxplot] ")
+                    .theme(plt_theme);
+                frame.render_widget(&boxplot, area);
+            }
+            _ => {
+                // Histogram (default)
+                let norm_label = match &self.hist_norm {
+                    HistNorm::Count => "count",
+                    HistNorm::Density => "density",
+                    HistNorm::Probability => "prob",
+                };
+                let hist = PltHistogram::new(times)
+                    .bins(30)
+                    .color(theme.chart[3])
+                    .norm_mode(self.hist_norm.clone())
+                    .title(format!(" Step Time Distribution [{norm_label}] "))
+                    .x_axis(PltAxis::new().label("ms"))
+                    .y_axis(PltAxis::new().label(norm_label))
+                    .theme(plt_theme);
+                frame.render_widget(&hist, area);
+            }
+        }
     }
 
     fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {

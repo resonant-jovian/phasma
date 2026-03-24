@@ -12,6 +12,7 @@ use ratatui_plt::prelude::{
     Axis as PltAxis, LinePlot, ReferenceLine, Scale, Series, StemPlot, TwinAxes,
 };
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
+use ratatui_plt::widgets::violin_plot::{ViolinData, ViolinPlot};
 
 use crate::data::DataProvider;
 use crate::themes::ThemeColors;
@@ -92,10 +93,14 @@ pub struct RankTab {
     poisson_amp_history: VecDeque<(f64, f64)>,
     /// Time-series of (sim_time, advection_rank_amplification).
     advection_amp_history: VecDeque<(f64, f64)>,
+    /// Per-node rank history: [node_idx] -> Vec<rank_value> (for ViolinPlot).
+    per_node_rank_history: [Vec<f64>; 11],
     /// Last simulation step we recorded, to avoid duplicate pushes.
     last_step: u64,
     /// Selected node index for SV spectrum (0–10, cycles with j/k or n/N).
     selected_node: usize,
+    /// Toggle ViolinPlot view (replaces bar chart panel).
+    show_violin: bool,
     /// Cached chart data (rebuilt when history length changes).
     cached_rank: CachedRankData,
     /// Cached diagnostics-sourced chart data (rank growth rate, SVD count, HTACA evals).
@@ -109,8 +114,10 @@ impl Default for RankTab {
             trunc_error_history: VecDeque::with_capacity(MAX_HISTORY),
             poisson_amp_history: VecDeque::with_capacity(MAX_HISTORY),
             advection_amp_history: VecDeque::with_capacity(MAX_HISTORY),
+            per_node_rank_history: Default::default(),
             last_step: u64::MAX,
             selected_node: 0,
+            show_violin: false,
             cached_rank: CachedRankData::default(),
             cached_diag: CachedDiagData::default(),
         }
@@ -159,6 +166,10 @@ impl RankTab {
             KeyCode::Char('N') => {
                 self.selected_node =
                     (self.selected_node + NODE_LABELS.len() - 1) % NODE_LABELS.len();
+                None
+            }
+            KeyCode::Char('v') => {
+                self.show_violin = !self.show_violin;
                 None
             }
             _ => None,
@@ -224,6 +235,18 @@ impl RankTab {
                     self.advection_amp_history.pop_front();
                 }
                 self.advection_amp_history.push_back((state.t, amp));
+            }
+
+            // Accumulate per-node rank history for ViolinPlot
+            if let Some(ref ranks) = state.rank_per_node {
+                for (i, &r) in ranks.iter().enumerate().take(11) {
+                    let hist = &mut self.per_node_rank_history[i];
+                    // Cap at MAX_HISTORY per node
+                    if hist.len() >= MAX_HISTORY {
+                        hist.remove(0);
+                    }
+                    hist.push(r as f64);
+                }
             }
 
             self.last_step = state.step;
@@ -309,7 +332,11 @@ impl RankTab {
 
         self.draw_rank_evolution(frame, top_left, theme);
         self.draw_per_node_table(frame, top_right, theme, state);
-        self.draw_rank_bars(frame, mid_left, theme, state);
+        if self.show_violin {
+            self.draw_rank_violin(frame, mid_left, theme);
+        } else {
+            self.draw_rank_bars(frame, mid_left, theme, state);
+        }
         self.draw_sv_spectrum(frame, mid_right, theme, state);
         self.draw_rank_growth_rate(frame, bot_left, theme);
         self.draw_svd_count(frame, bot_center, theme);
@@ -587,6 +614,36 @@ impl RankTab {
 
         frame.render_widget(&chart, area);
     }
+    fn draw_rank_violin(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        let has_data = self.per_node_rank_history.iter().any(|h| h.len() >= 4);
+        if !has_data {
+            let block = Block::bordered()
+                .title(" Rank Distribution (ViolinPlot) ")
+                .border_style(Style::default().fg(theme.border));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let mut plot = ViolinPlot::new()
+            .title(" Rank Distribution (per node) ")
+            .show_box(true)
+            .theme(plt_theme);
+
+        for (i, hist) in self.per_node_rank_history.iter().enumerate() {
+            if hist.len() >= 4 {
+                let color = theme.chart[i % theme.chart.len()];
+                plot = plot.dataset(ViolinData::new(
+                    NODE_LABELS[i].to_string(),
+                    hist.clone(),
+                    color,
+                ));
+            }
+        }
+
+        frame.render_widget(&plot, area);
+    }
+
     fn draw_sv_spectrum(
         &self,
         frame: &mut Frame,

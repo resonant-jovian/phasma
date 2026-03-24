@@ -9,7 +9,8 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, ReferenceLine, Scale, Series,
+    Axis as PltAxis, Band, BandPlot, Bounds, LegendPosition, LinePlot, LineStyle, ReferenceLine,
+    Scale, Series,
 };
 
 use crate::{
@@ -49,6 +50,8 @@ const LAGRANGIAN_CAP: usize = 500;
 
 struct CachedProfiles {
     density: Vec<(f64, f64)>,
+    /// Per-bin scatter for density profile: (r, mean, std).
+    density_scatter: Vec<(f64, f64, f64)>,
     mass: Vec<(f64, f64)>,
     potential: Vec<(f64, f64)>,
     sigma: Vec<(f64, f64)>,
@@ -60,6 +63,7 @@ impl Default for CachedProfiles {
     fn default() -> Self {
         Self {
             density: Vec::new(),
+            density_scatter: Vec::new(),
             mass: Vec::new(),
             potential: Vec::new(),
             sigma: Vec::new(),
@@ -229,11 +233,14 @@ impl ProfilesTab {
             let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
             let g = state.gravitational_constant;
             let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
+            let density_scatter =
+                compute_radial_profile_with_scatter(&state.density_xy, nx, ny, dx, n_bins);
             let mass_profile = compute_mass_profile(&density_profile, dx);
             let potential_profile = compute_potential_profile(&mass_profile, g);
             let sigma_profile = compute_sigma_profile(&density_profile, &mass_profile, g);
             self.cached_profiles = CachedProfiles {
                 density: density_profile,
+                density_scatter,
                 mass: mass_profile,
                 potential: potential_profile,
                 sigma: sigma_profile,
@@ -531,22 +538,49 @@ impl ProfilesTab {
             }
         }
 
-        let x_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
-            PltAxis::new().label("r").scale(Scale::Log(10.0))
-        } else {
-            PltAxis::new().label("r")
+        let use_log = self.log_scale && kind != ProfileKind::Anisotropy;
+
+        let make_x_axis = || {
+            if use_log {
+                PltAxis::new().label("r").scale(Scale::Log(10.0))
+            } else {
+                PltAxis::new().label("r")
+            }
+        };
+        let make_y_axis = || {
+            if use_log {
+                PltAxis::new().scale(Scale::Log(10.0))
+            } else {
+                PltAxis::new()
+            }
         };
 
-        let y_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
-            PltAxis::new().scale(Scale::Log(10.0))
-        } else {
-            PltAxis::new()
-        };
+        // Render scatter band (mean ± std) behind the LinePlot for density profile
+        if self.show_lowess
+            && kind == ProfileKind::Density
+            && self.cached_profiles.density_scatter.len() >= 2
+        {
+            let scatter = &self.cached_profiles.density_scatter;
+            let x: Vec<f64> = scatter.iter().map(|(r, _, _)| *r).collect();
+            let y_lower: Vec<f64> = scatter
+                .iter()
+                .map(|(_, mean, std)| (mean - std).max(0.0))
+                .collect();
+            let y_upper: Vec<f64> = scatter.iter().map(|(_, mean, std)| mean + std).collect();
+            let band_color = theme.chart[6 % theme.chart.len()];
+            let band = Band::new("±σ", x, y_lower, y_upper).color(band_color);
+            let band_plot = BandPlot::new()
+                .band(band)
+                .x_axis(make_x_axis())
+                .y_axis(make_y_axis())
+                .theme(plt_theme.clone());
+            frame.render_widget(&band_plot, profile_area);
+        }
 
         let plot = LinePlot::new()
             .series_vec(series_vec)
-            .x_axis(x_axis)
-            .y_axis(y_axis)
+            .x_axis(make_x_axis())
+            .y_axis(make_y_axis())
             .title(full_title)
             .show_legend(true)
             .legend_position(LegendPosition::TopRight)
@@ -680,6 +714,57 @@ pub(crate) fn compute_radial_profile(
         .enumerate()
         .filter(|&(_, (&_, &c))| c > 0)
         .map(|(i, (&s, &c))| ((i as f64 + 0.5) * bin_width * dx, s / c as f64))
+        .collect()
+}
+
+/// Like `compute_radial_profile`, but also returns per-bin standard deviation.
+/// Returns (r, mean, std) triples.
+pub(crate) fn compute_radial_profile_with_scatter(
+    data: &[f64],
+    nx: usize,
+    ny: usize,
+    dx: f64,
+    requested_bins: usize,
+) -> Vec<(f64, f64, f64)> {
+    if data.is_empty() || nx == 0 || ny == 0 {
+        return Vec::new();
+    }
+
+    let cx = nx as f64 / 2.0;
+    let cy = ny as f64 / 2.0;
+    let max_r = cx.min(cy);
+    let n_bins = requested_bins.clamp(16, 256);
+    let bin_width = max_r / n_bins as f64;
+
+    let mut bin_sum = vec![0.0f64; n_bins];
+    let mut bin_sum2 = vec![0.0f64; n_bins];
+    let mut bin_count = vec![0u32; n_bins];
+
+    for iy in 0..ny {
+        for ix in 0..nx {
+            let ddx = ix as f64 + 0.5 - cx;
+            let ddy = iy as f64 + 0.5 - cy;
+            let r = (ddx * ddx + ddy * ddy).sqrt();
+            let bin = ((r / bin_width) as usize).min(n_bins - 1);
+            let val = data[iy * nx + ix];
+            bin_sum[bin] += val;
+            bin_sum2[bin] += val * val;
+            bin_count[bin] += 1;
+        }
+    }
+
+    bin_sum
+        .iter()
+        .zip(bin_sum2.iter())
+        .zip(bin_count.iter())
+        .enumerate()
+        .filter(|&(_, ((_, _), &c))| c > 1)
+        .map(|(i, ((&s, &s2), &c))| {
+            let r = (i as f64 + 0.5) * bin_width * dx;
+            let mean = s / c as f64;
+            let variance = (s2 / c as f64 - mean * mean).max(0.0);
+            (r, mean, variance.sqrt())
+        })
         .collect()
 }
 

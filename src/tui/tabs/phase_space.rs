@@ -12,6 +12,7 @@ use ratatui_plt::prelude::{
     AspectRatio, Axis as PltAxis, Bounds, Heatmap, Histogram as PltHistogram, Kde, LinePlot,
     Series, StairsDataset, StairsPlot,
 };
+use ratatui_plt::widgets::hexbin::HexbinPlot;
 
 use crate::{
     colormaps::Colormap,
@@ -40,6 +41,8 @@ pub struct PhaseSpaceTab {
     physical_aspect: bool,
     /// Toggle stream-count overlay (§2.2 F4 `[s]`)
     show_stream_count: bool,
+    /// Toggle HexbinPlot rendering mode
+    hexbin_mode: bool,
     /// Toggle velocity distribution histogram panel
     show_vel_histogram: bool,
     data_cursor: DataCursor,
@@ -62,6 +65,7 @@ impl Default for PhaseSpaceTab {
             slice_offsets: [0.0; 4],
             physical_aspect: false,
             show_stream_count: false,
+            hexbin_mode: false,
             show_vel_histogram: false,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),
@@ -180,6 +184,10 @@ impl PhaseSpaceTab {
                 self.show_vel_histogram = !self.show_vel_histogram;
                 None
             }
+            KeyCode::Char('x') => {
+                self.hexbin_mode = !self.hexbin_mode;
+                None
+            }
             _ => None,
         }
     }
@@ -279,15 +287,24 @@ impl PhaseSpaceTab {
             [area, Rect::new(area.x, area.y, 0, 0)]
         };
 
-        // Split main area for optional velocity histogram
-        let (heatmap_area, hist_area) = if self.show_vel_histogram && main_area.width >= 50 {
-            let [hm, hi] =
-                Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
-                    .areas(main_area);
-            (hm, Some(hi))
-        } else {
-            (main_area, None)
-        };
+        // Split main area for optional marginal histograms (JointPlot-like layout)
+        let (heatmap_area, hist_area, spatial_marginal_area) =
+            if self.show_vel_histogram && main_area.width >= 50 && main_area.height >= 15 {
+                // Top: spatial marginal rho(x), Center+Right: heatmap + velocity marginal
+                let [top_marginal, center] =
+                    Layout::vertical([Constraint::Length(6), Constraint::Min(8)]).areas(main_area);
+                let [hm, hi] =
+                    Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+                        .areas(center);
+                (hm, Some(hi), Some(top_marginal))
+            } else if self.show_vel_histogram && main_area.width >= 50 {
+                let [hm, hi] =
+                    Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+                        .areas(main_area);
+                (hm, Some(hi), None)
+            } else {
+                (main_area, None, None)
+            };
 
         let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
 
@@ -322,16 +339,45 @@ impl PhaseSpaceTab {
         let (vmin, vmax) = grid.value_bounds();
         let plt_theme = phasma_theme_to_plt(theme);
 
-        let mut hm = Heatmap::new(grid)
-            .colormap(phasma_cmap_to_plt(effective_cmap))
-            .title(title.clone())
-            .aspect_ratio(aspect)
-            .show_colorbar(true)
-            .theme(plt_theme);
+        if self.hexbin_mode {
+            // Convert grid to scatter points for HexbinPlot
+            let dx = 2.0 * x_extent / vnx.max(1) as f64;
+            let dv = 2.0 * v_extent / vnv.max(1) as f64;
+            let mut points = Vec::new();
+            for iv in 0..vnv {
+                for ix in 0..vnx {
+                    let val = view_data.get(iv * vnx + ix).copied().unwrap_or(0.0);
+                    if val > 0.0 {
+                        let x = -x_extent + (ix as f64 + 0.5) * dx;
+                        let v = -v_extent + (iv as f64 + 0.5) * dv;
+                        // Weight by value: repeat point proportionally
+                        let reps = (val / vmax * 10.0).ceil().max(1.0) as usize;
+                        for _ in 0..reps.min(20) {
+                            points.push((x, v));
+                        }
+                    }
+                }
+            }
+            let hexbin = HexbinPlot::new(points)
+                .gridsize(vnx.min(30).max(5))
+                .colormap(phasma_cmap_to_plt(effective_cmap))
+                .title(format!("{title} [hexbin]"))
+                .x_axis(PltAxis::new().bounds(Bounds::Manual(-x_extent, x_extent)))
+                .y_axis(PltAxis::new().bounds(Bounds::Manual(-v_extent, v_extent)))
+                .theme(plt_theme);
+            frame.render_widget(&hexbin, heatmap_area);
+        } else {
+            let mut hm = Heatmap::new(grid)
+                .colormap(phasma_cmap_to_plt(effective_cmap))
+                .title(title.clone())
+                .aspect_ratio(aspect)
+                .show_colorbar(true)
+                .theme(plt_theme);
 
-        hm = self.norm_mode.apply_to_heatmap(hm, vmin, vmax);
+            hm = self.norm_mode.apply_to_heatmap(hm, vmin, vmax);
 
-        frame.render_widget(&hm, heatmap_area);
+            frame.render_widget(&hm, heatmap_area);
+        }
 
         // Cache data for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = heatmap_area;
@@ -451,6 +497,54 @@ impl PhaseSpaceTab {
                         }
                     }
                 }
+            }
+        }
+
+        // Spatial marginal rho(x) panel (top strip, JointPlot-like)
+        if let Some(sm_area) = spatial_marginal_area {
+            if !self.last_data.is_empty() && self.last_nx > 0 && self.last_ny > 0 {
+                // Sum rows to get spatial marginal (sum over v for each x bin)
+                let spatial_marginal: Vec<f64> = (0..self.last_nx)
+                    .map(|ix| {
+                        (0..self.last_ny)
+                            .map(|iv| {
+                                self.last_data
+                                    .get(iv * self.last_nx + ix)
+                                    .copied()
+                                    .unwrap_or(0.0)
+                            })
+                            .sum()
+                    })
+                    .collect();
+
+                let plt_theme = phasma_theme_to_plt(theme);
+                let n_bins = self.last_nx;
+                let dx = if n_bins > 0 {
+                    2.0 * x_extent / n_bins as f64
+                } else {
+                    1.0
+                };
+                let edges: Vec<f64> = (0..=n_bins).map(|i| -x_extent + dx * i as f64).collect();
+
+                let stairs = StairsPlot::new()
+                    .dataset(StairsDataset::new(
+                        "ρ(x)",
+                        edges,
+                        spatial_marginal,
+                        theme.chart[1],
+                    ))
+                    .x_axis(
+                        PltAxis::new()
+                            .label("x")
+                            .bounds(Bounds::Manual(-x_extent, x_extent)),
+                    )
+                    .y_axis(PltAxis::new().label("ρ"))
+                    .title(" Spatial Marginal ")
+                    .show_legend(false)
+                    .baseline(0.0)
+                    .theme(plt_theme);
+
+                frame.render_widget(&stairs, sm_area);
             }
         }
 

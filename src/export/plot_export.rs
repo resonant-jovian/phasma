@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use ratatui_plt::export::{
-    ExportOptions, buffer_to_png, buffer_to_svg, render_to_buffer, save_svg,
+    ExportOptions, buffer_to_ansi, buffer_to_png, buffer_to_svg, buffer_to_text, render_to_buffer,
+    save_svg,
 };
 use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Heatmap, LinePlot, Scale, Series};
 
@@ -257,4 +258,60 @@ pub fn export_charts_batch_with_resolution(
     } else {
         Ok(exported)
     }
+}
+
+// ── ANSI / Text export ────────────────────────────────────────────────
+
+/// Export energy chart as ANSI-colored terminal text (for CI logs, HPC environments).
+pub fn export_energy_ansi(
+    diagnostics: &DiagnosticsStore,
+    theme: &ThemeColors,
+) -> Result<String, String> {
+    let energy = diagnostics.total_energy.iter_chart_data();
+    if energy.is_empty() {
+        return Err("No energy data".to_string());
+    }
+    let kinetic = diagnostics.kinetic_energy.iter_chart_data();
+    let potential = diagnostics.potential_energy.iter_chart_data();
+
+    let plt_theme = phasma_theme_to_plt(theme);
+    let plot = LinePlot::new()
+        .series(Series::new("E_tot").data(energy).color(theme.chart[0]))
+        .series(Series::new("T").data(kinetic).color(theme.chart[1]))
+        .series(Series::new("W").data(potential).color(theme.chart[2]))
+        .x_axis(PltAxis::new().label("t"))
+        .y_axis(PltAxis::new().label("Energy"))
+        .title("Energy Evolution")
+        .show_legend(true)
+        .theme(plt_theme);
+
+    let buf = render_to_buffer(&plot, DEFAULT_EXPORT_WIDTH, DEFAULT_EXPORT_HEIGHT);
+    Ok(buffer_to_ansi(&buf))
+}
+
+/// Export conservation chart as plain text (no colors).
+pub fn export_conservation_text(
+    diagnostics: &DiagnosticsStore,
+    theme: &ThemeColors,
+) -> Result<String, String> {
+    let energy_drift = diagnostics.energy_drift_series();
+    if energy_drift.is_empty() {
+        return Err("No drift data".to_string());
+    }
+    let mass_drift = diagnostics.mass_drift_series();
+    let c2_drift = diagnostics.c2_drift_series();
+
+    let plt_theme = phasma_theme_to_plt(theme);
+    let plot = LinePlot::new()
+        .series(Series::new("dE/E").data(energy_drift).color(theme.chart[0]))
+        .series(Series::new("dM/M").data(mass_drift).color(theme.chart[1]))
+        .series(Series::new("dC2/C2").data(c2_drift).color(theme.chart[2]))
+        .x_axis(PltAxis::new().label("t"))
+        .y_axis(PltAxis::new().label("Relative drift"))
+        .title("Conservation Diagnostics")
+        .show_legend(true)
+        .theme(plt_theme);
+
+    let buf = render_to_buffer(&plot, DEFAULT_EXPORT_WIDTH, DEFAULT_EXPORT_HEIGHT);
+    Ok(buffer_to_text(&buf))
 }

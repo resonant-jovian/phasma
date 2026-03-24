@@ -8,7 +8,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui_plt::prelude::{AspectRatio, Axis as PltAxis, ContourPlot, GridData, Heatmap};
+use ratatui_plt::prelude::{
+    AspectRatio, Axis as PltAxis, Bounds, ContourPlot, GridData, Heatmap, LinePlot, Series,
+};
 
 use crate::{
     colormaps::Colormap,
@@ -50,6 +52,7 @@ impl ContourMode {
 pub struct DensityTab {
     axis: usize, // 0=yz, 1=xz, 2=xy (default)
     norm_mode: NormMode,
+    show_marginals: bool,
     colormap: Colormap,
     show_info: bool,
     zoom: f32,
@@ -67,6 +70,7 @@ impl Default for DensityTab {
         Self {
             axis: 2,
             norm_mode: NormMode::default(),
+            show_marginals: false,
             colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
@@ -117,6 +121,10 @@ impl DensityTab {
             }
             KeyCode::Char('n') => {
                 self.contour_mode = self.contour_mode.next();
+                None
+            }
+            KeyCode::Char('m') => {
+                self.show_marginals = !self.show_marginals;
                 None
             }
             KeyCode::Char('r') => {
@@ -224,12 +232,24 @@ impl DensityTab {
         let contour_tag = self.contour_mode.tag();
         let full_title = format!(" {title}{norm_tag}{contour_tag} ");
 
-        let [heatmap_area, info_area] = if self.show_info && area.height > 4 {
+        let [main_area, info_area] = if self.show_info && area.height > 4 {
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area)
         } else {
             let a = area;
             [a, Rect::new(a.x, a.y, 0, 0)]
         };
+
+        // Optional marginal strip layout
+        let (heatmap_area, top_marginal, right_marginal) =
+            if self.show_marginals && main_area.height >= 12 && main_area.width >= 40 {
+                let [top_strip, center] =
+                    Layout::vertical([Constraint::Length(5), Constraint::Min(5)]).areas(main_area);
+                let [hm, right_strip] =
+                    Layout::horizontal([Constraint::Min(10), Constraint::Length(20)]).areas(center);
+                (hm, Some(top_strip), Some(right_strip))
+            } else {
+                (main_area, None, None)
+            };
 
         // Apply zoom by extracting a sub-region of the data
         let (view_data, vnx, vny) = crop_data(&data, nx, ny, self.zoom);
@@ -278,6 +298,46 @@ impl DensityTab {
 
                 frame.render_widget(&contour, heatmap_area);
             }
+        }
+
+        // Marginal density strips
+        if let Some(top_area) = top_marginal {
+            // Column sums → horizontal profile (x marginal)
+            let col_sums: Vec<(f64, f64)> = (0..vnx)
+                .map(|ix| {
+                    let sum: f64 = (0..vny)
+                        .map(|iy| view_data.get(iy * vnx + ix).copied().unwrap_or(0.0))
+                        .sum();
+                    let x = -extent + (ix as f64 + 0.5) * 2.0 * extent / vnx as f64;
+                    (x, sum)
+                })
+                .collect();
+            let plt_theme = phasma_theme_to_plt(theme);
+            let plot = LinePlot::new()
+                .series(Series::new("ρ(x)").data(col_sums).color(theme.chart[0]))
+                .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                .y_axis(PltAxis::new())
+                .theme(plt_theme);
+            frame.render_widget(&plot, top_area);
+        }
+        if let Some(right_area) = right_marginal {
+            // Row sums → vertical profile (y marginal)
+            let row_sums: Vec<(f64, f64)> = (0..vny)
+                .map(|iy| {
+                    let sum: f64 = (0..vnx)
+                        .map(|ix| view_data.get(iy * vnx + ix).copied().unwrap_or(0.0))
+                        .sum();
+                    let y = -extent + (iy as f64 + 0.5) * 2.0 * extent / vny as f64;
+                    (y, sum)
+                })
+                .collect();
+            let plt_theme = phasma_theme_to_plt(theme);
+            let plot = LinePlot::new()
+                .series(Series::new("ρ(y)").data(row_sums).color(theme.chart[1]))
+                .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                .y_axis(PltAxis::new())
+                .theme(plt_theme);
+            frame.render_widget(&plot, right_area);
         }
 
         // Store heatmap area for mouse cursor lookups
