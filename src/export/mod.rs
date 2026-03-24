@@ -127,8 +127,14 @@ pub fn export_diagnostics(
             use crate::themes::Theme;
             let theme_colors = Theme::default().colors();
             let cmap = Colormap::default();
-            match plot_export::export_charts_batch(dir, diagnostics, state, &theme_colors, cmap, stem)
-            {
+            match plot_export::export_charts_batch(
+                dir,
+                diagnostics,
+                state,
+                &theme_colors,
+                cmap,
+                stem,
+            ) {
                 Ok(paths) => Ok(paths.join("\n")),
                 Err(e) => Err(e),
             }

@@ -12,11 +12,14 @@ use ratatui_plt::prelude::{
     ReferenceLine, Scale, Series, Spectrogram, StackedArea,
 };
 use ratatui_plt::statistics::linear_regression;
+use ratatui_plt::widgets::ecdf::{EcdfDataset, EcdfPlot};
 
 use std::borrow::Cow;
 
 use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
+    data::DataProvider,
+    themes::ThemeColors,
+    tui::action::Action,
     tui::plt_bridge::{make_symlog_axis, phasma_theme_to_plt},
 };
 
@@ -197,7 +200,7 @@ impl EnergyTab {
                 self.show_drift = !self.show_drift;
                 None
             }
-            KeyCode::Char('L') => {
+            KeyCode::Char('y') => {
                 self.symlog_drift = !self.symlog_drift;
                 None
             }
@@ -320,10 +323,8 @@ impl EnergyTab {
             // Compute abs drift directly instead of clone+mutate
             let abs_energy: Vec<(f64, f64)> =
                 energy_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
-            let abs_mass: Vec<(f64, f64)> =
-                mass_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
-            let abs_c2: Vec<(f64, f64)> =
-                c2_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_mass: Vec<(f64, f64)> = mass_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_c2: Vec<(f64, f64)> = c2_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
 
             // Compute linear regression fit when we have enough drift data points
             let energy_drift_fit = if energy_drift.len() >= 10 {
@@ -581,16 +582,50 @@ impl EnergyTab {
                     .bounds(Bounds::Manual(x_min, x_max))
                     .grid(self.show_grid),
             )
-            .y_axis(
-                PltAxis::new()
-                    .scale(Scale::Log(10.0))
-                    .grid(self.show_grid),
-            )
+            .y_axis(PltAxis::new().scale(Scale::Log(10.0)).grid(self.show_grid))
             .reference_line(ReferenceLine::hline_dashed(1e-10, theme.warn))
             .title(" Symplecticity Error ")
             .show_legend(true)
             .legend_position(LegendPosition::TopRight)
             .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_ecdf_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+        if self.cached.abs_energy_drift.len() < 4 {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" ECDF — |ΔE/E| ")
+                    .border_style(Style::default().fg(theme.border)),
+                area,
+            );
+            return;
+        }
+
+        let energy_vals: Vec<f64> = self
+            .cached
+            .abs_energy_drift
+            .iter()
+            .map(|(_, d)| *d)
+            .collect();
+        let mass_vals: Vec<f64> = self.cached.abs_mass_drift.iter().map(|(_, d)| *d).collect();
+        let c2_vals: Vec<f64> = self.cached.abs_c2_drift.iter().map(|(_, d)| *d).collect();
+
+        let plt_theme = phasma_theme_to_plt(theme);
+        let mut plot = EcdfPlot::new()
+            .dataset(EcdfDataset::new("|ΔE/E|", energy_vals, theme.chart[0]))
+            .x_axis(PltAxis::new().label("error").scale(Scale::Log(10.0)))
+            .y_axis(PltAxis::new().label("F(x)"))
+            .title(" ECDF — Conservation Errors ")
+            .theme(plt_theme);
+
+        if !mass_vals.is_empty() {
+            plot = plot.dataset(EcdfDataset::new("|ΔM/M|", mass_vals, theme.chart[1]));
+        }
+        if !c2_vals.is_empty() {
+            plot = plot.dataset(EcdfDataset::new("|ΔC₂/C₂|", c2_vals, theme.chart[2]));
+        }
 
         frame.render_widget(&plot, area);
     }
@@ -609,8 +644,18 @@ impl EnergyTab {
         // Extract signal and compute sample rate
         let n = self.cached.total_energy.len();
         let dt = if n >= 2 {
-            let t0 = self.cached.total_energy.first().map(|(t, _)| *t).unwrap_or(0.0);
-            let tn = self.cached.total_energy.last().map(|(t, _)| *t).unwrap_or(1.0);
+            let t0 = self
+                .cached
+                .total_energy
+                .first()
+                .map(|(t, _)| *t)
+                .unwrap_or(0.0);
+            let tn = self
+                .cached
+                .total_energy
+                .last()
+                .map(|(t, _)| *t)
+                .unwrap_or(1.0);
             (tn - t0) / (n - 1) as f64
         } else {
             1.0
@@ -791,9 +836,7 @@ fn draw_energy_drift_with_regression(
     let color = theme.chart[3];
     let plt_theme = phasma_theme_to_plt(theme);
 
-    let drift_series = Series::new("ΔE/E₀")
-        .data(windowed.to_vec())
-        .color(color);
+    let drift_series = Series::new("ΔE/E₀").data(windowed.to_vec()).color(color);
 
     let symlog_tag = if symlog { " [symlog]" } else { "" };
 
@@ -825,8 +868,14 @@ fn draw_energy_drift_with_regression(
     if let Some(fit) = drift_fit {
         // Clip the regression line endpoints to the current window
         let fit_data: Vec<(f64, f64)> = vec![
-            (x_min, fit.slope * x_min + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
-            (x_max, fit.slope * x_max + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
+            (
+                x_min,
+                fit.slope * x_min + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0),
+            ),
+            (
+                x_max,
+                fit.slope * x_max + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0),
+            ),
         ];
         let fit_series = Series::new(format!("fit R²={:.4}", fit.r_squared))
             .data(fit_data)

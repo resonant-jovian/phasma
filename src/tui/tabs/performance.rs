@@ -1,3 +1,4 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -10,10 +11,13 @@ use ratatui_plt::prelude::{
     StackedArea, StemPlot,
 };
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
+use ratatui_plt::widgets::histogram::HistNorm;
 use std::collections::VecDeque;
 
 use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
+    data::DataProvider,
+    themes::ThemeColors,
+    tui::action::Action,
     tui::plt_bridge::{format_duration, format_size, phasma_theme_to_plt},
 };
 
@@ -61,6 +65,8 @@ pub struct PerformanceTab {
     steps_per_sec_history: VecDeque<(f64, f64)>,
     /// Cached merged series for chart rendering.
     cached_merged: CachedMerged,
+    /// Histogram normalization mode (count / density / probability).
+    hist_norm: HistNorm,
 }
 
 impl Default for PerformanceTab {
@@ -77,6 +83,7 @@ impl Default for PerformanceTab {
             total_wall_sec: 0.0,
             steps_per_sec_history: VecDeque::with_capacity(RECENT_CAP),
             cached_merged: CachedMerged::default(),
+            hist_norm: HistNorm::Count,
         }
     }
 }
@@ -161,6 +168,20 @@ impl PerformanceTab {
             .collect();
         data.extend(recent.iter().copied());
         data
+    }
+
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('n') => {
+                self.hist_norm = match self.hist_norm {
+                    HistNorm::Count => HistNorm::Density,
+                    HistNorm::Density => HistNorm::Probability,
+                    HistNorm::Probability => HistNorm::Count,
+                };
+                None
+            }
+            _ => None,
+        }
     }
 
     /// Called on every SimUpdate to record performance data regardless of active tab.
@@ -267,8 +288,7 @@ impl PerformanceTab {
         .areas(top);
 
         let [wall_area, cumul_area] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(mid);
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(mid);
 
         let [phase_area, adt_area, posv_area] = Layout::horizontal([
             Constraint::Percentage(40),
@@ -699,12 +719,18 @@ impl PerformanceTab {
 
         let times: Vec<f64> = data.iter().map(|(_, ms)| *ms).collect();
         let plt_theme = phasma_theme_to_plt(theme);
+        let norm_label = match &self.hist_norm {
+            HistNorm::Count => "count",
+            HistNorm::Density => "density",
+            HistNorm::Probability => "prob",
+        };
         let hist = PltHistogram::new(times)
             .bins(30)
             .color(theme.chart[3])
-            .title(" Step Time Distribution ")
+            .norm_mode(self.hist_norm.clone())
+            .title(format!(" Step Time Distribution [{norm_label}] "))
             .x_axis(PltAxis::new().label("ms"))
-            .y_axis(PltAxis::new().label("count"))
+            .y_axis(PltAxis::new().label(norm_label))
             .theme(plt_theme);
 
         frame.render_widget(&hist, area);
@@ -757,21 +783,13 @@ impl PerformanceTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
         let stacked = StackedArea::new()
-            .series(
-                Series::new("Drift")
-                    .data(drift_data)
-                    .color(theme.chart[0]),
-            )
+            .series(Series::new("Drift").data(drift_data).color(theme.chart[0]))
             .series(
                 Series::new("Poisson")
                     .data(poisson_data)
                     .color(theme.chart[1]),
             )
-            .series(
-                Series::new("Kick")
-                    .data(kick_data)
-                    .color(theme.chart[2]),
-            )
+            .series(Series::new("Kick").data(kick_data).color(theme.chart[2]))
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new().label("ms"))
             .title(" Phase Timing Breakdown ")
@@ -802,11 +820,7 @@ impl PerformanceTab {
 
         let plt_theme = phasma_theme_to_plt(theme);
         let plot = LinePlot::new()
-            .series(
-                Series::new("\u{0394}t")
-                    .data(data)
-                    .color(theme.chart[4]),
-            )
+            .series(Series::new("\u{0394}t").data(data).color(theme.chart[4]))
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new().label("\u{0394}t").scale(Scale::Log(10.0)))
             .title(" Adaptive \u{0394}t ")
@@ -847,4 +861,3 @@ impl PerformanceTab {
         frame.render_widget(&stem, area);
     }
 }
-

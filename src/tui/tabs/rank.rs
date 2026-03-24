@@ -267,9 +267,8 @@ impl RankTab {
 
         // Rebuild cached diagnostics data when new data arrives
         let diag = data_provider.diagnostics();
-        let diag_len = diag.rank_growth_rate.len()
-            + diag.svd_count.len()
-            + diag.htaca_evaluations.len();
+        let diag_len =
+            diag.rank_growth_rate.len() + diag.svd_count.len() + diag.htaca_evaluations.len();
         if diag_len != self.cached_diag.at_len {
             self.cached_diag = CachedDiagData {
                 rank_growth_rate: diag.rank_growth_rate.iter_chart_data(),
@@ -779,4 +778,3 @@ impl RankTab {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-

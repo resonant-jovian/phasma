@@ -401,8 +401,8 @@ impl PhaseSpaceTab {
                     let target_samples = 200usize;
                     let mut raw_velocity_data = Vec::with_capacity(target_samples + n_bins);
                     for (i, &count) in vel_marginal.iter().enumerate() {
-                        let n_reps = ((count / marginal_sum) * target_samples as f64).round()
-                            as usize;
+                        let n_reps =
+                            ((count / marginal_sum) * target_samples as f64).round() as usize;
                         for _ in 0..n_reps {
                             raw_velocity_data.push(bin_centers[i]);
                         }
@@ -413,14 +413,8 @@ impl PhaseSpaceTab {
                         let (eval_points, densities) = kde.fit(&raw_velocity_data);
 
                         // Scale KDE densities to match histogram magnitude
-                        let kde_max = densities
-                            .iter()
-                            .cloned()
-                            .fold(0.0_f64, f64::max);
-                        let hist_max = vel_marginal
-                            .iter()
-                            .cloned()
-                            .fold(0.0_f64, f64::max);
+                        let kde_max = densities.iter().cloned().fold(0.0_f64, f64::max);
+                        let hist_max = vel_marginal.iter().cloned().fold(0.0_f64, f64::max);
 
                         if kde_max > 0.0 {
                             let scale = hist_max / kde_max;
@@ -435,8 +429,7 @@ impl PhaseSpaceTab {
                             } else {
                                 theme.chart[theme.chart.len() - 1]
                             };
-                            let kde_series =
-                                Series::new("KDE").data(kde_data).color(kde_color);
+                            let kde_series = Series::new("KDE").data(kde_data).color(kde_color);
 
                             let kde_plot = LinePlot::new()
                                 .series(kde_series)

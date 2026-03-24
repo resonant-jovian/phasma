@@ -152,7 +152,8 @@ impl DiagnosticsStore {
         self.virial_ratio.push(t, state.virial_ratio);
         // Extended diagnostics
         self.svd_count.push(t, state.svd_count as f64);
-        self.htaca_evaluations.push(t, state.htaca_evaluations as f64);
+        self.htaca_evaluations
+            .push(t, state.htaca_evaluations as f64);
         if let Some(v) = state.positivity_violations {
             self.positivity_violations.push(t, v as f64);
         }

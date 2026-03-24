@@ -527,9 +527,7 @@ impl ProfilesTab {
             let x_vals: Vec<f64> = chart_data.iter().map(|(x, _)| *x).collect();
             let y_vals: Vec<f64> = chart_data.iter().map(|(_, y)| *y).collect();
             if let Some(result) = ratatui_plt::statistics::lowess(&x_vals, &y_vals, 0.3) {
-                series_vec.push(
-                    result.to_series("LOWESS", theme.chart[6 % theme.chart.len()]),
-                );
+                series_vec.push(result.to_series("LOWESS", theme.chart[6 % theme.chart.len()]));
             }
         }
 

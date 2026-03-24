@@ -196,7 +196,7 @@ impl TabView {
             Tab::Energy => self.energy.handle_key_event(key),
             Tab::Rank => self.rank.handle_key_event(key),
             Tab::Profiles => self.profiles.handle_key_event(key),
-            Tab::Performance => None,
+            Tab::Performance => self.performance.handle_key_event(key),
             Tab::PoissonDetail => self.poisson_detail.handle_key_event(key),
             Tab::Settings => self.settings.handle_key_event(key),
         }

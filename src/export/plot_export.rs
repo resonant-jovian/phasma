@@ -1,25 +1,59 @@
 use std::path::Path;
 
-use ratatui_plt::export::{render_to_buffer, buffer_to_svg, ExportOptions};
-use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, Heatmap, LinePlot, Scale, Series,
+use ratatui_plt::export::{
+    ExportOptions, buffer_to_png, buffer_to_svg, render_to_buffer, save_svg,
 };
+use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Heatmap, LinePlot, Scale, Series};
 
+use crate::colormaps::Colormap;
 use crate::data::live::DiagnosticsStore;
 use crate::sim::SimState;
 use crate::themes::ThemeColors;
 use crate::tui::plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt};
-use crate::colormaps::Colormap;
 
-const EXPORT_WIDTH: u16 = 120;
-const EXPORT_HEIGHT: u16 = 40;
+/// Default export dimensions (cells).
+pub const DEFAULT_EXPORT_WIDTH: u16 = 120;
+pub const DEFAULT_EXPORT_HEIGHT: u16 = 40;
 
-/// Export an energy evolution chart as SVG.
+/// High-resolution export dimensions.
+pub const HIRES_EXPORT_WIDTH: u16 = 200;
+pub const HIRES_EXPORT_HEIGHT: u16 = 80;
+
+/// Export resolution preset.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ExportResolution {
+    #[default]
+    Standard,
+    HighRes,
+    Custom(u16, u16),
+}
+
+impl ExportResolution {
+    pub fn dimensions(self) -> (u16, u16) {
+        match self {
+            Self::Standard => (DEFAULT_EXPORT_WIDTH, DEFAULT_EXPORT_HEIGHT),
+            Self::HighRes => (HIRES_EXPORT_WIDTH, HIRES_EXPORT_HEIGHT),
+            Self::Custom(w, h) => (w, h),
+        }
+    }
+}
+
+/// Export an energy evolution chart as SVG (and optionally PNG).
 pub fn export_energy_svg(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     theme: &ThemeColors,
     stem: &str,
+) -> Result<String, String> {
+    export_energy(dir, diagnostics, theme, stem, ExportResolution::default())
+}
+
+pub fn export_energy(
+    dir: &Path,
+    diagnostics: &DiagnosticsStore,
+    theme: &ThemeColors,
+    stem: &str,
+    resolution: ExportResolution,
 ) -> Result<String, String> {
     let energy = diagnostics.total_energy.iter_chart_data();
     let kinetic = diagnostics.kinetic_energy.iter_chart_data();
@@ -40,21 +74,42 @@ pub fn export_energy_svg(
         .show_legend(true)
         .theme(plt_theme);
 
-    let buf = render_to_buffer(&plot, EXPORT_WIDTH, EXPORT_HEIGHT);
-    let svg = buffer_to_svg(&buf, 14.0);
+    let (w, h) = resolution.dimensions();
+    let svg_path = dir.join(format!("{stem}_energy.svg"));
+    save_svg(&plot, w, h, &svg_path).map_err(|e| format!("write SVG: {e}"))?;
 
-    let path = dir.join(format!("{stem}_energy.svg"));
-    std::fs::write(&path, &svg).map_err(|e| format!("write SVG: {e}"))?;
-    Ok(path.display().to_string())
+    // Also export PNG
+    let buf = render_to_buffer(&plot, w, h);
+    let png_opts = ExportOptions {
+        cell_width: 8,
+        cell_height: 16,
+    };
+    if let Ok(png_bytes) = buffer_to_png(&buf, &png_opts) {
+        let png_path = dir.join(format!("{stem}_energy.png"));
+        let _ = std::fs::write(&png_path, &png_bytes);
+    }
+
+    Ok(svg_path.display().to_string())
 }
 
-/// Export a density heatmap as SVG.
+/// Export a density heatmap as SVG (and optionally PNG).
 pub fn export_density_svg(
     dir: &Path,
     state: &SimState,
     theme: &ThemeColors,
     cmap: Colormap,
     stem: &str,
+) -> Result<String, String> {
+    export_density(dir, state, theme, cmap, stem, ExportResolution::default())
+}
+
+pub fn export_density(
+    dir: &Path,
+    state: &SimState,
+    theme: &ThemeColors,
+    cmap: Colormap,
+    stem: &str,
+    resolution: ExportResolution,
 ) -> Result<String, String> {
     if state.density_xy.is_empty() {
         return Err("No density data available".to_string());
@@ -77,20 +132,40 @@ pub fn export_density_svg(
         .show_colorbar(true)
         .theme(plt_theme);
 
-    let buf = render_to_buffer(&heatmap, EXPORT_WIDTH, EXPORT_HEIGHT);
-    let svg = buffer_to_svg(&buf, 14.0);
+    let (w, h) = resolution.dimensions();
+    let svg_path = dir.join(format!("{stem}_density.svg"));
+    save_svg(&heatmap, w, h, &svg_path).map_err(|e| format!("write SVG: {e}"))?;
 
-    let path = dir.join(format!("{stem}_density.svg"));
-    std::fs::write(&path, &svg).map_err(|e| format!("write SVG: {e}"))?;
-    Ok(path.display().to_string())
+    // Also export PNG
+    let buf = render_to_buffer(&heatmap, w, h);
+    let png_opts = ExportOptions {
+        cell_width: 8,
+        cell_height: 16,
+    };
+    if let Ok(png_bytes) = buffer_to_png(&buf, &png_opts) {
+        let png_path = dir.join(format!("{stem}_density.png"));
+        let _ = std::fs::write(&png_path, &png_bytes);
+    }
+
+    Ok(svg_path.display().to_string())
 }
 
-/// Export conservation diagnostics as SVG.
+/// Export conservation diagnostics as SVG (and optionally PNG).
 pub fn export_conservation_svg(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     theme: &ThemeColors,
     stem: &str,
+) -> Result<String, String> {
+    export_conservation(dir, diagnostics, theme, stem, ExportResolution::default())
+}
+
+pub fn export_conservation(
+    dir: &Path,
+    diagnostics: &DiagnosticsStore,
+    theme: &ThemeColors,
+    stem: &str,
+    resolution: ExportResolution,
 ) -> Result<String, String> {
     let energy_drift = diagnostics.energy_drift_series();
     let mass_drift = diagnostics.mass_drift_series();
@@ -111,12 +186,22 @@ pub fn export_conservation_svg(
         .show_legend(true)
         .theme(plt_theme);
 
-    let buf = render_to_buffer(&plot, EXPORT_WIDTH, EXPORT_HEIGHT);
-    let svg = buffer_to_svg(&buf, 14.0);
+    let (w, h) = resolution.dimensions();
+    let svg_path = dir.join(format!("{stem}_conservation.svg"));
+    save_svg(&plot, w, h, &svg_path).map_err(|e| format!("write SVG: {e}"))?;
 
-    let path = dir.join(format!("{stem}_conservation.svg"));
-    std::fs::write(&path, &svg).map_err(|e| format!("write SVG: {e}"))?;
-    Ok(path.display().to_string())
+    // Also export PNG
+    let buf = render_to_buffer(&plot, w, h);
+    let png_opts = ExportOptions {
+        cell_width: 8,
+        cell_height: 16,
+    };
+    if let Ok(png_bytes) = buffer_to_png(&buf, &png_opts) {
+        let png_path = dir.join(format!("{stem}_conservation.png"));
+        let _ = std::fs::write(&png_path, &png_bytes);
+    }
+
+    Ok(svg_path.display().to_string())
 }
 
 /// Export a batch of charts (energy + density + conservation) to a directory.
@@ -128,25 +213,42 @@ pub fn export_charts_batch(
     cmap: Colormap,
     stem: &str,
 ) -> Result<Vec<String>, String> {
+    export_charts_batch_with_resolution(
+        dir,
+        diagnostics,
+        state,
+        theme,
+        cmap,
+        stem,
+        ExportResolution::default(),
+    )
+}
+
+pub fn export_charts_batch_with_resolution(
+    dir: &Path,
+    diagnostics: &DiagnosticsStore,
+    state: Option<&SimState>,
+    theme: &ThemeColors,
+    cmap: Colormap,
+    stem: &str,
+    resolution: ExportResolution,
+) -> Result<Vec<String>, String> {
     let charts_dir = dir.join("charts");
     std::fs::create_dir_all(&charts_dir).map_err(|e| format!("create charts dir: {e}"))?;
 
     let mut exported = Vec::new();
 
-    match export_energy_svg(&charts_dir, diagnostics, theme, stem) {
-        Ok(path) => exported.push(path),
-        Err(_) => {}
+    if let Ok(path) = export_energy(&charts_dir, diagnostics, theme, stem, resolution) {
+        exported.push(path);
     }
 
-    match export_conservation_svg(&charts_dir, diagnostics, theme, stem) {
-        Ok(path) => exported.push(path),
-        Err(_) => {}
+    if let Ok(path) = export_conservation(&charts_dir, diagnostics, theme, stem, resolution) {
+        exported.push(path);
     }
 
     if let Some(s) = state {
-        match export_density_svg(&charts_dir, s, theme, cmap, stem) {
-            Ok(path) => exported.push(path),
-            Err(_) => {}
+        if let Ok(path) = export_density(&charts_dir, s, theme, cmap, stem, resolution) {
+            exported.push(path);
         }
     }
 

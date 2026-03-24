@@ -1,4 +1,5 @@
 use crossterm::event::KeyEvent;
+use ratatui::style::Color;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -6,9 +7,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui::style::Color;
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LineStyle, LinePlot, MarkerShape, Scale, Series,
+    Axis as PltAxis, Bounds, LinePlot, LineStyle, MarkerShape, Scale, Series,
 };
 use ratatui_plt::statistics::poly_fit;
 
@@ -63,17 +63,13 @@ impl PoissonDetailTab {
         ])
         .areas(top);
 
-        let [mid_left, mid_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(middle);
+        let [mid_left, mid_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(middle);
 
-        let [bottom_left, bottom_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(bottom);
+        let [bottom_left, bottom_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(bottom);
 
         self.draw_power_spectrum(frame, top_left, theme, data_provider);
         Self::draw_density_spectrum(frame, top_mid, theme, data_provider);

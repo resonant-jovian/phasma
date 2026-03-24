@@ -6,6 +6,7 @@
 [![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
 [![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Support on thanks.dev](https://img.shields.io/badge/Support-thanks.dev-green)](https://thanks.dev/u/gh/resonant-jovian)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the interface and configuration format may change without notice. Until version 1.0.0 it should not be relied upon for production workloads.
@@ -163,14 +164,14 @@ Use `Left`/`Right` arrows to scrub through simulation history. Press `Backspace`
 
 | Model | Config key | Description |
 |---|---|---|
-| Plummer | `plummer` | Isotropic sphere with analytic DF, f(E) |
+| Plummer | `plummer` | Isotropic sphere with analytic DF, $f(E)$ |
 | Hernquist | `hernquist` | Galaxy model with closed-form DF |
 | King | `king` | Tidally truncated (Poisson-Boltzmann ODE + RK4) |
 | NFW | `nfw` | Dark matter halo (numerical Eddington inversion) |
 | Zel'dovich | `zeldovich` | Single-mode cosmological pancake |
 | Merger | `merger` | Two-body superposition of equilibrium ICs |
 | Tidal | `tidal` | Progenitor in external host potential |
-| Disk | `disk_exponential` / `disk_stability` | Exponential disk with Shu DF and Toomre Q |
+| Disk | `disk_exponential` / `disk_stability` | Exponential disk with Shu DF and Toomre $Q$ |
 | Uniform perturbation | `uniform_perturbation` | Perturbed Maxwellian (Jeans instability) |
 | Custom file | `custom_file` | User-provided 6D .npy array |
 
@@ -215,8 +216,8 @@ All sections and fields are optional — sensible defaults are provided. The ful
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `spatial_extent` | float | `10.0` | Half-width of the spatial box. Domain spans [-L, L]^3. |
-| `velocity_extent` | float | `5.0` | Half-width of the velocity box. Domain spans [-V, V]^3. |
+| `spatial_extent` | float | `10.0` | Half-width of the spatial box. Domain spans $[-L, L]^3$. |
+| `velocity_extent` | float | `5.0` | Half-width of the velocity box. Domain spans $[-V, V]^3$. |
 | `spatial_resolution` | integer | `8` | Grid cells per spatial dimension. Must be power-of-2 for FFT solvers. |
 | `velocity_resolution` | integer | `8` | Grid cells per velocity dimension. Must be power-of-2 for FFT solvers. |
 | `boundary` | string | `"periodic\|truncated"` | Spatial BC \| velocity BC. Options: `periodic`, `isolated`, `reflecting` \| `truncated`, `open` |
@@ -224,7 +225,7 @@ All sections and fields are optional — sensible defaults are provided. The ful
 | `gravitational_constant` | float | `1.0` | Value of G |
 
 > [!TIP]
-> Memory: `N_x^3 * N_v^3 * 8 bytes`. A 16^3 x 16^3 grid = 128 MB. A 32^3 x 32^3 grid = 8 GB.
+> Memory: $N_x^3 \times N_v^3 \times 8$ bytes. A $16^3 \times 16^3$ grid = 128 MB. A $32^3 \times 32^3$ grid = 8 GB.
 
 ```toml
 [domain]
@@ -248,13 +249,13 @@ gravitational_constant = 1.0
 
 | Key | Required | Description |
 |---|---|---|
-| `w0` | yes | Dimensionless central potential (typical 3.0–9.0) |
+| `w0` | yes | Dimensionless central potential $W_0$ (typical 3.0–9.0) |
 
 **`[model.nfw]`** — NFW dark matter halo
 
 | Key | Required | Description |
 |---|---|---|
-| `concentration` | yes | c = r_vir / r_s (typical 5–20) |
+| `concentration` | yes | $c = r_{\mathrm{vir}} / r_s$ (typical 5–20) |
 | `virial_mass` | no | Virial mass (default: total_mass) |
 | `velocity_anisotropy` | no | `"isotropic"` or beta value |
 
@@ -327,11 +328,11 @@ gravitational_constant = 1.0
 
 | Value | Description | Memory |
 |---|---|---|
-| `uniform` / `uniform_grid` | Full 6D grid | O(N^6) |
-| `hierarchical_tucker` / `ht` | HT tensor decomposition | O(N^3 r^3) |
-| `tensor_train` | Tensor-train decomposition | O(N r^2 d) |
-| `sheet_tracker` | Lagrangian sheet tracker | O(N^3) |
-| `spectral` / `velocity_ht` | Hermite velocity basis | O(N^3 M) |
+| `uniform` / `uniform_grid` | Full 6D grid | $O(N^6)$ |
+| `hierarchical_tucker` / `ht` | HT tensor decomposition | $O(N^3 r^3)$ |
+| `tensor_train` | Tensor-train decomposition | $O(Nr^2 d)$ |
+| `sheet_tracker` | Lagrangian sheet tracker | $O(N^3)$ |
+| `spectral` / `velocity_ht` | Hermite velocity basis | $O(N^3 M)$ |
 | `amr` | Adaptive mesh refinement | varies |
 | `hybrid` | Sheet/grid hybrid | varies |
 
@@ -412,8 +413,8 @@ conservation = "none"         # or "lomac" for mass/momentum/energy conservation
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `energy_drift_tolerance` | float | `0.5` | Max \|Delta E / E_0\| |
-| `mass_drift_tolerance` | float | `0.1` | Max \|Delta M / M_0\| |
+| `energy_drift_tolerance` | float | `0.5` | Max $\lvert \Delta E / E_0 \rvert$ |
+| `mass_drift_tolerance` | float | `0.1` | Max $\lvert \Delta M / M_0 \rvert$ |
 | `virial_equilibrium` | bool | `false` | Exit when virial ratio stabilizes |
 | `virial_tolerance` | float | `0.05` | Virial equilibrium tolerance |
 | `wall_clock_limit` | float | none | Max seconds |
@@ -524,7 +525,7 @@ metrics = ["energy_drift", "mass_drift"]
 phasma --convergence convergence.toml
 ```
 
-Convergence rates are computed as `log2(error_N / error_2N)`.
+Convergence rates are computed as $\log_2(\epsilon_N / \epsilon_{2N})$.
 
 ### Monitoring and comparison
 
@@ -555,12 +556,12 @@ phasma ships with 26 preset TOML configurations in `configs/`:
 
 | Preset | Grid | Integrator/Solver | Notes |
 |---|---|---|---|
-| `plummer` | 16^3 x 16^3 | Strang | Default Plummer starting point |
-| `plummer_64` | 16^3 x 16^3 | Strang | 64-cell spatial grid variant |
-| `plummer_128` | 16^3 x 16^3 | Strang | 128-cell spatial grid variant |
-| `plummer_hires` | 32^3 x 32^3 | Yoshida | High-resolution (~8 GB) |
-| `plummer_yoshida` | 16^3 x 16^3 | Yoshida | 4th-order integrator comparison |
-| `plummer_unsplit` | 16^3 x 16^3 | Unsplit RK4 | Method-of-lines integrator |
+| `plummer` | $16^3 \times 16^3$ | Strang | Default Plummer starting point |
+| `plummer_64` | $16^3 \times 16^3$ | Strang | 64-cell spatial grid variant |
+| `plummer_128` | $16^3 \times 16^3$ | Strang | 128-cell spatial grid variant |
+| `plummer_hires` | $32^3 \times 32^3$ | Yoshida | High-resolution (~8 GB) |
+| `plummer_yoshida` | $16^3 \times 16^3$ | Yoshida | 4th-order integrator comparison |
+| `plummer_unsplit` | $16^3 \times 16^3$ | Unsplit RK4 | Method-of-lines integrator |
 
 #### Advanced representations
 
@@ -585,8 +586,8 @@ phasma ships with 26 preset TOML configurations in `configs/`:
 | Preset | Model | Notes |
 |---|---|---|
 | `hernquist` | Hernquist | Galaxy model |
-| `king` | King (W0=6) | Tidally truncated equilibrium |
-| `nfw` | NFW (c=10) | Dark matter halo |
+| `king` | King ($W_0=6$) | Tidally truncated equilibrium |
+| `nfw` | NFW ($c=10$) | Dark matter halo |
 
 #### Multi-body and cosmological
 
@@ -595,7 +596,7 @@ phasma ships with 26 preset TOML configurations in `configs/`:
 | `merger_equal` | 2x Plummer (equal mass) | Head-on collision |
 | `merger_unequal` | 2x Plummer (3:1) | Unequal mass ratio |
 | `zeldovich` | Zel'dovich | Caustic formation |
-| `disk_bar` | Exponential disk | Disk stability (Toomre Q) |
+| `disk_bar` | Exponential disk | Disk stability (Toomre $Q$) |
 | `tidal_point` | Tidal Plummer | Point-mass host stream generation |
 | `tidal_nfw` | Tidal + NFW host | NFW host potential |
 
@@ -645,6 +646,23 @@ Press `e` to open the export menu:
 ## For Developers
 
 ### Modes of operation
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+graph TD
+    CLI[CLI] --> TUI & Run & Batch & Playback & Compare & Monitor & Sweep & Conv & Wizard & Reg & BC
+    TUI[Interactive TUI]
+    Run[--run]
+    Batch[--batch]
+    Playback[--playback]
+    Compare[--compare]
+    Monitor[--monitor / --tail]
+    Sweep[--sweep]
+    Conv[--convergence]
+    Wizard[--wizard]
+    Reg[--regression-test]
+    BC[--batch-compare]
+```
 
 | Mode | Flag | Description |
 |---|---|---|
@@ -852,6 +870,17 @@ phasma/
 
 ### Relationship to caustic
 
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+graph TD
+    Config[TOML Config] --> Bridge[build_from_config]
+    Bridge --> Sim[caustic::Simulation]
+    Sim --> BG[Background Thread]
+    BG --> DP[DataProvider]
+    DP --> TUI[TUI] & BatchOut[Batch Output]
+    TUI --> Export[Export]
+```
+
 phasma is a **consumer** of the caustic library. It provides no solver logic — it constructs a `caustic::Simulation` from user input, runs it on a background thread, and renders live diagnostics.
 
 | caustic provides | phasma provides |
@@ -950,6 +979,10 @@ Run `./dev.sh doctor` to check which tools are installed.
 ## Minimum supported Rust version
 
 Rust edition 2024, targeting **stable Rust 1.85+**.
+
+## Support
+
+If phasma is useful to your research or projects, consider supporting development via [thanks.dev](https://thanks.dev/u/gh/resonant-jovian).
 
 ## License
 
