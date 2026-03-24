@@ -14,15 +14,15 @@ use ratatui_plt::prelude::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    colormaps::Colormap,
     data::DataProvider,
     sim::SimState,
-    themes::ThemeColors,
     tui::{
         action::Action,
         config::Config,
-        plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        plt_bridge::{PhasmaThemeExt, flat_to_grid_data},
         widgets::sparkline_table::{SparklineRow, SparklineTable},
     },
 };
@@ -231,8 +231,8 @@ impl RunControlTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
         // Compact mode: controls + bottom only (no maps)
@@ -254,11 +254,11 @@ impl RunControlTab {
         .areas(area);
 
         self.draw_controls(frame, top_area, theme);
-        self.draw_maps(frame, maps_area, theme, colormap, data_provider);
+        self.draw_maps(frame, maps_area, theme, colormap_name, data_provider);
         self.draw_bottom(frame, bottom_area, theme, data_provider);
     }
 
-    fn draw_controls(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_controls(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let [prog_area, energy_area] =
             Layout::vertical([Constraint::Length(2), Constraint::Length(2)]).areas(area);
 
@@ -268,24 +268,24 @@ impl RunControlTab {
                     Paragraph::new(vec![
                         Line::from(Span::styled(
                             "No simulation running.",
-                            Style::default().fg(theme.dim),
+                            Style::default().fg(theme.dim()),
                         )),
                         Line::from(vec![
-                            Span::styled("  → Go to Setup ", Style::default().fg(theme.dim)),
+                            Span::styled("  → Go to Setup ", Style::default().fg(theme.dim())),
                             Span::styled(
                                 "[F1]",
                                 Style::default()
                                     .fg(theme.accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" and press ", Style::default().fg(theme.dim)),
+                            Span::styled(" and press ", Style::default().fg(theme.dim())),
                             Span::styled(
                                 "[r]",
                                 Style::default()
                                     .fg(theme.accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" to start", Style::default().fg(theme.dim)),
+                            Span::styled(" to start", Style::default().fg(theme.dim())),
                         ]),
                     ]),
                     area,
@@ -308,7 +308,7 @@ impl RunControlTab {
 
                 frame.render_widget(
                     Gauge::default()
-                        .gauge_style(Style::default().fg(theme.ok))
+                        .gauge_style(Style::default().fg(theme.ok()))
                         .ratio(progress)
                         .label(format!(
                             "t = {:.3}/{:.1}  step {}  {:.1}%{paused_tag}{eta}",
@@ -323,11 +323,11 @@ impl RunControlTab {
                 let e_drift = state.energy_drift().abs();
                 let cons_ratio = (1.0 - (e_drift / 1e-3).min(1.0)).clamp(0.0, 1.0);
                 let cons_color = if e_drift < 1e-5 {
-                    theme.ok
+                    theme.ok()
                 } else if e_drift < 1e-3 {
-                    theme.warn
+                    theme.warn()
                 } else {
-                    theme.error
+                    theme.error()
                 };
 
                 frame.render_widget(
@@ -349,8 +349,8 @@ impl RunControlTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
         let [density_area, phase_area] =
@@ -363,7 +363,7 @@ impl RunControlTab {
                     frame.render_widget(
                         Paragraph::new("—")
                             .block(Block::bordered().title(t))
-                            .style(Style::default().fg(theme.dim)),
+                            .style(Style::default().fg(theme.dim())),
                         a,
                     );
                 }
@@ -371,7 +371,7 @@ impl RunControlTab {
             Some(state) => {
                 // Spatial domain is symmetric: extent covers half-width
                 let extent = state.spatial_extent;
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
 
                 // Density heatmap
                 let dens_grid = flat_to_grid_data(
@@ -383,7 +383,10 @@ impl RunControlTab {
                 );
                 let (dvmin, dvmax) = dens_grid.value_bounds();
                 let dens_hm = Heatmap::new(dens_grid)
-                    .colormap(phasma_cmap_to_plt(colormap))
+                    .colormap(
+                        ratatui_plt::colormap::get_colormap(colormap_name)
+                            .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                    )
                     .title(" ρ(x,y) density ")
                     .aspect_ratio(AspectRatio::Equal)
                     .show_colorbar(true)
@@ -406,7 +409,10 @@ impl RunControlTab {
                 );
                 let (pvmin, pvmax) = ps_grid.value_bounds();
                 let ps_hm = Heatmap::new(ps_grid)
-                    .colormap(phasma_cmap_to_plt(colormap))
+                    .colormap(
+                        ratatui_plt::colormap::get_colormap(colormap_name)
+                            .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                    )
                     .title(" f(x,vx) phase-space ")
                     .aspect_ratio(AspectRatio::Equal)
                     .show_colorbar(true)
@@ -421,7 +427,7 @@ impl RunControlTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let [left_area, right_area] =
@@ -451,7 +457,7 @@ impl RunControlTab {
             frame.render_widget(
                 Paragraph::new("Energy history will appear once the sim starts.")
                     .block(Block::bordered().title(" E(t)/E₀ "))
-                    .style(Style::default().fg(theme.dim)),
+                    .style(Style::default().fg(theme.dim())),
                 chart_area,
             );
         } else {
@@ -469,9 +475,13 @@ impl RunControlTab {
             let e_lo = (e_min - 0.001).min(0.99);
             let e_hi = (e_max + 0.001).max(1.01);
 
-            let plt_theme = phasma_theme_to_plt(theme);
+            let plt_theme = theme.clone();
             let plot = LinePlot::new()
-                .series(Series::new("E/E₀").data(energy_data).color(theme.chart[0]))
+                .series(
+                    Series::new("E/E₀")
+                        .data(energy_data)
+                        .color(theme.chart_color(0)),
+                )
                 .x_axis(
                     PltAxis::new()
                         .label("t")
@@ -482,7 +492,7 @@ impl RunControlTab {
                         .label("E/E₀")
                         .bounds(Bounds::Manual(e_lo, e_hi)),
                 )
-                .reference_line(ReferenceLine::hline_dashed(1.0, theme.dim))
+                .reference_line(ReferenceLine::hline_dashed(1.0, theme.dim()))
                 .title(" E(t)/E₀ ")
                 .theme(plt_theme);
 
@@ -507,22 +517,22 @@ impl RunControlTab {
             .rev()
             .map(|(lvl, msg)| {
                 let color = match lvl {
-                    Level::Info => theme.dim,
-                    Level::Warn => theme.warn,
-                    Level::Error => theme.error,
+                    Level::Info => theme.dim(),
+                    Level::Warn => theme.warn(),
+                    Level::Error => theme.error(),
                 };
                 Line::from(Span::styled(msg.clone(), Style::default().fg(color)))
             })
             .collect();
 
-        let filter_hint = match self.log_filter {
-            LogFilter::All => "[1]All [2]Warn+ [3]Error",
-            LogFilter::WarnPlus => "[1]All [2]Warn+✓ [3]Error",
-            LogFilter::ErrorOnly => "[1]All [2]Warn+ [3]Error✓",
+        let filter_name = match self.log_filter {
+            LogFilter::All => "All",
+            LogFilter::WarnPlus => "Warn+",
+            LogFilter::ErrorOnly => "Errors",
         };
 
         frame.render_widget(
-            Paragraph::new(lines).block(Block::bordered().title(format!(" Log  {filter_hint} "))),
+            Paragraph::new(lines).block(Block::bordered().title(format!(" Log ({filter_name}) "))),
             log_area,
         );
 
@@ -634,7 +644,7 @@ impl RunControlTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         has_lomac: bool,
     ) {
         let snap = match &self.progress {
@@ -643,7 +653,7 @@ impl RunControlTab {
                 frame.render_widget(
                     Paragraph::new("No progress data")
                         .block(Block::bordered().title(" Step Progress "))
-                        .style(Style::default().fg(theme.dim)),
+                        .style(Style::default().fg(theme.dim())),
                     area,
                 );
                 return;
@@ -813,7 +823,7 @@ impl RunControlTab {
         // Render
         let block = Block::bordered()
             .title(" Step Progress ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -853,7 +863,7 @@ impl RunControlTab {
         if view_start > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  \u{2026}{view_start} above"),
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
         }
 
@@ -862,20 +872,20 @@ impl RunControlTab {
                 let w = inner.width.saturating_sub(2) as usize;
                 lines.push(Line::from(Span::styled(
                     format!(" {}", "\u{2500}".repeat(w)),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )));
                 continue;
             }
 
             let (marker, style) = match state {
-                IS::Complete => ("\u{2713}", Style::default().fg(theme.ok)),
+                IS::Complete => ("\u{2713}", Style::default().fg(theme.ok())),
                 IS::Active => (
                     "\u{25b8}",
                     Style::default()
                         .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                IS::Pending => (" ", Style::default().fg(theme.dim)),
+                IS::Pending => (" ", Style::default().fg(theme.dim())),
             };
 
             let mut spans = vec![
@@ -940,7 +950,7 @@ impl RunControlTab {
         if remaining_below > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  \u{2026}{remaining_below} below"),
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
         }
 
@@ -986,7 +996,7 @@ impl RunControlTab {
 
             lines.push(Line::from(vec![Span::styled(
                 format!("  {step_info:>14}{fraction:>12}{elapsed_str:>8}"),
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )]));
         }
 
@@ -997,17 +1007,19 @@ impl RunControlTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let block = Block::bordered()
             .title(" Config ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let label_style = Style::default().fg(theme.dim);
-        let value_style = Style::default().fg(theme.fg).add_modifier(Modifier::BOLD);
+        let label_style = Style::default().fg(theme.dim());
+        let value_style = Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::BOLD);
 
         let lines = if let Some(cfg) = data_provider.config() {
             let n = cfg.domain.spatial_resolution;

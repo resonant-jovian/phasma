@@ -1,4 +1,4 @@
-use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Size;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -6,7 +6,6 @@ use tracing::{debug, info};
 
 use crate::{
     annotations::AnnotationStore,
-    colormaps::Colormap,
     data::DataProvider,
     data::comparison::ComparisonDataProvider,
     data::live::LiveDataProvider,
@@ -15,7 +14,6 @@ use crate::{
     runner::monitor::MonitorHandle,
     session,
     sim::{SimControl, SimHandle},
-    themes::Theme,
     tui::{
         action::Action,
         command_palette::{Command, CommandPalette},
@@ -24,6 +22,7 @@ use crate::{
         guard::TerminalGuard,
         help::HelpOverlay,
         layout::ResponsiveLayout,
+        plt_bridge::{ColormapState, PhasmaThemeExt, ThemeState},
         status_bar::StatusBar,
         tabs::TabView,
         {Event, Tui},
@@ -50,8 +49,8 @@ pub struct App {
     alt_provider: AltProvider,
     status_bar: StatusBar,
     guard: TerminalGuard,
-    theme: Theme,
-    colormap: Colormap,
+    theme_state: ThemeState,
+    colormap_state: ColormapState,
     help: HelpOverlay,
     export_menu: ExportMenu,
     quit_confirm: bool,
@@ -90,24 +89,24 @@ impl App {
 
         // Restore session state (session overrides defaults but TOML appearance overrides session)
         let saved = session::load();
-        let (theme, colormap, guard) = if let Some(ref cfg) = phasma_config {
+        let (theme_state, colormap_state, guard) = if let Some(ref cfg) = phasma_config {
             let app = &cfg.appearance;
             let t = if app.theme != "dark" {
-                Theme::from_name(&app.theme)
+                ThemeState::new(&app.theme)
             } else {
-                Theme::from_name(&saved.theme)
+                ThemeState::new(&saved.theme)
             };
             let c = if app.colormap_default != "viridis" {
-                Colormap::from_name(&app.colormap_default)
+                ColormapState::new(&app.colormap_default)
             } else {
-                Colormap::from_name(&saved.colormap)
+                ColormapState::new(&saved.colormap)
             };
             let g = TerminalGuard::new(app.min_columns, app.min_rows);
             (t, c, g)
         } else {
             (
-                Theme::from_name(&saved.theme),
-                Colormap::from_name(&saved.colormap),
+                ThemeState::new(&saved.theme),
+                ColormapState::new(&saved.colormap),
                 TerminalGuard::default(),
             )
         };
@@ -148,8 +147,8 @@ impl App {
             alt_provider: AltProvider::None,
             status_bar,
             guard,
-            theme,
-            colormap,
+            theme_state,
+            colormap_state,
             help: HelpOverlay::default(),
             export_menu: ExportMenu::default(),
             quit_confirm: false,
@@ -624,6 +623,15 @@ impl App {
             MouseEventKind::Moved => {
                 self.tab_view.handle_mouse_move(mouse.column, mouse.row);
             }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.tab_view.handle_mouse_down(mouse.column, mouse.row);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.tab_view.handle_mouse_drag(mouse.column, mouse.row);
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.tab_view.handle_mouse_up(mouse.column, mouse.row);
+            }
             _ => {}
         }
         Ok(())
@@ -804,16 +812,18 @@ impl App {
                 Action::VizCycleColormap => {
                     // If the settings tab triggered it, use its value; otherwise cycle.
                     if self.tab_view.selected == crate::tui::tabs::Tab::Settings {
-                        self.colormap = self.tab_view.settings_colormap();
+                        let name = self.tab_view.settings_colormap_name();
+                        self.colormap_state.set(&name);
                     } else {
-                        self.colormap = self.colormap.next();
+                        self.colormap_state.next();
                     }
                 }
                 Action::ThemeCycle => {
                     if self.tab_view.selected == crate::tui::tabs::Tab::Settings {
-                        self.theme = self.tab_view.settings_theme();
+                        let name = self.tab_view.settings_theme_name();
+                        self.theme_state.set(&name);
                     } else {
-                        self.theme = self.theme.next();
+                        self.theme_state.next();
                     }
                 }
                 _ => {}
@@ -871,10 +881,10 @@ impl App {
                 );
             }
             Command::SetColormap(name) => {
-                self.colormap = Colormap::from_name(&name);
+                self.colormap_state.set(&name);
             }
             Command::SetTheme(name) => {
-                self.theme = Theme::from_name(&name);
+                self.theme_state.set(&name);
             }
         }
         Ok(())
@@ -884,18 +894,19 @@ impl App {
         let s = session::Session {
             config_path: self.config_path.clone(),
             active_tab: self.tab_view.selected as usize,
-            colormap: self.colormap.name().to_string(),
+            colormap: self.colormap_state.name().to_string(),
             projection_axis: 2,
-            theme: self.theme.name().to_string(),
+            theme: self.theme_state.name().to_string(),
         };
         session::save(&s);
     }
 
     fn render(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         // Pre-sync settings outside the draw closure
-        self.tab_view.sync_settings(self.theme, self.colormap);
-        let theme = self.theme.colors();
-        let colormap = self.colormap;
+        self.tab_view
+            .sync_settings(self.theme_state.name(), self.colormap_state.name());
+        let theme = self.theme_state.theme();
+        let colormap_name = self.colormap_state.name().to_string();
         let quit_confirm = self.quit_confirm;
 
         tui.draw(|frame| {
@@ -927,11 +938,10 @@ impl App {
                     crate::tui::tabs::TabAreas {
                         tab_bar: layout.tab_bar_area,
                         content: layout.content_area,
-                        footer: layout.footer_area,
                         layout_mode: layout.mode,
                     },
                     &theme,
-                    colormap,
+                    &colormap_name,
                     provider,
                 );
 
@@ -955,8 +965,9 @@ impl App {
 fn draw_quit_confirm(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
-    theme: &crate::themes::ThemeColors,
+    theme: &ratatui_plt::prelude::Theme,
 ) {
+    use crate::tui::plt_bridge::PhasmaThemeExt;
     use ratatui::{
         style::{Color, Modifier, Style},
         text::{Line, Span},
@@ -972,8 +983,8 @@ fn draw_quit_confirm(
     frame.render_widget(Clear, overlay);
     let block = Block::bordered()
         .title(" Quit? ")
-        .border_style(Style::default().fg(theme.warn))
-        .style(Style::default().bg(theme.bg));
+        .border_style(Style::default().fg(theme.warn()))
+        .style(Style::default().bg(theme.background));
     let inner = block.inner(overlay);
     frame.render_widget(block, overlay);
 
@@ -981,7 +992,7 @@ fn draw_quit_confirm(
         Line::from(""),
         Line::from(Span::styled(
             "  Simulation is running. Quit anyway?",
-            Style::default().fg(theme.fg),
+            Style::default().fg(theme.foreground),
         )),
         Line::from(""),
         Line::from(vec![
@@ -991,14 +1002,14 @@ fn draw_quit_confirm(
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" Yes  ", Style::default().fg(theme.fg)),
+            Span::styled(" Yes  ", Style::default().fg(theme.foreground)),
             Span::styled(
                 "[n/Esc]",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" No", Style::default().fg(theme.fg)),
+            Span::styled(" No", Style::default().fg(theme.foreground)),
         ]),
     ];
     frame.render_widget(Paragraph::new(lines), inner);

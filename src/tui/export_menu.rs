@@ -6,7 +6,9 @@ use ratatui::{
     widgets::{Block, Clear, List, ListItem},
 };
 
-use crate::{export::ExportFormat, themes::ThemeColors, tui::action::Action};
+use ratatui_plt::prelude::Theme;
+
+use crate::{export::ExportFormat, tui::action::Action, tui::plt_bridge::PhasmaThemeExt};
 
 const FORMATS: &[ExportFormat] = &[
     ExportFormat::Screenshot,
@@ -91,7 +93,7 @@ impl ExportMenu {
         }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -107,7 +109,7 @@ impl ExportMenu {
         let block = Block::bordered()
             .title(" Export ")
             .border_style(Style::default().fg(theme.accent))
-            .style(Style::default().bg(theme.bg));
+            .style(Style::default().bg(theme.background));
         let inner = block.inner(overlay);
         frame.render_widget(block, overlay);
 
@@ -120,7 +122,7 @@ impl ExportMenu {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme.fg)
+                    Style::default().fg(theme.foreground)
                 };
                 let marker = if i == self.selected { "► " } else { "  " };
                 ListItem::new(format!("{marker}[{}] {}", fmt.shortcut(), fmt.name())).style(style)

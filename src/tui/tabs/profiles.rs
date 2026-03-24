@@ -9,13 +9,14 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, ReferenceLine, Scale, Series,
+    Axis as PltAxis, Band, BandPlot, Bounds, LegendPosition, LinePlot, LineStyle, MarkerShape,
+    ReferenceLine, Scale, ScatterPlot, Series,
 };
+use ratatui_plt::widgets::radial::RadialPlot;
 
-use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::phasma_theme_to_plt,
-};
+use ratatui_plt::prelude::Theme;
+
+use crate::{data::DataProvider, tui::action::Action, tui::plt_bridge::PhasmaThemeExt};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ProfileKind {
@@ -49,6 +50,8 @@ const LAGRANGIAN_CAP: usize = 500;
 
 struct CachedProfiles {
     density: Vec<(f64, f64)>,
+    /// Per-bin scatter for density profile: (r, mean, std).
+    density_scatter: Vec<(f64, f64, f64)>,
     mass: Vec<(f64, f64)>,
     potential: Vec<(f64, f64)>,
     sigma: Vec<(f64, f64)>,
@@ -60,6 +63,7 @@ impl Default for CachedProfiles {
     fn default() -> Self {
         Self {
             density: Vec::new(),
+            density_scatter: Vec::new(),
             mass: Vec::new(),
             potential: Vec::new(),
             sigma: Vec::new(),
@@ -86,6 +90,12 @@ pub struct ProfilesTab {
     /// Cached lagrangian series (Vec copies of VecDeque history).
     cached_lagrangian: [Vec<(f64, f64)>; 5],
     cached_lagrangian_len: usize,
+    /// Toggle polar density view.
+    show_polar: bool,
+    /// Toggle convergence data display.
+    show_convergence: bool,
+    /// Convergence data: (resolution, energy_drift) pairs.
+    convergence_data: Vec<(f64, f64)>,
 }
 
 impl Default for ProfilesTab {
@@ -102,6 +112,9 @@ impl Default for ProfilesTab {
             cached_profiles: CachedProfiles::default(),
             cached_lagrangian: std::array::from_fn(|_| Vec::new()),
             cached_lagrangian_len: 0,
+            show_polar: false,
+            show_convergence: false,
+            convergence_data: Vec::new(),
         }
     }
 }
@@ -153,6 +166,14 @@ impl ProfilesTab {
                 self.show_lowess = !self.show_lowess;
                 None
             }
+            KeyCode::Char('p') => {
+                self.show_polar = !self.show_polar;
+                None
+            }
+            KeyCode::Char('C') => {
+                self.show_convergence = !self.show_convergence;
+                None
+            }
             _ => None,
         }
     }
@@ -194,7 +215,7 @@ impl ProfilesTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -203,7 +224,7 @@ impl ProfilesTab {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         "No profile data yet — start a simulation on ",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         "[F2]",
@@ -218,6 +239,24 @@ impl ProfilesTab {
         }
         let Some(state) = state else { return };
 
+        // Convergence study overlay (Shift-C)
+        if self.show_convergence && !self.convergence_data.is_empty() {
+            let plt_theme = theme.clone();
+            let plot = ScatterPlot::new()
+                .series(
+                    Series::new("Convergence")
+                        .data(self.convergence_data.clone())
+                        .color(theme.color_cycle.at(0))
+                        .marker(MarkerShape::Circle),
+                )
+                .x_axis(PltAxis::new().label("N").scale(Scale::Log(10.0)))
+                .y_axis(PltAxis::new().label("|ΔE/E|").scale(Scale::Log(10.0)))
+                .title(" Convergence Study ")
+                .theme(plt_theme);
+            frame.render_widget(&plot, area);
+            return;
+        }
+
         // Recompute profiles only when step or bin count changes
         let n_bins = BIN_PRESETS[self.bin_preset_idx];
         if state.step != self.cached_profiles.cached_step
@@ -229,11 +268,14 @@ impl ProfilesTab {
             let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
             let g = state.gravitational_constant;
             let density_profile = compute_radial_profile(&state.density_xy, nx, ny, dx, n_bins);
+            let density_scatter =
+                compute_radial_profile_with_scatter(&state.density_xy, nx, ny, dx, n_bins);
             let mass_profile = compute_mass_profile(&density_profile, dx);
             let potential_profile = compute_potential_profile(&mass_profile, g);
             let sigma_profile = compute_sigma_profile(&density_profile, &mass_profile, g);
             self.cached_profiles = CachedProfiles {
                 density: density_profile,
+                density_scatter,
                 mass: mass_profile,
                 potential: potential_profile,
                 sigma: sigma_profile,
@@ -262,63 +304,47 @@ impl ProfilesTab {
             self.layout_mode
         };
 
+        // Optional polar density split
+        let (profile_area, polar_area) =
+            if self.show_polar && main_area.width >= 60 && main_area.height >= 12 {
+                let [left, right] =
+                    Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                        .areas(main_area);
+                (left, Some(right))
+            } else {
+                (main_area, None)
+            };
+
         match effective_mode {
             LayoutMode::Stacked => {
-                self.draw_stacked(frame, main_area, theme, data_provider);
+                self.draw_stacked(frame, profile_area, theme, data_provider);
             }
             LayoutMode::Single => {
-                self.draw_single(frame, main_area, theme, data_provider);
+                self.draw_single(frame, profile_area, theme, data_provider);
             }
         }
 
-        // Footer hint
-        let kind_labels = ["[1]ρ", "[2]M", "[3]Φ", "[4]σ", "[5]β"];
-        let active = match self.kind {
-            ProfileKind::Density => 0,
-            ProfileKind::Mass => 1,
-            ProfileKind::Potential => 2,
-            ProfileKind::Velocity => 3,
-            ProfileKind::Anisotropy => 4,
+        // Polar density view
+        if let Some(polar_area) = polar_area {
+            self.draw_polar_density(frame, polar_area, theme, state);
+        }
+
+        // Footer — state display only
+        let kind_name = match self.kind {
+            ProfileKind::Density => "\u{03c1}(r)",
+            ProfileKind::Mass => "M(r)",
+            ProfileKind::Potential => "\u{03a6}(r)",
+            ProfileKind::Velocity => "\u{03c3}(r)",
+            ProfileKind::Anisotropy => "\u{03b2}(r)",
         };
-        let mut hint_parts: Vec<String> = kind_labels
-            .iter()
-            .enumerate()
-            .map(|(i, &label)| {
-                if i == active {
-                    format!("{label}*")
-                } else {
-                    label.to_string()
-                }
-            })
-            .collect();
         let mode_tag = match self.layout_mode {
             LayoutMode::Single => "single",
             LayoutMode::Stacked => "stacked",
         };
         let bins = BIN_PRESETS[self.bin_preset_idx];
-        // Check if analytic is available for the current model
-        let model_type = data_provider
-            .config()
-            .map(|c| c.model.model_type.as_str())
-            .unwrap_or("");
-        let analytic_supported = matches!(model_type, "plummer" | "hernquist" | "nfw");
-        let analytic_tag = if self.show_analytic && analytic_supported {
-            "*"
-        } else if self.show_analytic {
-            " (n/a)"
-        } else {
-            ""
-        };
-        hint_parts.push(format!(
-            "  [l] log{}  [a] analytic{}  [s] {}  [b] bins:{}",
-            if self.log_scale { "*" } else { "" },
-            analytic_tag,
-            mode_tag,
-            bins,
-        ));
-        let hint = hint_parts.join("  ");
+        let status = format!("{kind_name}  {mode_tag}  bins:{bins}");
         frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+            Paragraph::new(status).style(Style::default().fg(theme.dim())),
             info_area,
         );
     }
@@ -327,7 +353,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         // 4 profile panels + Lagrangian radii stub, sharing the r axis
@@ -371,7 +397,7 @@ impl ProfilesTab {
                 kind,
                 title,
                 profile_data,
-                theme.chart[color_idx],
+                theme.chart_color(color_idx),
             );
         }
 
@@ -383,7 +409,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let (kind, title, color, profile_data): (ProfileKind, &str, _, &[(f64, f64)]) =
@@ -391,31 +417,31 @@ impl ProfilesTab {
                 ProfileKind::Density => (
                     ProfileKind::Density,
                     " ρ(r) ",
-                    theme.chart[0],
+                    theme.chart_color(0),
                     &self.cached_profiles.density,
                 ),
                 ProfileKind::Mass => (
                     ProfileKind::Mass,
                     " M(<r) ",
-                    theme.chart[1],
+                    theme.chart_color(1),
                     &self.cached_profiles.mass,
                 ),
                 ProfileKind::Potential => (
                     ProfileKind::Potential,
                     " Φ(r) ",
-                    theme.chart[2],
+                    theme.chart_color(2),
                     &self.cached_profiles.potential,
                 ),
                 ProfileKind::Velocity => (
                     ProfileKind::Velocity,
                     " σ(r) ",
-                    theme.chart[4],
+                    theme.chart_color(4),
                     &self.cached_profiles.sigma,
                 ),
                 ProfileKind::Anisotropy => (
                     ProfileKind::Anisotropy,
                     " β(r) ",
-                    theme.chart[3],
+                    theme.chart_color(3),
                     &self.cached_profiles.density,
                 ),
             };
@@ -450,7 +476,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
         kind: ProfileKind,
         title: &str,
@@ -492,7 +518,7 @@ impl ProfilesTab {
             frame.render_widget(
                 Block::bordered()
                     .title(full_title.as_str())
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
@@ -509,7 +535,7 @@ impl ProfilesTab {
                 (area, None)
             };
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         let mut series_vec = vec![Series::new("sim").data(chart_data.clone()).color(color)];
 
@@ -517,7 +543,7 @@ impl ProfilesTab {
             series_vec.push(
                 Series::new("analytic")
                     .data(analytic_data.clone())
-                    .color(theme.chart[5 % theme.chart.len()])
+                    .color(theme.chart_color(5))
                     .line_style(LineStyle::dashed()),
             );
         }
@@ -527,28 +553,53 @@ impl ProfilesTab {
             let x_vals: Vec<f64> = chart_data.iter().map(|(x, _)| *x).collect();
             let y_vals: Vec<f64> = chart_data.iter().map(|(_, y)| *y).collect();
             if let Some(result) = ratatui_plt::statistics::lowess(&x_vals, &y_vals, 0.3) {
-                series_vec.push(
-                    result.to_series("LOWESS", theme.chart[6 % theme.chart.len()]),
-                );
+                series_vec.push(result.to_series("LOWESS", theme.chart_color(6)));
             }
         }
 
-        let x_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
-            PltAxis::new().label("r").scale(Scale::Log(10.0))
-        } else {
-            PltAxis::new().label("r")
+        let use_log = self.log_scale && kind != ProfileKind::Anisotropy;
+
+        let make_x_axis = || {
+            if use_log {
+                PltAxis::new().label("r").scale(Scale::Log(10.0))
+            } else {
+                PltAxis::new().label("r")
+            }
+        };
+        let make_y_axis = || {
+            if use_log {
+                PltAxis::new().scale(Scale::Log(10.0))
+            } else {
+                PltAxis::new()
+            }
         };
 
-        let y_axis = if self.log_scale && kind != ProfileKind::Anisotropy {
-            PltAxis::new().scale(Scale::Log(10.0))
-        } else {
-            PltAxis::new()
-        };
+        // Render scatter band (mean ± std) behind the LinePlot for density profile
+        if self.show_lowess
+            && kind == ProfileKind::Density
+            && self.cached_profiles.density_scatter.len() >= 2
+        {
+            let scatter = &self.cached_profiles.density_scatter;
+            let x: Vec<f64> = scatter.iter().map(|(r, _, _)| *r).collect();
+            let y_lower: Vec<f64> = scatter
+                .iter()
+                .map(|(_, mean, std)| (mean - std).max(0.0))
+                .collect();
+            let y_upper: Vec<f64> = scatter.iter().map(|(_, mean, std)| mean + std).collect();
+            let band_color = theme.chart_color(6);
+            let band = Band::new("±σ", x, y_lower, y_upper).color(band_color);
+            let band_plot = BandPlot::new()
+                .band(band)
+                .x_axis(make_x_axis())
+                .y_axis(make_y_axis())
+                .theme(plt_theme.clone());
+            frame.render_widget(&band_plot, profile_area);
+        }
 
         let plot = LinePlot::new()
             .series_vec(series_vec)
-            .x_axis(x_axis)
-            .y_axis(y_axis)
+            .x_axis(make_x_axis())
+            .y_axis(make_y_axis())
             .title(full_title)
             .show_legend(true)
             .legend_position(LegendPosition::TopRight)
@@ -586,12 +637,12 @@ impl ProfilesTab {
                     .series(
                         Series::new("residual")
                             .data(residual)
-                            .color(theme.chart[3 % theme.chart.len()]),
+                            .color(theme.chart_color(3)),
                     )
                     .x_axis(res_x)
                     .y_axis(PltAxis::new())
                     .title(" Residual ")
-                    .reference_line(ReferenceLine::hline(0.0, theme.dim))
+                    .reference_line(ReferenceLine::hline(0.0, theme.dim()))
                     .theme(plt_theme);
 
                 frame.render_widget(&res_plot, res_area);
@@ -599,19 +650,19 @@ impl ProfilesTab {
         }
     }
 
-    fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Check if we have any data
         let has_data = self.lagrangian_history[0].len() >= 2;
         if !has_data {
             let block = Block::bordered()
                 .title(" Lagrangian Radii ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "  Lagrangian radii appear once simulation runs",
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )),
                 inner,
             );
@@ -619,7 +670,7 @@ impl ProfilesTab {
         }
 
         const LABELS: [&str; 5] = ["L10", "L25", "L50", "L75", "L90"];
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         let series_vec: Vec<Series> = self
             .cached_lagrangian
@@ -628,7 +679,7 @@ impl ProfilesTab {
             .map(|(i, data)| {
                 Series::new(LABELS[i])
                     .data(data.clone())
-                    .color(theme.chart[i % theme.chart.len()])
+                    .color(theme.chart_color(i))
             })
             .collect();
 
@@ -641,6 +692,99 @@ impl ProfilesTab {
 
         frame.render_widget(&plot, area);
     }
+
+    fn draw_polar_density(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        state: &crate::sim::SimState,
+    ) {
+        let nx = state.density_nx;
+        let ny = state.density_ny;
+        if state.density_xy.is_empty() || nx == 0 || ny == 0 {
+            let block = Block::bordered()
+                .title(" Polar ρ(θ) ")
+                .border_style(Style::default().fg(theme.axis_color));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let l_box = state.spatial_extent * 2.0;
+        let dx = if nx > 0 { l_box / nx as f64 } else { 1.0 };
+        let angular = compute_angular_profile(&state.density_xy, nx, ny, dx, 36);
+        if angular.is_empty() {
+            return;
+        }
+
+        let plt_theme = theme.clone();
+        let plot = RadialPlot::new()
+            .series(
+                Series::new("ρ(θ)")
+                    .data(angular)
+                    .color(theme.color_cycle.at(0)),
+            )
+            .title(" Polar Density ρ(θ) ")
+            .theme(plt_theme);
+
+        frame.render_widget(&plot, area);
+    }
+
+    /// Load convergence data for display in the convergence study overlay.
+    ///
+    /// Each entry is `(resolution, energy_drift)` — typically produced by the
+    /// convergence runner.
+    pub fn load_convergence_data(&mut self, data: Vec<(f64, f64)>) {
+        self.convergence_data = data;
+    }
+}
+
+/// Compute angular density profile by binning a 2D density field in polar angle.
+/// Returns (theta_radians, mean_density) pairs for `n_theta` bins around [0, 2π).
+fn compute_angular_profile(
+    data: &[f64],
+    nx: usize,
+    ny: usize,
+    _dx: f64,
+    n_theta: usize,
+) -> Vec<(f64, f64)> {
+    if data.is_empty() || nx == 0 || ny == 0 || n_theta == 0 {
+        return Vec::new();
+    }
+
+    let cx = nx as f64 / 2.0;
+    let cy = ny as f64 / 2.0;
+    let mut bins = vec![0.0f64; n_theta];
+    let mut counts = vec![0u32; n_theta];
+
+    for iy in 0..ny {
+        for ix in 0..nx {
+            let x = ix as f64 + 0.5 - cx;
+            let y = iy as f64 + 0.5 - cy;
+            // Skip the very center to avoid noise
+            if x * x + y * y < 4.0 {
+                continue;
+            }
+            let mut theta = y.atan2(x);
+            if theta < 0.0 {
+                theta += 2.0 * std::f64::consts::PI;
+            }
+            let bin = ((theta / (2.0 * std::f64::consts::PI)) * n_theta as f64) as usize;
+            let bin = bin.min(n_theta - 1);
+            bins[bin] += data[iy * nx + ix];
+            counts[bin] += 1;
+        }
+    }
+
+    bins.iter()
+        .zip(counts.iter())
+        .enumerate()
+        .filter(|&(_, (_, &c))| c > 0)
+        .map(|(i, (&sum, &c))| {
+            let theta = 2.0 * std::f64::consts::PI * (i as f64 + 0.5) / n_theta as f64;
+            (theta, sum / c as f64)
+        })
+        .collect()
 }
 
 /// Compute azimuthally averaged radial density profile from a 2D density projection.
@@ -682,6 +826,57 @@ pub(crate) fn compute_radial_profile(
         .enumerate()
         .filter(|&(_, (&_, &c))| c > 0)
         .map(|(i, (&s, &c))| ((i as f64 + 0.5) * bin_width * dx, s / c as f64))
+        .collect()
+}
+
+/// Like `compute_radial_profile`, but also returns per-bin standard deviation.
+/// Returns (r, mean, std) triples.
+pub(crate) fn compute_radial_profile_with_scatter(
+    data: &[f64],
+    nx: usize,
+    ny: usize,
+    dx: f64,
+    requested_bins: usize,
+) -> Vec<(f64, f64, f64)> {
+    if data.is_empty() || nx == 0 || ny == 0 {
+        return Vec::new();
+    }
+
+    let cx = nx as f64 / 2.0;
+    let cy = ny as f64 / 2.0;
+    let max_r = cx.min(cy);
+    let n_bins = requested_bins.clamp(16, 256);
+    let bin_width = max_r / n_bins as f64;
+
+    let mut bin_sum = vec![0.0f64; n_bins];
+    let mut bin_sum2 = vec![0.0f64; n_bins];
+    let mut bin_count = vec![0u32; n_bins];
+
+    for iy in 0..ny {
+        for ix in 0..nx {
+            let ddx = ix as f64 + 0.5 - cx;
+            let ddy = iy as f64 + 0.5 - cy;
+            let r = (ddx * ddx + ddy * ddy).sqrt();
+            let bin = ((r / bin_width) as usize).min(n_bins - 1);
+            let val = data[iy * nx + ix];
+            bin_sum[bin] += val;
+            bin_sum2[bin] += val * val;
+            bin_count[bin] += 1;
+        }
+    }
+
+    bin_sum
+        .iter()
+        .zip(bin_sum2.iter())
+        .zip(bin_count.iter())
+        .enumerate()
+        .filter(|&(_, ((_, _), &c))| c > 1)
+        .map(|(i, ((&s, &s2), &c))| {
+            let r = (i as f64 + 0.5) * bin_width * dx;
+            let mean = s / c as f64;
+            let variance = (s2 / c as f64 - mean * mean).max(0.0);
+            (r, mean, variance.sqrt())
+        })
         .collect()
 }
 

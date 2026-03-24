@@ -7,7 +7,8 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::themes::ThemeColors;
+use crate::tui::plt_bridge::PhasmaThemeExt;
+use ratatui_plt::prelude::Theme;
 
 #[derive(Debug, Clone)]
 pub enum FormField {
@@ -194,7 +195,7 @@ impl FormField {
         }
     }
 
-    pub fn draw(&self, area: Rect, buf: &mut Buffer, theme: &ThemeColors) {
+    pub fn draw(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let (focused, is_editing, has_error) = match self {
             FormField::TextInput {
                 focused,
@@ -214,8 +215,16 @@ impl FormField {
                 error,
                 ..
             } => {
-                let label_color = if has_error { theme.error } else { theme.dim };
-                let value_color = if is_editing { Color::Yellow } else { theme.fg };
+                let label_color = if has_error {
+                    theme.error()
+                } else {
+                    theme.dim()
+                };
+                let value_color = if is_editing {
+                    Color::Yellow
+                } else {
+                    theme.foreground
+                };
                 let cursor = if is_editing { "▎" } else { "" };
                 let mut spans = vec![
                     Span::styled(format!("{:<16}", label), Style::default().fg(label_color)),
@@ -225,7 +234,7 @@ impl FormField {
                 if !unit.is_empty() {
                     spans.push(Span::styled(
                         format!(" {unit}"),
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ));
                 }
                 if is_editing {
@@ -238,13 +247,13 @@ impl FormField {
                 } else if focused {
                     spans.push(Span::styled(
                         "  [Enter to edit]",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ));
                 }
                 if let Some(err) = error {
                     spans.push(Span::styled(
                         format!("  ✗ {err}"),
-                        Style::default().fg(theme.error),
+                        Style::default().fg(theme.error()),
                     ));
                 }
                 Line::from(spans)
@@ -257,21 +266,23 @@ impl FormField {
             } => {
                 let val = options.get(*selected).map(|s| s.as_str()).unwrap_or("—");
                 Line::from(vec![
-                    Span::styled(format!("{:<16}", label), Style::default().fg(theme.dim)),
+                    Span::styled(format!("{:<16}", label), Style::default().fg(theme.dim())),
                     Span::styled(
                         format!("◄ {val} ►"),
-                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ])
             }
             FormField::Toggle { label, value, .. } => {
                 let (sym, col) = if *value {
-                    ("● ON ", theme.ok)
+                    ("● ON ", theme.ok())
                 } else {
-                    ("○ OFF", theme.dim)
+                    ("○ OFF", theme.dim())
                 };
                 Line::from(vec![
-                    Span::styled(format!("{:<16}", label), Style::default().fg(theme.dim)),
+                    Span::styled(format!("{:<16}", label), Style::default().fg(theme.dim())),
                     Span::styled(sym, Style::default().fg(col).add_modifier(Modifier::BOLD)),
                 ])
             }
@@ -280,7 +291,7 @@ impl FormField {
         let style = if is_editing {
             Style::default().bg(Color::Rgb(40, 40, 60))
         } else if focused {
-            Style::default().bg(theme.highlight)
+            Style::default().bg(theme.surface)
         } else {
             Style::default()
         };

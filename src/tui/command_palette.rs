@@ -15,7 +15,8 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
-use crate::themes::ThemeColors;
+use crate::tui::plt_bridge::PhasmaThemeExt;
+use ratatui_plt::prelude::Theme;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -87,7 +88,7 @@ impl CommandPalette {
     }
 
     /// Draw the command palette at the bottom of the screen.
-    pub fn draw(&self, frame: &mut Frame, area: Rect, _theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, _theme: &Theme) {
         if !self.visible {
             return;
         }

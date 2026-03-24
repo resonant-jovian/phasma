@@ -1,4 +1,5 @@
 use crossterm::event::KeyEvent;
+use ratatui::style::Color;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -6,16 +7,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use ratatui::style::Color;
 use ratatui_plt::prelude::{
-    Axis as PltAxis, Bounds, LineStyle, LinePlot, MarkerShape, Scale, Series,
+    Axis as PltAxis, Bounds, LinePlot, LineStyle, MarkerShape, Scale, Series,
 };
 use ratatui_plt::statistics::poly_fit;
+use ratatui_plt::widgets::error_bar::ErrorBarPlot;
+
+use ratatui_plt::prelude::Theme;
 
 use crate::data::DataProvider;
-use crate::themes::ThemeColors;
 use crate::tui::action::Action;
-use crate::tui::plt_bridge::phasma_theme_to_plt;
+use crate::tui::plt_bridge::PhasmaThemeExt;
 
 /// F9 Poisson Detail tab — displays P(k) power spectrum,
 /// Poisson residual time series, near-field correction, and solver statistics.
@@ -37,7 +39,7 @@ impl PoissonDetailTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         // Compact mode: show only P(k) spectrum
@@ -63,17 +65,13 @@ impl PoissonDetailTab {
         ])
         .areas(top);
 
-        let [mid_left, mid_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(middle);
+        let [mid_left, mid_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(middle);
 
-        let [bottom_left, bottom_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(bottom);
+        let [bottom_left, bottom_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(bottom);
 
         self.draw_power_spectrum(frame, top_left, theme, data_provider);
         Self::draw_density_spectrum(frame, top_mid, theme, data_provider);
@@ -88,7 +86,7 @@ impl PoissonDetailTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -104,12 +102,12 @@ impl PoissonDetailTab {
 
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
                 let mut plot = LinePlot::new()
                     .series(
                         Series::new("|\u{03a6}\u{0302}(k)|\u{00b2}")
                             .data(data.clone())
-                            .color(theme.chart[0])
+                            .color(theme.chart_color(0))
                             .marker(MarkerShape::Circle),
                     )
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
@@ -127,13 +125,13 @@ impl PoissonDetailTab {
             _ => {
                 let block = Block::bordered()
                     .title(" P(k) Potential Power Spectrum ")
-                    .border_style(Style::default().fg(theme.border));
+                    .border_style(Style::default().fg(theme.border_color()));
                 let inner = block.inner(area);
                 frame.render_widget(block, area);
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![Span::styled(
                         "  Waiting for spectrum data...",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     )])),
                     inner,
                 );
@@ -144,7 +142,7 @@ impl PoissonDetailTab {
     fn draw_density_spectrum(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -157,14 +155,34 @@ impl PoissonDetailTab {
             })
         });
 
+        // Check for per-k-shell std data for error bars
+        let spec_std: Option<Vec<f64>> =
+            state.and_then(|s| s.density_power_spectrum_std.as_ref().cloned());
+
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
+
+                // If we have std data, render error bars
+                if let Some(ref stds) = spec_std {
+                    if stds.len() == data.len() {
+                        let err_plot = ErrorBarPlot::new()
+                            .data(data.clone(), stds.clone(), stds.clone())
+                            .color(theme.chart_color(1))
+                            .title(" P\u{03c1}(k) Density Spectrum \u{00b1}\u{03c3} ")
+                            .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
+                            .y_axis(PltAxis::new().label("P\u{03c1}(k)").scale(Scale::Log(10.0)))
+                            .theme(plt_theme);
+                        frame.render_widget(&err_plot, area);
+                        return;
+                    }
+                }
+
                 let mut plot = LinePlot::new()
                     .series(
                         Series::new("|\u{03c1}\u{0302}(k)|\u{00b2}")
                             .data(data.clone())
-                            .color(theme.chart[1])
+                            .color(theme.chart_color(1))
                             .marker(MarkerShape::Circle),
                     )
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
@@ -182,13 +200,13 @@ impl PoissonDetailTab {
             _ => {
                 let block = Block::bordered()
                     .title(" P\u{03c1}(k) Density Spectrum ")
-                    .border_style(Style::default().fg(theme.border));
+                    .border_style(Style::default().fg(theme.border_color()));
                 let inner = block.inner(area);
                 frame.render_widget(block, area);
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
                         "  Waiting for data...",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ))),
                     inner,
                 );
@@ -199,7 +217,7 @@ impl PoissonDetailTab {
     fn draw_field_energy_spectrum(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -214,12 +232,12 @@ impl PoissonDetailTab {
 
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
                 let mut plot = LinePlot::new()
                     .series(
                         Series::new("E(k)")
                             .data(data.clone())
-                            .color(theme.chart[2])
+                            .color(theme.chart_color(2))
                             .marker(MarkerShape::Circle),
                     )
                     .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
@@ -237,13 +255,13 @@ impl PoissonDetailTab {
             _ => {
                 let block = Block::bordered()
                     .title(" E(k) Field Energy Spectrum ")
-                    .border_style(Style::default().fg(theme.border));
+                    .border_style(Style::default().fg(theme.border_color()));
                 let inner = block.inner(area);
                 frame.render_widget(block, area);
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
                         "  Waiting for data...",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ))),
                     inner,
                 );
@@ -254,7 +272,7 @@ impl PoissonDetailTab {
     fn draw_poisson_residual_chart(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let data = data_provider
@@ -265,25 +283,25 @@ impl PoissonDetailTab {
         if data.len() < 2 {
             let block = Block::bordered()
                 .title(" Poisson Residual L\u{2082} ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![Span::styled(
                     "  Collecting data...",
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )])),
                 inner,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
             .series(
                 Series::new("residual")
                     .data(data)
-                    .color(theme.chart[1])
+                    .color(theme.chart_color(1))
                     .marker(MarkerShape::Circle),
             )
             .x_axis(PltAxis::new().label("t"))
@@ -297,7 +315,7 @@ impl PoissonDetailTab {
     fn draw_near_field_correction_chart(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let data = data_provider
@@ -308,25 +326,25 @@ impl PoissonDetailTab {
         if data.len() < 2 {
             let block = Block::bordered()
                 .title(" Near-field Correction ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![Span::styled(
                     "  Waiting for data...",
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )])),
                 inner,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
             .series(
                 Series::new("near-field")
                     .data(data)
-                    .color(theme.chart[3])
+                    .color(theme.chart_color(3))
                     .marker(MarkerShape::Circle),
             )
             .x_axis(PltAxis::new().label("t"))
@@ -340,17 +358,19 @@ impl PoissonDetailTab {
     fn draw_solver_stats(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let block = Block::bordered()
             .title(" Solver Stats ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let label_style = Style::default().fg(theme.dim);
-        let value_style = Style::default().fg(theme.fg).add_modifier(Modifier::BOLD);
+        let label_style = Style::default().fg(theme.dim());
+        let value_style = Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::BOLD);
 
         let lines = if let Some(state) = data_provider.current_state() {
             let poisson_label = if state.poisson_type.is_empty() {
@@ -376,9 +396,9 @@ impl PoissonDetailTab {
 
             let vr = state.virial_ratio;
             let virial_color = if (vr - 1.0).abs() < 0.1 {
-                theme.ok
+                theme.ok()
             } else {
-                theme.warn
+                theme.warn()
             };
 
             vec![
@@ -449,12 +469,12 @@ impl PoissonDetailTab {
     fn draw_green_rank_panel(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let block = Block::bordered()
             .title(" Green\u{2019}s Fn Rank (Braess-Hackbusch) ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -471,32 +491,34 @@ impl PoissonDetailTab {
         if let Some(s) = state {
             if let Some(rg) = s.green_function_rank {
                 lines.push(Line::from(vec![
-                    Span::styled("  R\u{1d33} terms: ", Style::default().fg(theme.dim)),
+                    Span::styled("  R\u{1d33} terms: ", Style::default().fg(theme.dim())),
                     Span::styled(
                         format!("{rg}"),
-                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
             } else {
                 lines.push(Line::from(Span::styled(
                     "  R\u{1d33} terms: \u{2014}",
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )));
             }
             if let Some(terms) = s.exp_sum_terms {
                 lines.push(Line::from(vec![
-                    Span::styled("  Exp-sum terms: ", Style::default().fg(theme.dim)),
-                    Span::styled(format!("{terms}"), Style::default().fg(theme.fg)),
+                    Span::styled("  Exp-sum terms: ", Style::default().fg(theme.dim())),
+                    Span::styled(format!("{terms}"), Style::default().fg(theme.foreground)),
                 ]));
             }
         } else {
             lines.push(Line::from(Span::styled(
                 "  R\u{1d33} terms: \u{2014}",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
             lines.push(Line::from(Span::styled(
                 "  (no sim data)",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
         }
 

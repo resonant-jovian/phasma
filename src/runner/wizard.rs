@@ -6,9 +6,7 @@ use rust_decimal::Decimal;
 
 use crate::config::PhasmaConfig;
 
-fn dec(f: f64) -> Decimal {
-    Decimal::from_f64_retain(f).unwrap_or(Decimal::ZERO)
-}
+use caustic::dec;
 
 /// Run the interactive wizard, printing prompts to stderr and reading from stdin.
 pub fn run_wizard() -> anyhow::Result<()> {

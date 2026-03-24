@@ -1,23 +1,28 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
 use ratatui_plt::fft::stft;
 use ratatui_plt::prelude::{
-    Annotation, Axis as PltAxis, Bounds, LegendPosition, LinePlot, LineStyle, PsdPlot, RefLineDash,
-    ReferenceLine, Scale, Series, Spectrogram, StackedArea,
+    Annotation, Axis as PltAxis, Band, BandPlot, Bounds, LegendPosition, LinePlot, LineStyle,
+    PsdPlot, RefLineDash, ReferenceLine, Scale, Series, SharedSpanState, Spectrogram, StackedArea,
+    shared_span_state,
 };
 use ratatui_plt::statistics::linear_regression;
+use ratatui_plt::widgets::ecdf::{EcdfDataset, EcdfPlot};
 
 use std::borrow::Cow;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::{make_symlog_axis, phasma_theme_to_plt},
+    data::DataProvider,
+    tui::action::Action,
+    tui::plt_bridge::{PhasmaThemeExt, make_symlog_axis},
 };
 
 type SeriesData<'a> = (&'a str, &'a [(f64, f64)], Color);
@@ -154,6 +159,10 @@ pub struct EnergyTab {
     /// Time and label of exit event for annotation
     exit_event_time: Option<f64>,
     exit_reason_label: String,
+    /// Shared state for mouse-drag span selection on the energy chart
+    span_state: SharedSpanState,
+    /// Track the energy chart render area for mouse coordinate mapping
+    last_energy_area: Rect,
 }
 
 impl Default for EnergyTab {
@@ -174,6 +183,8 @@ impl Default for EnergyTab {
             cached_spectrogram: CachedSpectrogram::default(),
             exit_event_time: None,
             exit_reason_label: String::new(),
+            span_state: shared_span_state(),
+            last_energy_area: Rect::default(),
         }
     }
 }
@@ -197,7 +208,7 @@ impl EnergyTab {
                 self.show_drift = !self.show_drift;
                 None
             }
-            KeyCode::Char('L') => {
+            KeyCode::Char('y') => {
                 self.symlog_drift = !self.symlog_drift;
                 None
             }
@@ -285,7 +296,7 @@ impl EnergyTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let diag = data_provider.diagnostics();
@@ -294,7 +305,7 @@ impl EnergyTab {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         "No diagnostics data yet — start a simulation on ",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         "[F2]",
@@ -320,10 +331,8 @@ impl EnergyTab {
             // Compute abs drift directly instead of clone+mutate
             let abs_energy: Vec<(f64, f64)> =
                 energy_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
-            let abs_mass: Vec<(f64, f64)> =
-                mass_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
-            let abs_c2: Vec<(f64, f64)> =
-                c2_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_mass: Vec<(f64, f64)> = mass_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
+            let abs_c2: Vec<(f64, f64)> = c2_drift.iter().map(|&(t, d)| (t, d.abs())).collect();
 
             // Compute linear regression fit when we have enough drift data points
             let energy_drift_fit = if energy_drift.len() >= 10 {
@@ -368,6 +377,9 @@ impl EnergyTab {
 
         // Compact mode: single panel (selected by panel key 1-9)
         if area.width < 76 {
+            if self.selected_panel == 0 {
+                self.last_energy_area = area;
+            }
             match self.selected_panel {
                 0 => self.draw_energy_chart(frame, area, theme, data_provider),
                 1 => self.draw_mass_chart(frame, area, theme),
@@ -394,6 +406,7 @@ impl EnergyTab {
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(bottom);
 
+        self.last_energy_area = top_left;
         self.draw_energy_chart(frame, top_left, theme, data_provider);
         self.draw_mass_chart(frame, top_right, theme);
         self.draw_virial_chart(frame, bottom_left, theme);
@@ -411,7 +424,7 @@ impl EnergyTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         if self.show_drift {
@@ -445,14 +458,14 @@ impl EnergyTab {
                 .map(|&(t, w)| (t, w.abs()))
                 .collect();
 
-            let plt_theme = phasma_theme_to_plt(theme);
+            let plt_theme = theme.clone();
             let stacked = StackedArea::new()
                 .series(
                     Series::new("T")
                         .data(self.cached.kinetic_energy.clone())
-                        .color(theme.chart[1]),
+                        .color(theme.chart_color(1)),
                 )
-                .series(Series::new("|W|").data(abs_w).color(theme.chart[2]))
+                .series(Series::new("|W|").data(abs_w).color(theme.chart_color(2)))
                 .x_axis(PltAxis::new().label("t"))
                 .y_axis(PltAxis::new())
                 .title(" Energy (stacked) ")
@@ -465,13 +478,13 @@ impl EnergyTab {
             let mut datasets: Vec<SeriesData> = Vec::new();
 
             if self.traces.total_energy && !self.cached.total_energy.is_empty() {
-                datasets.push(("E_tot", &self.cached.total_energy, theme.chart[0]));
+                datasets.push(("E_tot", &self.cached.total_energy, theme.chart_color(0)));
             }
             if self.traces.kinetic_energy && !self.cached.kinetic_energy.is_empty() {
-                datasets.push(("T", &self.cached.kinetic_energy, theme.chart[1]));
+                datasets.push(("T", &self.cached.kinetic_energy, theme.chart_color(1)));
             }
             if self.traces.potential_energy && !self.cached.potential_energy.is_empty() {
-                datasets.push(("W", &self.cached.potential_energy, theme.chart[2]));
+                datasets.push(("W", &self.cached.potential_energy, theme.chart_color(2)));
             }
 
             draw_multi_series_windowed(
@@ -486,17 +499,17 @@ impl EnergyTab {
         }
     }
 
-    fn draw_mass_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_mass_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut series: Vec<SeriesData> = vec![
-            ("ΔE/E", &self.cached.abs_energy_drift, theme.chart[0]),
-            ("ΔM/M", &self.cached.abs_mass_drift, theme.chart[1]),
-            ("ΔC₂/C₂", &self.cached.abs_c2_drift, theme.chart[2]),
+            ("ΔE/E", &self.cached.abs_energy_drift, theme.chart_color(0)),
+            ("ΔM/M", &self.cached.abs_mass_drift, theme.chart_color(1)),
+            ("ΔC₂/C₂", &self.cached.abs_c2_drift, theme.chart_color(2)),
         ];
         if !self.cached.symplecticity_error.is_empty() {
             series.push((
                 "Sympl",
                 &self.cached.symplecticity_error,
-                theme.chart[7 % theme.chart.len()],
+                theme.chart_color(7),
             ));
         }
         draw_multi_series_windowed(
@@ -510,13 +523,13 @@ impl EnergyTab {
         );
     }
 
-    fn draw_virial_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_virial_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         draw_single_series_with_threshold(
             frame,
             area,
             " 2T/|W| (virial) ",
             &self.cached.virial,
-            theme.chart[5],
+            theme.chart_color(5),
             theme,
             Some(1.0),
             &self.time_window,
@@ -525,13 +538,13 @@ impl EnergyTab {
         );
     }
 
-    fn draw_entropy_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_entropy_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         draw_single_series_with_threshold(
             frame,
             area,
             " S(t) ",
             &self.cached.entropy,
-            theme.chart[6],
+            theme.chart_color(6),
             theme,
             None,
             &self.time_window,
@@ -540,18 +553,18 @@ impl EnergyTab {
         );
     }
 
-    fn draw_symplecticity_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_symplecticity_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if self.cached.symplecticity_error.is_empty() {
             frame.render_widget(
                 Block::bordered()
                     .title(" Symplecticity Error ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let color = theme.chart[7 % theme.chart.len()];
+        let color = theme.chart_color(7);
 
         let (raw_x_min, raw_x_max, _, _) = data_bounds(&self.cached.symplecticity_error);
         let (x_min, x_max) = self.time_window.apply(raw_x_min, raw_x_max);
@@ -568,7 +581,7 @@ impl EnergyTab {
                 .collect()
         };
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         let plot = LinePlot::new()
             .series(
@@ -581,12 +594,8 @@ impl EnergyTab {
                     .bounds(Bounds::Manual(x_min, x_max))
                     .grid(self.show_grid),
             )
-            .y_axis(
-                PltAxis::new()
-                    .scale(Scale::Log(10.0))
-                    .grid(self.show_grid),
-            )
-            .reference_line(ReferenceLine::hline_dashed(1e-10, theme.warn))
+            .y_axis(PltAxis::new().scale(Scale::Log(10.0)).grid(self.show_grid))
+            .reference_line(ReferenceLine::hline_dashed(1e-10, theme.warn()))
             .title(" Symplecticity Error ")
             .show_legend(true)
             .legend_position(LegendPosition::TopRight)
@@ -595,12 +604,54 @@ impl EnergyTab {
         frame.render_widget(&plot, area);
     }
 
-    fn draw_psd_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_ecdf_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        if self.cached.abs_energy_drift.len() < 4 {
+            frame.render_widget(
+                Block::bordered()
+                    .title(" ECDF — |ΔE/E| ")
+                    .border_style(Style::default().fg(theme.border_color())),
+                area,
+            );
+            return;
+        }
+
+        let energy_vals: Vec<f64> = self
+            .cached
+            .abs_energy_drift
+            .iter()
+            .map(|(_, d)| *d)
+            .collect();
+        let mass_vals: Vec<f64> = self.cached.abs_mass_drift.iter().map(|(_, d)| *d).collect();
+        let c2_vals: Vec<f64> = self.cached.abs_c2_drift.iter().map(|(_, d)| *d).collect();
+
+        let plt_theme = theme.clone();
+        let mut plot = EcdfPlot::new()
+            .dataset(EcdfDataset::new(
+                "|ΔE/E|",
+                energy_vals,
+                theme.chart_color(0),
+            ))
+            .x_axis(PltAxis::new().label("error").scale(Scale::Log(10.0)))
+            .y_axis(PltAxis::new().label("F(x)"))
+            .title(" ECDF — Conservation Errors ")
+            .theme(plt_theme);
+
+        if !mass_vals.is_empty() {
+            plot = plot.dataset(EcdfDataset::new("|ΔM/M|", mass_vals, theme.chart_color(1)));
+        }
+        if !c2_vals.is_empty() {
+            plot = plot.dataset(EcdfDataset::new("|ΔC₂/C₂|", c2_vals, theme.chart_color(2)));
+        }
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_psd_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if self.cached.total_energy.len() < 8 {
             frame.render_widget(
                 Block::bordered()
                     .title(" PSD — Energy ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
@@ -609,8 +660,18 @@ impl EnergyTab {
         // Extract signal and compute sample rate
         let n = self.cached.total_energy.len();
         let dt = if n >= 2 {
-            let t0 = self.cached.total_energy.first().map(|(t, _)| *t).unwrap_or(0.0);
-            let tn = self.cached.total_energy.last().map(|(t, _)| *t).unwrap_or(1.0);
+            let t0 = self
+                .cached
+                .total_energy
+                .first()
+                .map(|(t, _)| *t)
+                .unwrap_or(0.0);
+            let tn = self
+                .cached
+                .total_energy
+                .last()
+                .map(|(t, _)| *t)
+                .unwrap_or(1.0);
             (tn - t0) / (n - 1) as f64
         } else {
             1.0
@@ -621,9 +682,9 @@ impl EnergyTab {
         // Use ratatui-plt's Welch-method PSD (Hann-windowed, averaged segments)
         let mut psd_series = ratatui_plt::fft::psd(&signal, sample_rate);
         psd_series.name = "E(f)".into();
-        psd_series.color = theme.chart[0];
+        psd_series.color = Some(theme.chart_color(0));
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let psd = PsdPlot::new()
             .series(psd_series)
             .x_axis(PltAxis::new().label("frequency").scale(Scale::Log(10.0)))
@@ -634,7 +695,7 @@ impl EnergyTab {
         frame.render_widget(&psd, area);
     }
 
-    fn draw_momentum_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_momentum_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let has_data = !self.cached.momentum_x.is_empty()
             || !self.cached.momentum_y.is_empty()
             || !self.cached.momentum_z.is_empty();
@@ -643,16 +704,16 @@ impl EnergyTab {
             frame.render_widget(
                 Block::bordered()
                     .title(" Momentum P(t) ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
         let series: Vec<SeriesData> = vec![
-            ("Px", &self.cached.momentum_x, theme.chart[0]),
-            ("Py", &self.cached.momentum_y, theme.chart[1]),
-            ("Pz", &self.cached.momentum_z, theme.chart[2]),
+            ("Px", &self.cached.momentum_x, theme.chart_color(0)),
+            ("Py", &self.cached.momentum_y, theme.chart_color(1)),
+            ("Pz", &self.cached.momentum_z, theme.chart_color(2)),
         ];
         draw_multi_series_windowed(
             frame,
@@ -665,12 +726,12 @@ impl EnergyTab {
         );
     }
 
-    fn draw_spectrogram(&mut self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_spectrogram(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if self.cached.total_energy.len() < 64 {
             frame.render_widget(
                 Block::bordered()
                     .title(" Energy Spectrogram ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
@@ -684,7 +745,7 @@ impl EnergyTab {
             self.cached_spectrogram = CachedSpectrogram { grid, at_len: n };
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let spec = Spectrogram::new(self.cached_spectrogram.grid.clone())
             .title(" Energy Spectrogram ")
             .x_axis(PltAxis::new().label("time"))
@@ -693,6 +754,63 @@ impl EnergyTab {
             .theme(plt_theme);
 
         frame.render_widget(&spec, area);
+    }
+
+    pub fn handle_mouse_down(&mut self, col: u16, row: u16) {
+        if self.last_energy_area.contains(Position::new(col, row)) {
+            if let Some(t) = self.pixel_to_time(col) {
+                self.span_state.borrow_mut().start = Some(t);
+                self.span_state.borrow_mut().end = None;
+            }
+        }
+    }
+
+    pub fn handle_mouse_drag(&mut self, col: u16, _row: u16) {
+        if self.span_state.borrow().start.is_some() {
+            if let Some(t) = self.pixel_to_time(col) {
+                self.span_state.borrow_mut().end = Some(t);
+            }
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self, _col: u16, _row: u16) {
+        let state = self.span_state.borrow();
+        if let (Some(start), Some(end)) = (state.start, state.end) {
+            let (t_min, t_max) = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            drop(state);
+            self.time_window.t_end = Some(t_max);
+            self.time_window.width = Some(t_max - t_min);
+        } else {
+            drop(state);
+        }
+        self.span_state.borrow_mut().start = None;
+        self.span_state.borrow_mut().end = None;
+    }
+
+    fn pixel_to_time(&self, col: u16) -> Option<f64> {
+        let area = self.last_energy_area;
+        if area.width == 0 {
+            return None;
+        }
+        // Approximate inner plot area (skip y-axis label region on left, border on right)
+        let inner_left = area.x + 6;
+        let inner_right = area.x + area.width.saturating_sub(1);
+        if col < inner_left || col > inner_right {
+            return None;
+        }
+        let frac = (col - inner_left) as f64 / (inner_right - inner_left) as f64;
+        let data = &self.cached.total_energy;
+        if data.is_empty() {
+            return None;
+        }
+        let data_x_min = data.first().map(|&(t, _)| t).unwrap_or(0.0);
+        let data_x_max = data.last().map(|&(t, _)| t).unwrap_or(1.0);
+        let (x_min, x_max) = self.time_window.apply(data_x_min, data_x_max);
+        Some(x_min + frac * (x_max - x_min))
     }
 }
 
@@ -736,7 +854,7 @@ fn draw_energy_drift_with_regression(
     area: Rect,
     data: &[(f64, f64)],
     drift_fit: Option<&CachedDriftFit>,
-    theme: &ThemeColors,
+    theme: &Theme,
     threshold: f64,
     time_window: &TimeWindow,
     show_grid: bool,
@@ -747,7 +865,7 @@ fn draw_energy_drift_with_regression(
         frame.render_widget(
             Block::bordered()
                 .title(" ΔE/E₀ ")
-                .border_style(Style::default().fg(theme.border)),
+                .border_style(Style::default().fg(theme.border_color())),
             area,
         );
         return;
@@ -788,12 +906,10 @@ fn draw_energy_drift_with_regression(
         (y_min, y_max)
     };
 
-    let color = theme.chart[3];
-    let plt_theme = phasma_theme_to_plt(theme);
+    let color = theme.chart_color(3);
+    let plt_theme = theme.clone();
 
-    let drift_series = Series::new("ΔE/E₀")
-        .data(windowed.to_vec())
-        .color(color);
+    let drift_series = Series::new("ΔE/E₀").data(windowed.to_vec()).color(color);
 
     let symlog_tag = if symlog { " [symlog]" } else { "" };
 
@@ -825,8 +941,14 @@ fn draw_energy_drift_with_regression(
     if let Some(fit) = drift_fit {
         // Clip the regression line endpoints to the current window
         let fit_data: Vec<(f64, f64)> = vec![
-            (x_min, fit.slope * x_min + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
-            (x_max, fit.slope * x_max + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0)),
+            (
+                x_min,
+                fit.slope * x_min + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0),
+            ),
+            (
+                x_max,
+                fit.slope * x_max + (fit.line_data[0].1 - fit.slope * fit.line_data[0].0),
+            ),
         ];
         let fit_series = Series::new(format!("fit R²={:.4}", fit.r_squared))
             .data(fit_data)
@@ -836,7 +958,7 @@ fn draw_energy_drift_with_regression(
     }
 
     // Add dashed threshold line
-    plot = plot.reference_line(ReferenceLine::hline_dashed(threshold, theme.warn));
+    plot = plot.reference_line(ReferenceLine::hline_dashed(threshold, theme.warn()));
 
     // Add exit event annotation
     if let Some((t, label)) = exit_event {
@@ -846,8 +968,31 @@ fn draw_energy_drift_with_regression(
                 .min_by_key(|(x, _)| ((x - t).abs() * 1e9) as u64)
                 .map(|(_, y)| *y)
                 .unwrap_or((y_min + y_max) / 2.0);
-            plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn));
+            plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn()));
         }
+    }
+
+    // Mean ± std band around the drift level
+    if windowed.len() >= 20 {
+        let y_vals: Vec<f64> = windowed.iter().map(|(_, d)| *d).collect();
+        let n = y_vals.len() as f64;
+        let mean = y_vals.iter().sum::<f64>() / n;
+        let var = y_vals.iter().map(|y| (y - mean).powi(2)).sum::<f64>() / n;
+        let std = var.sqrt();
+        let x: Vec<f64> = vec![x_min, x_max];
+        let y_lower: Vec<f64> = vec![mean - std, mean - std];
+        let y_upper: Vec<f64> = vec![mean + std, mean + std];
+        let band = Band::new("±σ", x, y_lower, y_upper).color(Color::DarkGray);
+        let ci_plot = BandPlot::new()
+            .band(band)
+            .x_axis(
+                PltAxis::new()
+                    .bounds(Bounds::Manual(x_min, x_max))
+                    .grid(show_grid),
+            )
+            .y_axis(PltAxis::new().bounds(Bounds::Manual(y_min, y_max)))
+            .theme(theme.clone());
+        frame.render_widget(&ci_plot, area);
     }
 
     frame.render_widget(&plot, area);
@@ -859,7 +1004,7 @@ fn draw_single_series_with_threshold(
     title: &str,
     data: &[(f64, f64)],
     color: Color,
-    theme: &ThemeColors,
+    theme: &Theme,
     threshold: Option<f64>,
     time_window: &TimeWindow,
     show_grid: bool,
@@ -869,7 +1014,7 @@ fn draw_single_series_with_threshold(
         frame.render_widget(
             Block::bordered()
                 .title(title)
-                .border_style(Style::default().fg(theme.border)),
+                .border_style(Style::default().fg(theme.border_color())),
             area,
         );
         return;
@@ -909,7 +1054,7 @@ fn draw_single_series_with_threshold(
         (y_min, y_max)
     };
 
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
 
     let mut plot = LinePlot::new()
         .series(
@@ -934,7 +1079,7 @@ fn draw_single_series_with_threshold(
 
     // Add dashed threshold line
     if let Some(thr) = threshold {
-        plot = plot.reference_line(ReferenceLine::hline_dashed(thr, theme.warn));
+        plot = plot.reference_line(ReferenceLine::hline_dashed(thr, theme.warn()));
     }
 
     // Add exit event annotation
@@ -946,7 +1091,7 @@ fn draw_single_series_with_threshold(
                 .min_by_key(|(x, _)| ((x - t).abs() * 1e9) as u64)
                 .map(|(_, y)| *y)
                 .unwrap_or((y_min + y_max) / 2.0);
-            plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn));
+            plot = plot.annotation(Annotation::new(label, t, y_val).color(theme.warn()));
         }
     }
 
@@ -958,7 +1103,7 @@ fn draw_multi_series_windowed(
     area: Rect,
     title: &str,
     series: &[SeriesData<'_>],
-    theme: &ThemeColors,
+    theme: &Theme,
     time_window: &TimeWindow,
     show_grid: bool,
 ) {
@@ -966,7 +1111,7 @@ fn draw_multi_series_windowed(
         frame.render_widget(
             Block::bordered()
                 .title(title)
-                .border_style(Style::default().fg(theme.border)),
+                .border_style(Style::default().fg(theme.border_color())),
             area,
         );
         return;
@@ -1009,7 +1154,7 @@ fn draw_multi_series_windowed(
     }
 
     let is_fit_all = time_window.t_end.is_none() && time_window.width.is_none();
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
 
     let plt_series: Vec<Series> = series
         .iter()

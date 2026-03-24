@@ -1,83 +1,164 @@
 use ratatui::style::Color;
 use ratatui_plt::prelude::{
-    AsinhNorm, Axis as PltAxis, Bounds, ColorCycle, GridData, LinearNorm, LogNorm, Normalize,
-    PowerNorm, RefLineDash, ReferenceLine, Scale, Series, SymLogNorm, Theme,
+    AsinhNorm, Axis as PltAxis, Bounds, GridData, LinearNorm, LogNorm, Normalize, PowerNorm,
+    ReferenceLine, Scale, Series, SymLogNorm, Theme,
 };
 
-use crate::colormaps::Colormap;
-use crate::themes::ThemeColors;
+// ── Theme extension trait ──────────────────────────────────────────────
 
-/// Convert a phasma `ThemeColors` to a ratatui-plt `Theme`.
-pub fn phasma_theme_to_plt(theme: &ThemeColors) -> Theme {
-    Theme {
-        background: theme.bg,
-        foreground: theme.fg,
-        grid_color: theme.dim,
-        minor_grid_color: theme.dim,
-        axis_color: theme.border,
-        color_cycle: ColorCycle::new(theme.chart.to_vec()),
-        grid_visible: false,
-        grid_pattern: ratatui_plt::prelude::DashPattern::Dotted,
-        bold_title: true,
+/// Semantic color accessors that phasma needs but ratatui-plt's Theme does not
+/// directly expose with phasma's naming conventions.
+pub trait PhasmaThemeExt {
+    fn warn(&self) -> Color;
+    fn error(&self) -> Color;
+    fn ok(&self) -> Color;
+    fn dim(&self) -> Color;
+    fn border_color(&self) -> Color;
+    fn chart_color(&self, idx: usize) -> Color;
+}
+
+impl PhasmaThemeExt for Theme {
+    fn warn(&self) -> Color {
+        self.annotation_color
+    }
+    fn error(&self) -> Color {
+        self.negative_color
+    }
+    fn ok(&self) -> Color {
+        self.positive_color
+    }
+    fn dim(&self) -> Color {
+        self.disabled_color
+    }
+    fn border_color(&self) -> Color {
+        self.axis_color
+    }
+    fn chart_color(&self, idx: usize) -> Color {
+        self.color_cycle.at(idx)
     }
 }
 
-/// Wrapper that implements `ratatui_plt::colormap::Colormap` via a boxed inner.
-/// This allows passing the result directly to `.colormap()` on widgets.
-pub struct PltColormap(Box<dyn ratatui_plt::colormap::Colormap>);
+// ── Theme state ────────────────────────────────────────────────────────
 
-impl ratatui_plt::colormap::Colormap for PltColormap {
-    fn color_at(&self, t: f64) -> Color {
-        self.0.color_at(t)
-    }
-    fn name(&self) -> &str {
-        self.0.name()
-    }
+/// Cycling/serializable wrapper around ratatui-plt named theme presets.
+pub struct ThemeState {
+    name: String,
+    index: usize,
 }
 
-/// Convert a phasma `Colormap` enum variant to a ratatui-plt `Colormap`.
-pub fn phasma_cmap_to_plt(cmap: Colormap) -> PltColormap {
-    use ratatui_plt::colormap::{
-        Coolwarm as PltCoolwarm, Greys, Inferno as PltInferno, LinearSegmentedColormap,
-        Magma as PltMagma, Plasma as PltPlasma, Viridis as PltViridis,
-    };
-    PltColormap(match cmap {
-        Colormap::Viridis => Box::new(PltViridis),
-        Colormap::Inferno => Box::new(PltInferno),
-        Colormap::Plasma => Box::new(PltPlasma),
-        Colormap::Magma => Box::new(PltMagma),
-        Colormap::Grayscale => Box::new(Greys),
-        Colormap::Coolwarm => Box::new(PltCoolwarm),
-        Colormap::Cubehelix => {
-            // Approximate phasma's cubehelix with a LinearSegmentedColormap
-            // using the same 9-stop table from colormaps/mod.rs.
-            let stops: [(f64, u8, u8, u8); 9] = [
-                (0.000, 0, 0, 0),
-                (0.125, 22, 17, 42),
-                (0.250, 15, 56, 62),
-                (0.375, 28, 98, 47),
-                (0.500, 87, 117, 58),
-                (0.625, 168, 115, 103),
-                (0.750, 196, 130, 182),
-                (0.875, 199, 180, 238),
-                (1.000, 255, 255, 255),
-            ];
-            let r: Vec<(f64, f64, f64)> = stops
-                .iter()
-                .map(|&(t, r, _, _)| (t, r as f64 / 255.0, r as f64 / 255.0))
-                .collect();
-            let g: Vec<(f64, f64, f64)> = stops
-                .iter()
-                .map(|&(t, _, g, _)| (t, g as f64 / 255.0, g as f64 / 255.0))
-                .collect();
-            let b: Vec<(f64, f64, f64)> = stops
-                .iter()
-                .map(|&(t, _, _, b)| (t, b as f64 / 255.0, b as f64 / 255.0))
-                .collect();
-            Box::new(LinearSegmentedColormap::new("cubehelix", r, g, b))
+impl ThemeState {
+    pub fn new(name: &str) -> Self {
+        let names = ratatui_plt::theme::theme_names();
+        let index = names.iter().position(|&n| n == name).unwrap_or(0);
+        Self {
+            name: names[index].to_string(),
+            index,
         }
-    })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn theme(&self) -> Theme {
+        Theme::from_name(&self.name).unwrap_or_default()
+    }
+
+    pub fn next(&mut self) {
+        let names = ratatui_plt::theme::theme_names();
+        self.index = (self.index + 1) % names.len();
+        self.name = names[self.index].to_string();
+    }
+
+    pub fn prev(&mut self) {
+        let names = ratatui_plt::theme::theme_names();
+        self.index = (self.index + names.len() - 1) % names.len();
+        self.name = names[self.index].to_string();
+    }
+
+    pub fn set(&mut self, name: &str) {
+        let names = ratatui_plt::theme::theme_names();
+        if let Some(idx) = names.iter().position(|&n| n == name) {
+            self.index = idx;
+            self.name = name.to_string();
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
 }
+
+impl Default for ThemeState {
+    fn default() -> Self {
+        Self::new("dark")
+    }
+}
+
+// ── Colormap state ─────────────────────────────────────────────────────
+
+/// Cycling/serializable wrapper around the ratatui-plt colormap registry.
+pub struct ColormapState {
+    name: String,
+    index: usize,
+}
+
+impl ColormapState {
+    pub fn new(name: &str) -> Self {
+        let names = ratatui_plt::colormap::colormap_names();
+        let index = names.iter().position(|&n| n == name).unwrap_or(0);
+        Self {
+            name: names[index].to_string(),
+            index,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get a boxed colormap instance for the current selection.
+    pub fn get(&self) -> Box<dyn ratatui_plt::colormap::Colormap> {
+        ratatui_plt::colormap::get_colormap(&self.name)
+            .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis))
+    }
+
+    pub fn next(&mut self) {
+        let names = ratatui_plt::colormap::colormap_names();
+        self.index = (self.index + 1) % names.len();
+        self.name = names[self.index].to_string();
+    }
+
+    pub fn prev(&mut self) {
+        let names = ratatui_plt::colormap::colormap_names();
+        self.index = (self.index + names.len() - 1) % names.len();
+        self.name = names[self.index].to_string();
+    }
+
+    pub fn set(&mut self, name: &str) {
+        let names = ratatui_plt::colormap::colormap_names();
+        if let Some(idx) = names.iter().position(|&n| n == name) {
+            self.index = idx;
+            self.name = name.to_string();
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn all_names() -> &'static [&'static str] {
+        ratatui_plt::colormap::colormap_names()
+    }
+}
+
+impl Default for ColormapState {
+    fn default() -> Self {
+        Self::new("viridis")
+    }
+}
+
+// ── Grid data helpers ──────────────────────────────────────────────────
 
 /// Convert flat row-major `&[f64]` data to ratatui-plt `GridData` with coordinate vectors.
 ///
@@ -121,6 +202,8 @@ pub fn flat_to_grid_data(
 
     GridData::new(x, y, values)
 }
+
+// ── Axis helpers ───────────────────────────────────────────────────────
 
 /// Build a ratatui-plt `Axis` from manual bounds with sensible defaults.
 pub fn make_axis(label: Option<&str>, lo: f64, hi: f64) -> PltAxis {
@@ -266,13 +349,6 @@ impl NormMode {
 /// Build a `SymLogNorm` for signed data that spans zero.
 pub fn make_symlog_norm(lin_thresh: f64, vmin: f64, vmax: f64) -> SymLogNorm {
     SymLogNorm::new(lin_thresh, vmin, vmax)
-}
-
-// ── Color helpers ──────────────────────────────────────────────────────
-
-/// Pick a color from the theme chart palette, cycling automatically.
-pub fn cycle_color(idx: usize, theme: &ThemeColors) -> Color {
-    theme.chart[idx % theme.chart.len()]
 }
 
 // ── Format helpers ─────────────────────────────────────────────────────

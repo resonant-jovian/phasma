@@ -3,7 +3,6 @@ use color_eyre::eyre::eyre;
 use tui::app::App;
 use tui::cli::Cli;
 mod annotations;
-mod colormaps;
 mod config;
 mod data;
 mod export;
@@ -11,7 +10,6 @@ mod notifications;
 mod runner;
 mod session;
 mod sim;
-mod themes;
 mod toml;
 mod tui;
 

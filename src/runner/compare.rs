@@ -127,4 +127,3 @@ pub fn run_batch_compare(dirs: &[String], report_path: Option<&str>) -> anyhow::
 
     Ok(())
 }
-

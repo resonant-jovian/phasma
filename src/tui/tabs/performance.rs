@@ -1,3 +1,4 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -10,11 +11,17 @@ use ratatui_plt::prelude::{
     StackedArea, StemPlot,
 };
 use ratatui_plt::widgets::bar_chart::{BarChart, BarDataset, Orientation};
+use ratatui_plt::widgets::box_plot::{BoxData, BoxPlot};
+use ratatui_plt::widgets::histogram::HistNorm;
+use ratatui_plt::widgets::violin_plot::{ViolinData, ViolinPlot};
 use std::collections::VecDeque;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::{format_duration, format_size, phasma_theme_to_plt},
+    data::DataProvider,
+    tui::action::Action,
+    tui::plt_bridge::{PhasmaThemeExt, format_duration, format_size},
 };
 
 const RECENT_CAP: usize = 500;
@@ -61,6 +68,10 @@ pub struct PerformanceTab {
     steps_per_sec_history: VecDeque<(f64, f64)>,
     /// Cached merged series for chart rendering.
     cached_merged: CachedMerged,
+    /// Histogram normalization mode (count / density / probability).
+    hist_norm: HistNorm,
+    /// Distribution view mode: 0=histogram, 1=violin, 2=boxplot.
+    dist_mode: u8,
 }
 
 impl Default for PerformanceTab {
@@ -77,6 +88,8 @@ impl Default for PerformanceTab {
             total_wall_sec: 0.0,
             steps_per_sec_history: VecDeque::with_capacity(RECENT_CAP),
             cached_merged: CachedMerged::default(),
+            hist_norm: HistNorm::Count,
+            dist_mode: 0,
         }
     }
 }
@@ -163,6 +176,24 @@ impl PerformanceTab {
         data
     }
 
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('n') => {
+                self.hist_norm = match self.hist_norm {
+                    HistNorm::Count => HistNorm::Density,
+                    HistNorm::Density => HistNorm::Probability,
+                    HistNorm::Probability => HistNorm::Count,
+                };
+                None
+            }
+            KeyCode::Char('v') => {
+                self.dist_mode = (self.dist_mode + 1) % 3;
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Called on every SimUpdate to record performance data regardless of active tab.
     pub fn update(&mut self, action: &Action) {
         if let Action::SimUpdate(state) = action
@@ -179,7 +210,7 @@ impl PerformanceTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         // Rebuild merged series cache when data changes
@@ -267,8 +298,7 @@ impl PerformanceTab {
         .areas(top);
 
         let [wall_area, cumul_area] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(mid);
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(mid);
 
         let [phase_area, adt_area, posv_area] = Layout::horizontal([
             Constraint::Percentage(40),
@@ -291,7 +321,7 @@ impl PerformanceTab {
     fn draw_memory_breakdown(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         // Split memory area: memory info + roofline indicators
@@ -300,7 +330,7 @@ impl PerformanceTab {
 
         let block = Block::bordered()
             .title(" Memory ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(mem_area);
         frame.render_widget(block, mem_area);
 
@@ -312,7 +342,7 @@ impl PerformanceTab {
             ls.push(Line::from(vec![
                 Span::styled(
                     format!(" {:<lbl_w$}", "Type"),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 ),
                 Span::styled(
                     if s.repr_type.is_empty() {
@@ -320,27 +350,30 @@ impl PerformanceTab {
                     } else {
                         s.repr_type.clone()
                     },
-                    Style::default().fg(theme.fg),
+                    Style::default().fg(theme.foreground),
                 ),
             ]));
             if let Some(mem) = s.rank_memory_bytes {
                 ls.push(Line::from(vec![
                     Span::styled(
                         format!(" {:<lbl_w$}", "Repr"),
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
-                    Span::styled(format_size(mem as f64), Style::default().fg(theme.fg)),
+                    Span::styled(
+                        format_size(mem as f64),
+                        Style::default().fg(theme.foreground),
+                    ),
                 ]));
             }
             if let Some(cr) = s.compression_ratio {
                 ls.push(Line::from(vec![
                     Span::styled(
                         format!(" {:<lbl_w$}", "Comp"),
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         format!("{cr:.1}\u{00d7}"),
-                        Style::default().fg(theme.chart[2]),
+                        Style::default().fg(theme.chart_color(2)),
                     ),
                 ]));
             }
@@ -348,11 +381,11 @@ impl PerformanceTab {
                 ls.push(Line::from(vec![
                     Span::styled(
                         format!(" {:<lbl_w$}", "SVDs"),
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         format!("{}/step", s.svd_count),
-                        Style::default().fg(theme.fg),
+                        Style::default().fg(theme.foreground),
                     ),
                 ]));
             }
@@ -360,11 +393,11 @@ impl PerformanceTab {
                 ls.push(Line::from(vec![
                     Span::styled(
                         format!(" {:<lbl_w$}", "HTACA"),
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         format!("{}", s.htaca_evaluations),
-                        Style::default().fg(theme.fg),
+                        Style::default().fg(theme.foreground),
                     ),
                 ]));
             }
@@ -372,7 +405,7 @@ impl PerformanceTab {
         } else {
             vec![
                 Line::from(""),
-                Line::from(Span::styled(" No data", Style::default().fg(theme.dim))),
+                Line::from(Span::styled(" No data", Style::default().fg(theme.dim()))),
             ]
         };
 
@@ -381,7 +414,7 @@ impl PerformanceTab {
         // Roofline indicators stub
         let rf_block = Block::bordered()
             .title(" Roofline ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let rf_inner = rf_block.inner(roofline_area);
         frame.render_widget(rf_block, roofline_area);
 
@@ -399,8 +432,11 @@ impl PerformanceTab {
                 0.0
             };
             let mut ls = vec![Line::from(vec![
-                Span::styled(" Est. ", Style::default().fg(theme.dim)),
-                Span::styled(format!("{gflops:.1} GF/s"), Style::default().fg(theme.fg)),
+                Span::styled(" Est. ", Style::default().fg(theme.dim())),
+                Span::styled(
+                    format!("{gflops:.1} GF/s"),
+                    Style::default().fg(theme.foreground),
+                ),
             ])];
             let note = if rf_inner_w >= 30 {
                 " (needs instrumentation)"
@@ -409,13 +445,13 @@ impl PerformanceTab {
             };
             ls.push(Line::from(Span::styled(
                 note,
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
             ls
         } else {
             vec![Line::from(Span::styled(
                 " No data",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             ))]
         };
         frame.render_widget(Paragraph::new(rf_lines), rf_inner);
@@ -424,7 +460,7 @@ impl PerformanceTab {
     fn draw_timing_breakdown(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -433,7 +469,7 @@ impl PerformanceTab {
         if !has_timings {
             let block = Block::bordered()
                 .title(" Phase Timings ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
@@ -441,11 +477,11 @@ impl PerformanceTab {
                     Line::from(""),
                     Line::from(Span::styled(
                         "  Timing breakdown",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     )),
                     Line::from(Span::styled(
                         "  not yet available",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     )),
                 ]),
                 inner,
@@ -460,7 +496,7 @@ impl PerformanceTab {
 
         if let Some(ref timings) = s.phase_timings {
             // Real phase timings → BarChart
-            let plt_theme = phasma_theme_to_plt(theme);
+            let plt_theme = theme.clone();
             let categories: Vec<String> = PHASE_NAMES
                 .iter()
                 .zip(timings.iter())
@@ -475,7 +511,7 @@ impl PerformanceTab {
 
             let chart = BarChart::new()
                 .categories(categories)
-                .dataset(BarDataset::new("% time", values, theme.chart[0]))
+                .dataset(BarDataset::new("% time", values, theme.chart_color(0)))
                 .orientation(Orientation::Horizontal)
                 .title(format!(" Phase Timings ({total:.1}ms) "))
                 .theme(plt_theme);
@@ -485,25 +521,28 @@ impl PerformanceTab {
             // Estimated split (Strang) — text fallback
             let block = Block::bordered()
                 .title(format!(" Phase Timings ({total:.1}ms) "))
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(vec![
-                        Span::styled(" Drift   ", Style::default().fg(theme.dim)),
-                        Span::styled("~33%", Style::default().fg(theme.chart[0])),
+                        Span::styled(" Drift   ", Style::default().fg(theme.dim())),
+                        Span::styled("~33%", Style::default().fg(theme.chart_color(0))),
                     ]),
                     Line::from(vec![
-                        Span::styled(" Poissn  ", Style::default().fg(theme.dim)),
-                        Span::styled("~34%", Style::default().fg(theme.chart[1])),
+                        Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
+                        Span::styled("~34%", Style::default().fg(theme.chart_color(1))),
                     ]),
                     Line::from(vec![
-                        Span::styled(" Kick    ", Style::default().fg(theme.dim)),
-                        Span::styled("~33%", Style::default().fg(theme.chart[2])),
+                        Span::styled(" Kick    ", Style::default().fg(theme.dim())),
+                        Span::styled("~33%", Style::default().fg(theme.chart_color(2))),
                     ]),
                     Line::from(""),
-                    Line::from(Span::styled(" (estimated)", Style::default().fg(theme.dim))),
+                    Line::from(Span::styled(
+                        " (estimated)",
+                        Style::default().fg(theme.dim()),
+                    )),
                 ]),
                 inner,
             );
@@ -514,7 +553,7 @@ impl PerformanceTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -558,8 +597,8 @@ impl PerformanceTab {
         let lw = if inner_w < 30 { 8 } else { 12 };
         let val = move |label: &str, value: String| -> Line {
             Line::from(vec![
-                Span::styled(format!(" {label:<lw$}"), Style::default().fg(theme.dim)),
-                Span::styled(value, Style::default().fg(theme.fg)),
+                Span::styled(format!(" {label:<lw$}"), Style::default().fg(theme.dim())),
+                Span::styled(value, Style::default().fg(theme.foreground)),
             ])
         };
 
@@ -623,13 +662,13 @@ impl PerformanceTab {
 
         let block = Block::bordered()
             .title(" Stats ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(Paragraph::new(lines), inner);
     }
 
-    fn draw_dt_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_dt_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let data = &self.cached_merged.dt_data;
 
         if data.is_empty() {
@@ -638,17 +677,21 @@ impl PerformanceTab {
                     .block(
                         Block::bordered()
                             .title(" dt(t) — adaptive timestep ")
-                            .border_style(Style::default().fg(theme.border)),
+                            .border_style(Style::default().fg(theme.border_color())),
                     )
-                    .style(Style::default().fg(theme.dim)),
+                    .style(Style::default().fg(theme.dim())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
-            .series(Series::new("dt").data(data.clone()).color(theme.chart[4]))
+            .series(
+                Series::new("dt")
+                    .data(data.clone())
+                    .color(theme.chart_color(4)),
+            )
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new())
             .title(" dt(t) — adaptive timestep ")
@@ -657,25 +700,25 @@ impl PerformanceTab {
         frame.render_widget(&plot, area);
     }
 
-    fn draw_wall_time_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_wall_time_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let data = &self.cached_merged.wall_data;
 
         if data.is_empty() {
             frame.render_widget(
                 Block::bordered()
                     .title(" ms/step ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
             .series(
                 Series::new("ms/step")
                     .data(data.clone())
-                    .color(theme.chart[3]),
+                    .color(theme.chart_color(3)),
             )
             .x_axis(PltAxis::new().label("step"))
             .y_axis(PltAxis::new())
@@ -685,47 +728,81 @@ impl PerformanceTab {
         frame.render_widget(&plot, area);
     }
 
-    fn draw_step_time_histogram(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_step_time_histogram(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let data = &self.cached_merged.wall_data;
         if data.len() < 10 {
             frame.render_widget(
                 Block::bordered()
                     .title(" Step Time Distribution ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
         let times: Vec<f64> = data.iter().map(|(_, ms)| *ms).collect();
-        let plt_theme = phasma_theme_to_plt(theme);
-        let hist = PltHistogram::new(times)
-            .bins(30)
-            .color(theme.chart[3])
-            .title(" Step Time Distribution ")
-            .x_axis(PltAxis::new().label("ms"))
-            .y_axis(PltAxis::new().label("count"))
-            .theme(plt_theme);
+        let plt_theme = theme.clone();
 
-        frame.render_widget(&hist, area);
+        match self.dist_mode {
+            1 => {
+                // ViolinPlot
+                let violin = ViolinPlot::new()
+                    .dataset(ViolinData::new("wall time", times, theme.chart_color(3)))
+                    .title(" Step Time Distribution [violin] ")
+                    .show_box(true)
+                    .theme(plt_theme);
+                frame.render_widget(&violin, area);
+            }
+            2 => {
+                // BoxPlot
+                let boxplot = BoxPlot::new()
+                    .box_data(BoxData::new("wall time", times, theme.chart_color(3)))
+                    .show_outliers(true)
+                    .show_means(true)
+                    .title(" Step Time Distribution [boxplot] ")
+                    .theme(plt_theme);
+                frame.render_widget(&boxplot, area);
+            }
+            _ => {
+                // Histogram (default)
+                let norm_label = match &self.hist_norm {
+                    HistNorm::Count => "count",
+                    HistNorm::Density => "density",
+                    HistNorm::Probability => "prob",
+                };
+                let hist = PltHistogram::new(times)
+                    .bins(30)
+                    .color(theme.chart_color(3))
+                    .norm_mode(self.hist_norm.clone())
+                    .title(format!(" Step Time Distribution [{norm_label}] "))
+                    .x_axis(PltAxis::new().label("ms"))
+                    .y_axis(PltAxis::new().label(norm_label))
+                    .theme(plt_theme);
+                frame.render_widget(&hist, area);
+            }
+        }
     }
 
-    fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_cumulative_chart(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let data = &self.cached_merged.cumulative_data;
 
         if data.is_empty() {
             frame.render_widget(
                 Block::bordered()
                     .title(" Wall time vs sim time ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
-            .series(Series::new("wall").data(data.clone()).color(theme.chart[1]))
+            .series(
+                Series::new("wall")
+                    .data(data.clone())
+                    .color(theme.chart_color(1)),
+            )
             .x_axis(PltAxis::new().label("sim t"))
             .y_axis(PltAxis::new().label("wall s"))
             .title(" Wall time vs sim time ")
@@ -737,7 +814,7 @@ impl PerformanceTab {
     fn draw_phase_timing_stacked(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let diag = data_provider.diagnostics();
@@ -749,28 +826,28 @@ impl PerformanceTab {
             frame.render_widget(
                 Block::bordered()
                     .title(" Phase Timing Breakdown ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let stacked = StackedArea::new()
             .series(
                 Series::new("Drift")
                     .data(drift_data)
-                    .color(theme.chart[0]),
+                    .color(theme.chart_color(0)),
             )
             .series(
                 Series::new("Poisson")
                     .data(poisson_data)
-                    .color(theme.chart[1]),
+                    .color(theme.chart_color(1)),
             )
             .series(
                 Series::new("Kick")
                     .data(kick_data)
-                    .color(theme.chart[2]),
+                    .color(theme.chart_color(2)),
             )
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new().label("ms"))
@@ -785,7 +862,7 @@ impl PerformanceTab {
     fn draw_adaptive_dt_chart(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let data = data_provider.diagnostics().adaptive_dt.iter_chart_data();
@@ -794,18 +871,18 @@ impl PerformanceTab {
             frame.render_widget(
                 Block::bordered()
                     .title(" Adaptive \u{0394}t ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let plot = LinePlot::new()
             .series(
                 Series::new("\u{0394}t")
                     .data(data)
-                    .color(theme.chart[4]),
+                    .color(theme.chart_color(4)),
             )
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new().label("\u{0394}t").scale(Scale::Log(10.0)))
@@ -818,7 +895,7 @@ impl PerformanceTab {
     fn draw_positivity_violations(
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let data = data_provider
@@ -830,15 +907,15 @@ impl PerformanceTab {
             frame.render_widget(
                 Block::bordered()
                     .title(" Positivity Violations ")
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
         }
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
         let stem = StemPlot::new(data)
-            .color(theme.chart[5])
+            .color(theme.chart_color(5))
             .title(" Positivity Violations ")
             .x_axis(PltAxis::new().label("t"))
             .y_axis(PltAxis::new().label("count"))
@@ -847,4 +924,3 @@ impl PerformanceTab {
         frame.render_widget(&stem, area);
     }
 }
-

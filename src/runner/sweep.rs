@@ -49,11 +49,7 @@ pub async fn run_sweep(toml_path: &str) -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&sweep_cfg.output_dir)?;
 
-    let max_concurrent = sweep_cfg.max_concurrent.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(1))
-            .unwrap_or(2)
-    });
+    let max_concurrent = super::helpers::default_concurrency(sweep_cfg.max_concurrent);
     eprintln!("phasma sweep: max_concurrent = {max_concurrent}");
     let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
@@ -83,17 +79,7 @@ pub async fn run_sweep(toml_path: &str) -> anyhow::Result<()> {
         eprintln!("phasma sweep: [{}/{}] {desc}", i + 1, n_combos);
         join_set.spawn(async move {
             let mut handle = SimHandle::spawn_unbounded(config_str);
-            let mut final_state = None;
-            while let Some(state) = handle.state_rx.recv_async().await {
-                for msg in &state.log_messages {
-                    eprintln!("  [{desc}] {msg}");
-                }
-                let is_exit = state.exit_reason.is_some();
-                final_state = Some(state);
-                if is_exit {
-                    break;
-                }
-            }
+            let final_state = super::helpers::drain_to_final(&mut handle.state_rx, &desc).await;
             handle.task.abort();
             drop(permit);
 

@@ -8,10 +8,11 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
     config::{PhasmaConfig, defaults, validate},
-    themes::ThemeColors,
-    tui::{action::Action, config::Config},
+    tui::{action::Action, config::Config, plt_bridge::PhasmaThemeExt},
 };
 
 const PRESET_NAMES: &[&str] = &[
@@ -247,7 +248,7 @@ impl SetupTab {
         None
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mem_breakdown = defaults::estimate_memory_breakdown(&self.phasma_config);
         let mem_estimate = mem_breakdown.resident_mb();
 
@@ -268,7 +269,7 @@ impl SetupTab {
             Line::from(vec![
                 Span::styled(
                     "● Running — ",
-                    Style::default().fg(theme.ok).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.ok()).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     "[F2]",
@@ -276,20 +277,20 @@ impl SetupTab {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" live view  ", Style::default().fg(theme.ok)),
+                Span::styled(" live view  ", Style::default().fg(theme.ok())),
                 Span::styled(
                     "[r]",
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" restart", Style::default().fg(theme.ok)),
+                Span::styled(" restart", Style::default().fg(theme.ok())),
             ])
         } else if self.config_loaded {
             Line::from(vec![
                 Span::styled(
                     format!("Ready — {mem_estimate:.1} MB est. — press "),
-                    Style::default().fg(theme.ok),
+                    Style::default().fg(theme.ok()),
                 ),
                 Span::styled(
                     "[r]",
@@ -297,12 +298,12 @@ impl SetupTab {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" to start", Style::default().fg(theme.ok)),
+                Span::styled(" to start", Style::default().fg(theme.ok())),
             ])
         } else {
             Line::from(Span::styled(
                 "Select a config and press Enter to load.",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             ))
         };
         frame.render_widget(
@@ -316,7 +317,7 @@ impl SetupTab {
         }
     }
 
-    fn draw_preset_popup(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_preset_popup(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::widgets::Clear;
 
         let w = area.width.min(34);
@@ -329,7 +330,7 @@ impl SetupTab {
         let block = Block::bordered()
             .title(" Presets [Ctrl+P] ")
             .border_style(Style::default().fg(theme.accent))
-            .style(Style::default().bg(theme.bg));
+            .style(Style::default().bg(theme.background));
         let inner = block.inner(overlay);
         frame.render_widget(block, overlay);
 
@@ -342,7 +343,7 @@ impl SetupTab {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme.fg)
+                    Style::default().fg(theme.foreground)
                 };
                 let marker = if i == self.preset_selected {
                     "\u{25b6} "
@@ -356,7 +357,7 @@ impl SetupTab {
         frame.render_widget(List::new(items), inner);
     }
 
-    fn draw_browser(&mut self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_browser(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::bordered()
             .title(" Configs ")
             .border_style(Style::default().fg(theme.accent));
@@ -366,7 +367,7 @@ impl SetupTab {
         if self.available_configs.is_empty() {
             frame.render_widget(
                 Paragraph::new("No configs found.\nPlace .toml files\nin ./configs/")
-                    .style(Style::default().fg(theme.dim)),
+                    .style(Style::default().fg(theme.dim())),
                 inner,
             );
             return;
@@ -400,7 +401,7 @@ impl SetupTab {
                 } else {
                     ListItem::new(Line::from(Span::styled(
                         format!("  {label}"),
-                        Style::default().fg(theme.fg),
+                        Style::default().fg(theme.foreground),
                     )))
                 }
             })
@@ -410,18 +411,18 @@ impl SetupTab {
         frame.render_stateful_widget(List::new(items), inner, &mut state);
     }
 
-    fn draw_preview(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_preview(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if !self.config_loaded {
             let block = Block::bordered()
                 .title(" Config ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(
                     "Select a config and press Enter to load,\nor pass --config path/to/run.toml.",
                 )
-                .style(Style::default().fg(theme.dim)),
+                .style(Style::default().fg(theme.dim())),
                 inner,
             );
             return;
@@ -444,7 +445,7 @@ impl SetupTab {
                 .map(|w| {
                     Line::from(Span::styled(
                         format!("  \u{26a0} {w}"),
-                        Style::default().fg(theme.warn),
+                        Style::default().fg(theme.warn()),
                     ))
                 })
                 .collect();
@@ -460,7 +461,7 @@ impl SetupTab {
         self.draw_comment_notes(frame, notes_area, theme);
     }
 
-    fn draw_toml_source(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_toml_source(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let total = self.config_lines.len();
         let scroll_info = if total > 0 {
             format!(
@@ -474,7 +475,7 @@ impl SetupTab {
         let block = Block::bordered()
             .title(scroll_info)
             .title_bottom(" [/] scroll ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -484,7 +485,7 @@ impl SetupTab {
             .enumerate()
             .filter(|(_, line)| !line.trim().starts_with('#'))
             .map(|(i, line)| {
-                let num = Span::styled(format!("{:>3} ", i + 1), Style::default().fg(theme.dim));
+                let num = Span::styled(format!("{:>3} ", i + 1), Style::default().fg(theme.dim()));
                 let trimmed = line.trim();
                 if trimmed.starts_with('[') {
                     Line::from(vec![
@@ -499,8 +500,11 @@ impl SetupTab {
                 } else if let Some(eq_idx) = line.find(" = ") {
                     Line::from(vec![
                         num,
-                        Span::styled(line[..eq_idx].to_string(), Style::default().fg(theme.fg)),
-                        Span::styled(" = ".to_string(), Style::default().fg(theme.dim)),
+                        Span::styled(
+                            line[..eq_idx].to_string(),
+                            Style::default().fg(theme.foreground),
+                        ),
+                        Span::styled(" = ".to_string(), Style::default().fg(theme.dim())),
                         Span::styled(
                             line[eq_idx + 3..].to_string(),
                             Style::default().fg(Color::Cyan),
@@ -509,7 +513,7 @@ impl SetupTab {
                 } else {
                     Line::from(vec![
                         num,
-                        Span::styled(line.to_string(), Style::default().fg(theme.fg)),
+                        Span::styled(line.to_string(), Style::default().fg(theme.foreground)),
                     ])
                 }
             })
@@ -518,10 +522,10 @@ impl SetupTab {
         frame.render_widget(Paragraph::new(lines).scroll((self.toml_scroll, 0)), inner);
     }
 
-    fn draw_comment_notes(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_comment_notes(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::bordered()
             .title(" Notes ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -572,7 +576,7 @@ impl SetupTab {
             } else {
                 lines.push(Line::from(Span::styled(
                     text.to_string(),
-                    Style::default().fg(theme.fg),
+                    Style::default().fg(theme.foreground),
                 )));
             }
         }
@@ -580,7 +584,7 @@ impl SetupTab {
         if lines.is_empty() {
             lines.push(Line::from(Span::styled(
                 "No comments in this config.",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )));
         }
 

@@ -152,7 +152,8 @@ impl DiagnosticsStore {
         self.virial_ratio.push(t, state.virial_ratio);
         // Extended diagnostics
         self.svd_count.push(t, state.svd_count as f64);
-        self.htaca_evaluations.push(t, state.htaca_evaluations as f64);
+        self.htaca_evaluations
+            .push(t, state.htaca_evaluations as f64);
         if let Some(v) = state.positivity_violations {
             self.positivity_violations.push(t, v as f64);
         }
@@ -489,11 +490,13 @@ mod tests {
             green_function_rank: None,
             exp_sum_terms: None,
             density_power_spectrum: None,
+            density_power_spectrum_std: None,
             field_energy_spectrum: None,
             positivity_violations: None,
             near_field_correction_l2: None,
             symplecticity_error: None,
             rank_growth_rate: None,
+            acceleration_xy: None,
             log_messages: vec![],
         }
     }

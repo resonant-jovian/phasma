@@ -123,11 +123,8 @@ pub fn export_diagnostics(
         ExportFormat::Zip => zip_archive::export_zip(dir, diagnostics, state, stem),
         ExportFormat::Hdf5 => export_hdf5(dir, state, stem),
         ExportFormat::ChartSvg => {
-            use crate::colormaps::Colormap;
-            use crate::themes::Theme;
-            let theme_colors = Theme::default().colors();
-            let cmap = Colormap::default();
-            match plot_export::export_charts_batch(dir, diagnostics, state, &theme_colors, cmap, stem)
+            let theme = ratatui_plt::prelude::Theme::default();
+            match plot_export::export_charts_batch(dir, diagnostics, state, &theme, "viridis", stem)
             {
                 Ok(paths) => Ok(paths.join("\n")),
                 Err(e) => Err(e),

@@ -13,7 +13,7 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Block,
 };
@@ -22,11 +22,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use std::sync::Arc;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    colormaps::Colormap,
     data::DataProvider,
-    themes::{Theme, ThemeColors},
-    tui::{action::Action, config::Config, layout::LayoutMode},
+    tui::{action::Action, config::Config, layout::LayoutMode, plt_bridge::PhasmaThemeExt},
 };
 
 use density::DensityTab;
@@ -68,7 +68,6 @@ pub enum Tab {
 pub struct TabAreas {
     pub tab_bar: Rect,
     pub content: Rect,
-    pub footer: Rect,
     pub layout_mode: LayoutMode,
 }
 
@@ -118,18 +117,18 @@ impl TabView {
     }
 
     /// Sync settings tab state from app-level theme/colormap.
-    pub fn sync_settings(&mut self, theme: Theme, colormap: Colormap) {
-        self.settings.sync(theme, colormap);
+    pub fn sync_settings(&mut self, theme_name: &str, colormap_name: &str) {
+        self.settings.sync(theme_name, colormap_name);
     }
 
-    /// Read the theme chosen in the settings tab.
-    pub fn settings_theme(&self) -> Theme {
-        self.settings.current_theme()
+    /// Read the theme name chosen in the settings tab.
+    pub fn settings_theme_name(&self) -> String {
+        self.settings.current_theme_name()
     }
 
-    /// Read the colormap chosen in the settings tab.
-    pub fn settings_colormap(&self) -> Colormap {
-        self.settings.current_colormap()
+    /// Read the colormap name chosen in the settings tab.
+    pub fn settings_colormap_name(&self) -> String {
+        self.settings.current_colormap_name()
     }
 
     /// Toggle the preset popup on the Setup tab (§2.2).
@@ -171,6 +170,30 @@ impl TabView {
         }
     }
 
+    pub fn handle_mouse_down(&mut self, col: u16, row: u16) {
+        match self.selected {
+            Tab::Energy => self.energy.handle_mouse_down(col, row),
+            Tab::PhaseSpace => self.phase_space.handle_mouse_down(col, row),
+            _ => {}
+        }
+    }
+
+    pub fn handle_mouse_drag(&mut self, col: u16, row: u16) {
+        match self.selected {
+            Tab::Energy => self.energy.handle_mouse_drag(col, row),
+            Tab::PhaseSpace => self.phase_space.handle_mouse_drag(col, row),
+            _ => {}
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self, col: u16, row: u16) {
+        match self.selected {
+            Tab::Energy => self.energy.handle_mouse_up(col, row),
+            Tab::PhaseSpace => self.phase_space.handle_mouse_up(col, row),
+            _ => {}
+        }
+    }
+
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         use crossterm::event::KeyCode;
         match key.code {
@@ -196,7 +219,7 @@ impl TabView {
             Tab::Energy => self.energy.handle_key_event(key),
             Tab::Rank => self.rank.handle_key_event(key),
             Tab::Profiles => self.profiles.handle_key_event(key),
-            Tab::Performance => None,
+            Tab::Performance => self.performance.handle_key_event(key),
             Tab::PoissonDetail => self.poisson_detail.handle_key_event(key),
             Tab::Settings => self.settings.handle_key_event(key),
         }
@@ -252,8 +275,8 @@ impl TabView {
         &mut self,
         frame: &mut Frame,
         areas: TabAreas,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
         // Tab bar — manual rendering for per-tab dimming
@@ -275,7 +298,7 @@ impl TabView {
             if i > 0 {
                 tab_spans.push(Span::styled(
                     if compact { "|" } else { " | " },
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 ));
             }
             let label = if compact {
@@ -289,13 +312,13 @@ impl TabView {
 
             let style = if is_selected {
                 Style::default()
-                    .fg(theme.fg)
-                    .bg(theme.highlight)
+                    .fg(theme.foreground)
+                    .bg(theme.surface)
                     .add_modifier(Modifier::BOLD)
             } else if is_dimmed {
-                Style::default().fg(theme.dim).add_modifier(Modifier::DIM)
+                Style::default().fg(theme.dim()).add_modifier(Modifier::DIM)
             } else {
-                Style::default().fg(theme.dim)
+                Style::default().fg(theme.dim())
             };
             tab_spans.push(Span::styled(label, style));
         }
@@ -319,7 +342,7 @@ impl TabView {
         };
         let content_block = Block::bordered()
             .title(tab_title)
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = content_block.inner(areas.content);
         frame.render_widget(content_block, areas.content);
 
@@ -336,7 +359,7 @@ impl TabView {
             frame.render_widget(
                 ratatui::widgets::Paragraph::new(Line::from(vec![Span::styled(
                     format!("  {msg}"),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )])),
                 inner,
             );
@@ -345,14 +368,15 @@ impl TabView {
                 Tab::Setup => self.setup.draw(frame, inner, theme),
                 Tab::RunControl => {
                     self.run_control
-                        .draw(frame, inner, theme, colormap, data_provider)
+                        .draw(frame, inner, theme, colormap_name, data_provider)
                 }
-                Tab::Density => self
-                    .density
-                    .draw(frame, inner, theme, colormap, data_provider),
+                Tab::Density => {
+                    self.density
+                        .draw(frame, inner, theme, colormap_name, data_provider)
+                }
                 Tab::PhaseSpace => {
                     self.phase_space
-                        .draw(frame, inner, theme, colormap, data_provider)
+                        .draw(frame, inner, theme, colormap_name, data_provider)
                 }
                 Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
                 Tab::Rank => self.rank.draw(frame, inner, theme, data_provider),
@@ -362,188 +386,7 @@ impl TabView {
                 Tab::Settings => self.settings.draw(frame, inner, theme),
             }
         }
-
-        // Footer hint — wrap across available lines
-        let hint = help_line(self.selected);
-        let lines = wrap_hint_line(hint, areas.footer.width as usize);
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(lines).style(Style::default().fg(theme.dim)),
-            areas.footer,
-        );
     }
-}
-
-/// Wrap a hint `Line` into multiple lines when it exceeds `max_width`.
-fn wrap_hint_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
-    if max_width == 0 {
-        return vec![line];
-    }
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-    let mut current_width: usize = 0;
-
-    for span in line.spans {
-        let span_width = span.content.len();
-        if current_width + span_width > max_width && !current_spans.is_empty() {
-            lines.push(Line::from(std::mem::take(&mut current_spans)));
-            current_width = 0;
-        }
-        current_width += span_width;
-        current_spans.push(span);
-    }
-    if !current_spans.is_empty() {
-        lines.push(Line::from(current_spans));
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(""));
-    }
-    lines
-}
-
-fn help_line(selected: Tab) -> Line<'static> {
-    let key = |s: &'static str| {
-        Span::styled(
-            s,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let desc = |s: &'static str| Span::styled(s, Style::default().fg(Color::DarkGray));
-
-    let mut spans = vec![
-        key("[F1-F10]"),
-        desc(" tabs  "),
-        key("[Space]"),
-        desc(" pause  "),
-        key("[◄/►]"),
-        desc(" scrub  "),
-        key("[q]"),
-        desc(" quit  "),
-        key("[?]"),
-        desc(" help  "),
-        key("[e]"),
-        desc(" export"),
-    ];
-
-    match selected {
-        Tab::Setup => {
-            spans.extend([
-                key("  [j/k]"),
-                desc(" nav  "),
-                key("[Enter]"),
-                desc(" load  "),
-                key("[r]"),
-                desc(" run  "),
-                key("[Ctrl+P]"),
-                desc(" presets  "),
-                key("[Ctrl+D]"),
-                desc(" defaults"),
-            ]);
-        }
-        Tab::RunControl => {
-            spans.extend([
-                key("  [p]"),
-                desc(" pause  "),
-                key("[s]"),
-                desc(" stop  "),
-                key("[r]"),
-                desc(" restart  "),
-                key("[1-3]"),
-                desc(" log filter"),
-            ]);
-        }
-        Tab::Density => {
-            spans.extend([
-                key("  [1/2/3]"),
-                desc(" axis  "),
-                key("[+/-]"),
-                desc(" zoom  "),
-                key("[r]"),
-                desc(" reset  "),
-                key("[0]"),
-                desc(" auto  "),
-                key("[l]"),
-                desc(" log  "),
-                key("[Shift+c]"),
-                desc(" cmap  "),
-                key("[n]"),
-                desc(" contour  "),
-                key("[i]"),
-                desc(" info"),
-            ]);
-        }
-        Tab::PhaseSpace => {
-            spans.extend([
-                key("  [1-6]"),
-                desc(" dims  "),
-                key("[+/-]"),
-                desc(" zoom  "),
-                key("[l]"),
-                desc(" log  "),
-                key("[,/.]"),
-                desc(" s1  "),
-                key("[(/)]"),
-                desc(" s2  "),
-                key("[{/}]"),
-                desc(" s3  "),
-                key("[</>]"),
-                desc(" s4  "),
-                key("[p]"),
-                desc(" aspect  "),
-                key("[s]"),
-                desc(" stream  "),
-                key("[i]"),
-                desc(" info"),
-            ]);
-        }
-        Tab::Energy => {
-            spans.extend([
-                key("  [t/k/w]"),
-                desc(" traces  "),
-                key("[d]"),
-                desc(" drift  "),
-                key("[1-4]"),
-                desc(" panel  "),
-                key("[h/l]"),
-                desc(" scroll  "),
-                key("[Shift+h/l]"),
-                desc(" zoom  "),
-                key("[f]"),
-                desc(" fit  "),
-                key("[g]"),
-                desc(" grid"),
-            ]);
-        }
-        Tab::Profiles => {
-            spans.extend([
-                key("  [1-5]"),
-                desc(" profile  "),
-                key("[l]"),
-                desc(" log  "),
-                key("[a]"),
-                desc(" analytic  "),
-                key("[s]"),
-                desc(" stacked/single  "),
-                key("[b]"),
-                desc(" bins"),
-            ]);
-        }
-        Tab::Settings => {
-            spans.extend([
-                key("  [j/k]"),
-                desc(" nav  "),
-                key("[h/l ◄/►]"),
-                desc(" change"),
-            ]);
-        }
-        Tab::Rank => {
-            spans.extend([key("  [n/N]"), desc(" node")]);
-        }
-        _ => {} // Performance, Poisson: display-only
-    }
-
-    Line::from(spans)
 }
 
 /// Abbreviated tab labels for compact mode (§2.5).
