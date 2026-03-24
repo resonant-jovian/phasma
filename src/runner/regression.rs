@@ -32,17 +32,7 @@ pub async fn run_regression_test(dir: &str) -> anyhow::Result<bool> {
     eprintln!("phasma regression: re-running {config_str}...");
 
     let mut handle = SimHandle::spawn_unbounded(config_str);
-    let mut new_final = None;
-    while let Some(state) = handle.state_rx.recv_async().await {
-        for msg in &state.log_messages {
-            eprintln!("  [verbose] {msg}");
-        }
-        let is_exit = state.exit_reason.is_some();
-        new_final = Some(state);
-        if is_exit {
-            break;
-        }
-    }
+    let new_final = super::helpers::drain_to_final(&mut handle.state_rx, "verbose").await;
     handle.task.abort();
 
     let new_state = new_final.ok_or_else(|| anyhow::anyhow!("simulation produced no output"))?;

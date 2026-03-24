@@ -11,6 +11,7 @@ use ratatui_plt::prelude::{
     Axis as PltAxis, Bounds, LinePlot, LineStyle, MarkerShape, Scale, Series,
 };
 use ratatui_plt::statistics::poly_fit;
+use ratatui_plt::widgets::error_bar::ErrorBarPlot;
 
 use ratatui_plt::prelude::Theme;
 
@@ -154,9 +155,29 @@ impl PoissonDetailTab {
             })
         });
 
+        // Check for per-k-shell std data for error bars
+        let spec_std: Option<Vec<f64>> =
+            state.and_then(|s| s.density_power_spectrum_std.as_ref().cloned());
+
         match spec_data {
             Some(ref data) if data.len() >= 2 => {
                 let plt_theme = theme.clone();
+
+                // If we have std data, render error bars
+                if let Some(ref stds) = spec_std {
+                    if stds.len() == data.len() {
+                        let err_plot = ErrorBarPlot::new()
+                            .data(data.clone(), stds.clone(), stds.clone())
+                            .color(theme.chart_color(1))
+                            .title(" P\u{03c1}(k) Density Spectrum \u{00b1}\u{03c3} ")
+                            .x_axis(PltAxis::new().label("k").scale(Scale::Log(10.0)))
+                            .y_axis(PltAxis::new().label("P\u{03c1}(k)").scale(Scale::Log(10.0)))
+                            .theme(plt_theme);
+                        frame.render_widget(&err_plot, area);
+                        return;
+                    }
+                }
+
                 let mut plot = LinePlot::new()
                     .series(
                         Series::new("|\u{03c1}\u{0302}(k)|\u{00b2}")

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
@@ -9,7 +9,8 @@ use ratatui::{
 use ratatui_plt::fft::stft;
 use ratatui_plt::prelude::{
     Annotation, Axis as PltAxis, Band, BandPlot, Bounds, LegendPosition, LinePlot, LineStyle,
-    PsdPlot, RefLineDash, ReferenceLine, Scale, Series, Spectrogram, StackedArea,
+    PsdPlot, RefLineDash, ReferenceLine, Scale, Series, SharedSpanState, Spectrogram, StackedArea,
+    shared_span_state,
 };
 use ratatui_plt::statistics::linear_regression;
 use ratatui_plt::widgets::ecdf::{EcdfDataset, EcdfPlot};
@@ -158,6 +159,10 @@ pub struct EnergyTab {
     /// Time and label of exit event for annotation
     exit_event_time: Option<f64>,
     exit_reason_label: String,
+    /// Shared state for mouse-drag span selection on the energy chart
+    span_state: SharedSpanState,
+    /// Track the energy chart render area for mouse coordinate mapping
+    last_energy_area: Rect,
 }
 
 impl Default for EnergyTab {
@@ -178,6 +183,8 @@ impl Default for EnergyTab {
             cached_spectrogram: CachedSpectrogram::default(),
             exit_event_time: None,
             exit_reason_label: String::new(),
+            span_state: shared_span_state(),
+            last_energy_area: Rect::default(),
         }
     }
 }
@@ -370,6 +377,9 @@ impl EnergyTab {
 
         // Compact mode: single panel (selected by panel key 1-9)
         if area.width < 76 {
+            if self.selected_panel == 0 {
+                self.last_energy_area = area;
+            }
             match self.selected_panel {
                 0 => self.draw_energy_chart(frame, area, theme, data_provider),
                 1 => self.draw_mass_chart(frame, area, theme),
@@ -396,6 +406,7 @@ impl EnergyTab {
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(bottom);
 
+        self.last_energy_area = top_left;
         self.draw_energy_chart(frame, top_left, theme, data_provider);
         self.draw_mass_chart(frame, top_right, theme);
         self.draw_virial_chart(frame, bottom_left, theme);
@@ -743,6 +754,63 @@ impl EnergyTab {
             .theme(plt_theme);
 
         frame.render_widget(&spec, area);
+    }
+
+    pub fn handle_mouse_down(&mut self, col: u16, row: u16) {
+        if self.last_energy_area.contains(Position::new(col, row)) {
+            if let Some(t) = self.pixel_to_time(col) {
+                self.span_state.borrow_mut().start = Some(t);
+                self.span_state.borrow_mut().end = None;
+            }
+        }
+    }
+
+    pub fn handle_mouse_drag(&mut self, col: u16, _row: u16) {
+        if self.span_state.borrow().start.is_some() {
+            if let Some(t) = self.pixel_to_time(col) {
+                self.span_state.borrow_mut().end = Some(t);
+            }
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self, _col: u16, _row: u16) {
+        let state = self.span_state.borrow();
+        if let (Some(start), Some(end)) = (state.start, state.end) {
+            let (t_min, t_max) = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            drop(state);
+            self.time_window.t_end = Some(t_max);
+            self.time_window.width = Some(t_max - t_min);
+        } else {
+            drop(state);
+        }
+        self.span_state.borrow_mut().start = None;
+        self.span_state.borrow_mut().end = None;
+    }
+
+    fn pixel_to_time(&self, col: u16) -> Option<f64> {
+        let area = self.last_energy_area;
+        if area.width == 0 {
+            return None;
+        }
+        // Approximate inner plot area (skip y-axis label region on left, border on right)
+        let inner_left = area.x + 6;
+        let inner_right = area.x + area.width.saturating_sub(1);
+        if col < inner_left || col > inner_right {
+            return None;
+        }
+        let frac = (col - inner_left) as f64 / (inner_right - inner_left) as f64;
+        let data = &self.cached.total_energy;
+        if data.is_empty() {
+            return None;
+        }
+        let data_x_min = data.first().map(|&(t, _)| t).unwrap_or(0.0);
+        let data_x_max = data.last().map(|&(t, _)| t).unwrap_or(1.0);
+        let (x_min, x_max) = self.time_window.apply(data_x_min, data_x_max);
+        Some(x_min + frac * (x_max - x_min))
     }
 }
 

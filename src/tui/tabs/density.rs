@@ -1,22 +1,23 @@
-use std::borrow::Cow;
-
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, Widget},
 };
 use ratatui_plt::prelude::{
-    AspectRatio, Axis as PltAxis, Bounds, ContourPlot, GridData, Heatmap, LinePlot, Series,
+    AspectRatio, Axis as PltAxis, Bounds, ContourPlot, GridData, Heatmap, InsetAxes, LinePlot,
+    Series, Spines, VectorField, VectorFieldData,
 };
+use ratatui_plt::widgets::streamplot::StreamPlot;
 
 use ratatui_plt::prelude::Theme;
 
 use crate::{
     data::DataProvider,
     tui::widgets::data_cursor::DataCursor,
+    tui::widgets::zoom,
     tui::{
         action::Action,
         plt_bridge::{NormMode, PhasmaThemeExt, flat_to_grid_data},
@@ -56,12 +57,21 @@ pub struct DensityTab {
     show_info: bool,
     zoom: f32,
     contour_mode: ContourMode,
+    show_acceleration: bool,
+    show_streamlines: bool,
+    show_inset: bool,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
     last_nx: usize,
     last_ny: usize,
     last_state_step: u64,
+    /// When true, the data cursor shows physical coordinates instead of grid indices.
+    crosshair_mode: bool,
+    /// Cached physical coordinates at the current cursor position.
+    crosshair_data_pos: Option<(f64, f64)>,
+    /// Cached spatial half-extent from the last draw call.
+    last_extent: f64,
 }
 
 impl Default for DensityTab {
@@ -73,26 +83,25 @@ impl Default for DensityTab {
             show_info: true,
             zoom: 1.0,
             contour_mode: ContourMode::default(),
+            show_acceleration: false,
+            show_streamlines: false,
+            show_inset: false,
             data_cursor: DataCursor::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
             last_nx: 0,
             last_ny: 0,
             last_state_step: u64::MAX,
+            crosshair_mode: false,
+            crosshair_data_pos: None,
+            last_extent: 0.0,
         }
     }
 }
 
 impl DensityTab {
     pub fn handle_scroll(&mut self, delta: i32) {
-        if delta < 0 {
-            self.zoom = (self.zoom * 1.15).min(8.0);
-        } else {
-            self.zoom = (self.zoom / 1.15).max(1.0);
-            if self.zoom <= 1.01 {
-                self.zoom = 1.0;
-            }
-        }
+        zoom::apply_scroll_zoom(&mut self.zoom, delta);
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
@@ -125,21 +134,30 @@ impl DensityTab {
                 self.show_marginals = !self.show_marginals;
                 None
             }
-            KeyCode::Char('r') => {
-                self.zoom = 1.0;
+            KeyCode::Char('c') => {
+                self.crosshair_mode = !self.crosshair_mode;
+                if !self.crosshair_mode {
+                    self.crosshair_data_pos = None;
+                }
                 None
             }
-            KeyCode::Char('0') => {
-                // Auto-scale: fit data to view (currently same as reset)
-                self.zoom = 1.0;
+            code @ (KeyCode::Char('+')
+            | KeyCode::Char('-')
+            | KeyCode::Char('r')
+            | KeyCode::Char('0')) => {
+                zoom::apply_key_zoom(&mut self.zoom, code);
                 None
             }
-            KeyCode::Char('+') => {
-                self.zoom = (self.zoom * 1.25).min(8.0);
+            KeyCode::Char('g') => {
+                self.show_acceleration = !self.show_acceleration;
                 None
             }
-            KeyCode::Char('-') => {
-                self.zoom = (self.zoom / 1.25).max(0.25);
+            KeyCode::Char('f') => {
+                self.show_streamlines = !self.show_streamlines;
+                None
+            }
+            KeyCode::Char('I') => {
+                self.show_inset = !self.show_inset;
                 None
             }
             _ => None,
@@ -153,6 +171,7 @@ impl DensityTab {
 
         if nx == 0 || ny == 0 || heatmap_area.width == 0 || heatmap_area.height == 0 {
             self.data_cursor.hide();
+            self.crosshair_data_pos = None;
             return;
         }
 
@@ -161,20 +180,35 @@ impl DensityTab {
             && row >= heatmap_area.y
             && row < heatmap_area.y + heatmap_area.height
         {
-            let dx = (col - heatmap_area.x) as f64 / heatmap_area.width as f64;
-            let dy = (row - heatmap_area.y) as f64 / heatmap_area.height as f64;
-            let ix = (dx * nx as f64).min((nx - 1) as f64) as usize;
-            let iy = (dy * ny as f64).min((ny - 1) as f64) as usize;
+            let frac_x = (col - heatmap_area.x) as f64 / heatmap_area.width as f64;
+            let frac_y = (row - heatmap_area.y) as f64 / heatmap_area.height as f64;
+            let ix = (frac_x * nx as f64).min((nx - 1) as f64) as usize;
+            let iy = (frac_y * ny as f64).min((ny - 1) as f64) as usize;
             let idx = iy * nx + ix;
             if idx < self.last_data.len() {
                 let val = self.last_data[idx];
-                self.data_cursor
-                    .show(col, row, format!("[{ix},{iy}] = {val:.4e}"));
+                let extent = self.last_extent;
+                if self.crosshair_mode && extent > 0.0 {
+                    let data_x = -extent + frac_x * 2.0 * extent;
+                    let data_y = extent - frac_y * 2.0 * extent;
+                    self.crosshair_data_pos = Some((data_x, data_y));
+                    self.data_cursor.show(
+                        col,
+                        row,
+                        format!("({data_x:.3}, {data_y:.3})  \u{03c1}={val:.4e}"),
+                    );
+                } else {
+                    self.crosshair_data_pos = None;
+                    self.data_cursor
+                        .show(col, row, format!("[{ix},{iy}] = {val:.4e}"));
+                }
             } else {
                 self.data_cursor.hide();
+                self.crosshair_data_pos = None;
             }
         } else {
             self.data_cursor.hide();
+            self.crosshair_data_pos = None;
         }
     }
 
@@ -226,7 +260,23 @@ impl DensityTab {
         let title = axis_names[self.axis.min(2)];
         let norm_tag = self.norm_mode.tag();
         let contour_tag = self.contour_mode.tag();
-        let full_title = format!(" {title}{norm_tag}{contour_tag} ");
+        let accel_tag = if self.show_acceleration {
+            " [accel]"
+        } else {
+            ""
+        };
+        let stream_tag = if self.show_streamlines {
+            " [stream]"
+        } else {
+            ""
+        };
+        let inset_tag = if self.show_inset && self.zoom > 1.0 {
+            " [inset]"
+        } else {
+            ""
+        };
+        let full_title =
+            format!(" {title}{norm_tag}{contour_tag}{accel_tag}{stream_tag}{inset_tag} ");
 
         let [main_area, info_area] = if self.show_info && area.height > 4 {
             Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).areas(area)
@@ -248,7 +298,7 @@ impl DensityTab {
             };
 
         // Apply zoom by extracting a sub-region of the data
-        let (view_data, vnx, vny) = crop_data(&data, nx, ny, self.zoom);
+        let (view_data, vnx, vny) = zoom::crop_data(&data, nx, ny, self.zoom);
 
         // Use physical spatial extent for aspect ratio if available
         let state = data_provider.current_state();
@@ -302,6 +352,50 @@ impl DensityTab {
             }
         }
 
+        // Acceleration vector field overlay
+        if self.show_acceleration || self.show_streamlines {
+            if let Some(accel) = state.and_then(|s| s.acceleration_xy.as_ref()) {
+                if !accel.is_empty() {
+                    let vfd = VectorFieldData::new(accel.clone());
+                    if self.show_acceleration {
+                        let vf = VectorField::new(vfd.clone())
+                            .color(Color::White)
+                            .color_by_magnitude(true)
+                            .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                            .y_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                            .spines(Spines::all(false))
+                            .theme(theme.clone());
+                        frame.render_widget(&vf, heatmap_area);
+                    }
+                    if self.show_streamlines {
+                        let sp = StreamPlot::new(vfd)
+                            .color(Color::Cyan)
+                            .color_by_magnitude(true)
+                            .density(2)
+                            .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                            .y_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
+                            .spines(Spines::all(false))
+                            .theme(theme.clone());
+                        frame.render_widget(&sp, heatmap_area);
+                    }
+                }
+            }
+        }
+
+        // Inset overview when zoomed
+        if self.show_inset && self.zoom > 1.0 && !data.is_empty() {
+            let inset = InsetAxes::new(0.70, 0.02, 0.28, 0.28)
+                .border(true)
+                .border_color(theme.accent);
+            let full_grid = flat_to_grid_data(&data, nx, ny, (-extent, extent), (-extent, extent));
+            inset.render_with(heatmap_area, frame.buffer_mut(), |rect, buf| {
+                let mini_hm = Heatmap::new(full_grid.clone())
+                    .show_colorbar(false)
+                    .theme(theme.clone());
+                (&mini_hm).render(rect, buf);
+            });
+        }
+
         // Marginal density strips
         if let Some(top_area) = top_marginal {
             // Column sums → horizontal profile (x marginal)
@@ -350,8 +444,9 @@ impl DensityTab {
             frame.render_widget(&plot, right_area);
         }
 
-        // Store heatmap area for mouse cursor lookups
+        // Store heatmap area and extent for mouse cursor lookups
         self.last_heatmap_area = heatmap_area;
+        self.last_extent = extent;
         if let Some(s) = state
             && (s.step != self.last_state_step || vnx != self.last_nx || vny != self.last_ny)
         {
@@ -362,51 +457,32 @@ impl DensityTab {
         }
 
         if self.show_info && info_area.width > 0 {
-            let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
-                format!("  SCRUB {}/{total} [\\] live", idx + 1)
-            } else {
-                String::new()
-            };
-            let axis_hint = format!(
-                "[1/2/3] axis  [l] norm  [Shift+c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
-            );
-            frame.render_widget(
-                Paragraph::new(axis_hint).style(Style::default().fg(theme.dim())),
-                info_area,
-            );
+            let mut status_parts = Vec::new();
+            if self.crosshair_mode {
+                status_parts.push("crosshair".to_string());
+            }
+            if self.show_acceleration {
+                status_parts.push("accel".to_string());
+            }
+            if self.show_streamlines {
+                status_parts.push("stream".to_string());
+            }
+            if self.show_inset && self.zoom > 1.0 {
+                status_parts.push("inset".to_string());
+            }
+            if let Some((idx, total)) = data_provider.scrub_position() {
+                status_parts.push(format!("SCRUB {}/{total}", idx + 1));
+            }
+            let status = status_parts.join("  ");
+            if !status.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(status).style(Style::default().fg(theme.dim())),
+                    info_area,
+                );
+            }
         }
 
         // Data cursor tooltip (drawn last so it's on top)
         self.data_cursor.draw(frame);
     }
-}
-
-/// Crop data to a centered sub-region defined by zoom level.
-/// Returns `Cow::Borrowed` at zoom ≤ 1.0 (zero-copy), `Cow::Owned` when zoomed.
-fn crop_data<'a>(
-    data: &'a [f64],
-    nx: usize,
-    ny: usize,
-    zoom: f32,
-) -> (Cow<'a, [f64]>, usize, usize) {
-    if zoom <= 1.0 {
-        return (Cow::Borrowed(data), nx, ny);
-    }
-    let view_w = (nx as f32 / zoom).ceil().max(1.0) as usize;
-    let view_h = (ny as f32 / zoom).ceil().max(1.0) as usize;
-    let view_w = view_w.min(nx);
-    let view_h = view_h.min(ny);
-
-    let x0 = (nx - view_w) / 2;
-    let y0 = (ny - view_h) / 2;
-
-    let mut out = Vec::with_capacity(view_w * view_h);
-    for iy in y0..y0 + view_h {
-        let iy = iy.min(ny - 1);
-        for ix in x0..x0 + view_w {
-            let ix = ix.min(nx - 1);
-            out.push(data[iy * nx + ix]);
-        }
-    }
-    (Cow::Owned(out), view_w, view_h)
 }

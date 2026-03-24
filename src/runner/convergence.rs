@@ -55,11 +55,7 @@ pub async fn run_convergence(toml_path: &str) -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&conv_cfg.output_dir)?;
 
-    let max_concurrent = conv_cfg.convergence.max_concurrent.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(1))
-            .unwrap_or(2)
-    });
+    let max_concurrent = super::helpers::default_concurrency(conv_cfg.convergence.max_concurrent);
     eprintln!("phasma convergence: max_concurrent = {max_concurrent}");
     let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
@@ -89,17 +85,8 @@ pub async fn run_convergence(toml_path: &str) -> anyhow::Result<()> {
         eprintln!("phasma convergence: running N={res}...");
         join_set.spawn(async move {
             let mut handle = SimHandle::spawn_unbounded(config_str);
-            let mut final_state = None;
-            while let Some(state) = handle.state_rx.recv_async().await {
-                for msg in &state.log_messages {
-                    eprintln!("  [N={res}] {msg}");
-                }
-                let is_exit = state.exit_reason.is_some();
-                final_state = Some(state);
-                if is_exit {
-                    break;
-                }
-            }
+            let label = format!("N={res}");
+            let final_state = super::helpers::drain_to_final(&mut handle.state_rx, &label).await;
             handle.task.abort();
             drop(permit);
 

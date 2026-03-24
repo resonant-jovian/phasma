@@ -21,7 +21,6 @@ pub struct ScreenLayout {
     pub status_area: Rect,
     pub tab_bar_area: Rect,
     pub content_area: Rect,
-    pub footer_area: Rect,
 }
 
 /// Minimum panel dimensions — panels below these show a placeholder.
@@ -88,26 +87,20 @@ impl ResponsiveLayout {
                     status_area,
                     tab_bar_area,
                     content_area,
-                    footer_area: Rect::new(0, 0, 0, 0), // hidden
                 }
             }
             LayoutMode::Standard | LayoutMode::Wide => {
                 let [status_area, rest] =
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(full);
 
-                let [tab_bar_area, content_and_footer] =
+                let [tab_bar_area, content_area] =
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(rest);
-
-                let [content_area, footer_area] =
-                    Layout::vertical([Constraint::Min(0), Constraint::Length(2)])
-                        .areas(content_and_footer);
 
                 ScreenLayout {
                     mode,
                     status_area,
                     tab_bar_area,
                     content_area,
-                    footer_area,
                 }
             }
         }

@@ -1,6 +1,7 @@
 pub mod batch;
 pub mod compare;
 pub mod convergence;
+pub mod helpers;
 pub mod live;
 pub mod monitor;
 pub mod regression;

@@ -35,7 +35,7 @@ impl HelpOverlay {
 
         // Center overlay
         let w = area.width.min(62);
-        let h = area.height.min(68);
+        let h = area.height.min(82);
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
         let overlay = Rect::new(x, y, w, h);
@@ -144,10 +144,17 @@ impl HelpOverlay {
             Line::from(vec![key("  1/2/3     "), desc("Projection axis")]),
             Line::from(vec![key("  +/- scroll"), desc("Zoom in/out")]),
             Line::from(vec![key("  r/0       "), desc("Reset zoom")]),
-            Line::from(vec![key("  l         "), desc("Toggle log scale")]),
+            Line::from(vec![
+                key("  l         "),
+                desc("Cycle norm (linear/log/sqrt/asinh)"),
+            ]),
             Line::from(vec![key("  Shift+c   "), desc("Cycle colormap (global)")]),
             Line::from(vec![key("  i         "), desc("Toggle info bar")]),
             Line::from(vec![key("  n         "), desc("Toggle contour overlay")]),
+            Line::from(vec![
+                key("  m         "),
+                desc("Toggle marginal density strips"),
+            ]),
             Line::from(""),
             section("Phase Space (F4)"),
             Line::from(vec![
@@ -160,9 +167,14 @@ impl HelpOverlay {
             ]),
             Line::from(vec![key("  +/- scroll"), desc("Zoom in/out")]),
             Line::from(vec![key("  r/0       "), desc("Reset zoom")]),
-            Line::from(vec![key("  l         "), desc("Toggle log scale")]),
+            Line::from(vec![
+                key("  l         "),
+                desc("Cycle norm (linear/log/sqrt/asinh)"),
+            ]),
             Line::from(vec![key("  Shift+c   "), desc("Cycle colormap (global)")]),
             Line::from(vec![key("  i         "), desc("Toggle info bar")]),
+            Line::from(vec![key("  x         "), desc("Toggle hexbin mode")]),
+            Line::from(vec![key("  v         "), desc("Toggle velocity histogram")]),
             Line::from(vec![key("  ,/.       "), desc("Slice 1st hidden dim")]),
             Line::from(vec![key("  (/)       "), desc("Slice 2nd hidden dim")]),
             Line::from(vec![key("  {/}       "), desc("Slice 3rd hidden dim")]),
@@ -196,12 +208,20 @@ impl HelpOverlay {
                 desc("Fit all (reset time window)"),
             ]),
             Line::from(vec![key("  g         "), desc("Toggle grid lines")]),
+            Line::from(vec![key("  y         "), desc("Toggle symlog drift axis")]),
+            Line::from(vec![
+                key("  5-8       "),
+                desc("PSD/Momentum/Spectrogram/Symplect."),
+            ]),
+            Line::from(vec![key("  9         "), desc("ECDF conservation errors")]),
+            Line::from(vec![key("  S         "), desc("Toggle stacked layout")]),
             Line::from(""),
             section("Rank (F6)"),
             Line::from(vec![
                 key("  n/N       "),
                 desc("Cycle node for SV spectrum"),
             ]),
+            Line::from(vec![key("  v         "), desc("Toggle violin/bar chart")]),
             Line::from(""),
             section("Profiles (F7)"),
             Line::from(vec![
@@ -215,9 +235,20 @@ impl HelpOverlay {
                 desc("Toggle stacked/single layout"),
             ]),
             Line::from(vec![key("  b         "), desc("Cycle bin count")]),
+            Line::from(vec![key("  p         "), desc("Toggle polar density view")]),
             Line::from(""),
-            section("Performance (F8) / Poisson (F9)"),
-            Line::from(vec![desc("  Display-only")]),
+            section("Performance (F8)"),
+            Line::from(vec![
+                key("  n         "),
+                desc("Cycle histogram norm (count/density/prob)"),
+            ]),
+            Line::from(vec![
+                key("  v         "),
+                desc("Cycle distribution (hist/violin/box)"),
+            ]),
+            Line::from(""),
+            section("Poisson (F9)"),
+            Line::from(vec![desc("  Spectral slopes auto-fitted")]),
             Line::from(""),
             section("Settings (F10)"),
             Line::from(vec![key("  j/k ▲/▼   "), desc("Navigate settings")]),

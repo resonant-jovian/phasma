@@ -1,4 +1,4 @@
-use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Size;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -623,6 +623,15 @@ impl App {
             MouseEventKind::Moved => {
                 self.tab_view.handle_mouse_move(mouse.column, mouse.row);
             }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.tab_view.handle_mouse_down(mouse.column, mouse.row);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.tab_view.handle_mouse_drag(mouse.column, mouse.row);
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.tab_view.handle_mouse_up(mouse.column, mouse.row);
+            }
             _ => {}
         }
         Ok(())
@@ -929,7 +938,6 @@ impl App {
                     crate::tui::tabs::TabAreas {
                         tab_bar: layout.tab_bar_area,
                         content: layout.content_area,
-                        footer: layout.footer_area,
                         layout_mode: layout.mode,
                     },
                     &theme,

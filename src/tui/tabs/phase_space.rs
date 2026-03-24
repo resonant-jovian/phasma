@@ -1,16 +1,14 @@
-use std::borrow::Cow;
-
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Paragraph, Widget},
 };
 use ratatui_plt::prelude::{
-    AspectRatio, Axis as PltAxis, Bounds, Heatmap, Histogram as PltHistogram, Kde, LinePlot,
-    Series, StairsDataset, StairsPlot,
+    AspectRatio, Axis as PltAxis, BandwidthMethod, Bounds, Heatmap, Histogram as PltHistogram,
+    InsetAxes, Kde, Kernel, LinePlot, Series, SharedBrush, StairsDataset, StairsPlot, shared_brush,
 };
 use ratatui_plt::widgets::hexbin::HexbinPlot;
 
@@ -22,6 +20,7 @@ use crate::{
         action::Action,
         plt_bridge::{NormMode, PhasmaThemeExt, flat_to_grid_data},
         widgets::data_cursor::DataCursor,
+        widgets::zoom,
     },
 };
 
@@ -42,14 +41,33 @@ pub struct PhaseSpaceTab {
     show_stream_count: bool,
     /// Toggle HexbinPlot rendering mode
     hexbin_mode: bool,
+    show_inset: bool,
     /// Toggle velocity distribution histogram panel
     show_vel_histogram: bool,
+    /// KDE kernel: 0=Gaussian, 1=Epanechnikov
+    kde_kernel: u8,
+    /// KDE bandwidth method: 0=Silverman, 1=Scott
+    kde_bandwidth: u8,
     data_cursor: DataCursor,
     last_heatmap_area: Rect,
     last_data: Vec<f64>,
     last_nx: usize,
     last_ny: usize,
     last_state_step: u64,
+    /// When true, the data cursor shows physical coordinates instead of grid indices.
+    crosshair_mode: bool,
+    /// Cached physical coordinates at the current cursor position.
+    crosshair_data_pos: Option<(f64, f64)>,
+    /// Cached spatial half-extent from the last draw call.
+    last_x_extent: f64,
+    /// Cached velocity half-extent from the last draw call.
+    last_v_extent: f64,
+    /// Shared brush selection state for linked brushing.
+    brush: SharedBrush,
+    /// Whether brush/selection mode is active (toggled with 'd').
+    brush_mode: bool,
+    /// Data coordinates of the drag start point when brushing.
+    brush_start: Option<(f64, f64)>,
 }
 
 impl Default for PhaseSpaceTab {
@@ -64,27 +82,30 @@ impl Default for PhaseSpaceTab {
             physical_aspect: false,
             show_stream_count: false,
             hexbin_mode: false,
+            show_inset: false,
             show_vel_histogram: false,
+            kde_kernel: 0,
+            kde_bandwidth: 0,
             data_cursor: Default::default(),
             last_heatmap_area: Rect::default(),
             last_data: Vec::new(),
             last_nx: 0,
             last_ny: 0,
             last_state_step: u64::MAX,
+            crosshair_mode: false,
+            crosshair_data_pos: None,
+            last_x_extent: 0.0,
+            last_v_extent: 0.0,
+            brush: shared_brush(),
+            brush_mode: false,
+            brush_start: None,
         }
     }
 }
 
 impl PhaseSpaceTab {
     pub fn handle_scroll(&mut self, delta: i32) {
-        if delta < 0 {
-            self.zoom = (self.zoom * 1.15).min(8.0);
-        } else {
-            self.zoom = (self.zoom / 1.15).max(1.0);
-            if self.zoom <= 1.01 {
-                self.zoom = 1.0;
-            }
-        }
+        zoom::apply_scroll_zoom(&mut self.zoom, delta);
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
@@ -123,16 +144,11 @@ impl PhaseSpaceTab {
                 self.show_info = !self.show_info;
                 None
             }
-            KeyCode::Char('+') => {
-                self.zoom = (self.zoom * 1.25).min(8.0);
-                None
-            }
-            KeyCode::Char('-') => {
-                self.zoom = (self.zoom / 1.25).max(0.25);
-                None
-            }
-            KeyCode::Char('r') | KeyCode::Char('0') => {
-                self.zoom = 1.0;
+            code @ (KeyCode::Char('+')
+            | KeyCode::Char('-')
+            | KeyCode::Char('r')
+            | KeyCode::Char('0')) => {
+                zoom::apply_key_zoom(&mut self.zoom, code);
                 None
             }
             // Slice position: ,/. = 1st hidden dim, (/) = 2nd, {/} = 3rd, </> = 4th
@@ -182,8 +198,35 @@ impl PhaseSpaceTab {
                 self.show_vel_histogram = !self.show_vel_histogram;
                 None
             }
+            KeyCode::Char('c') => {
+                self.crosshair_mode = !self.crosshair_mode;
+                if !self.crosshair_mode {
+                    self.crosshair_data_pos = None;
+                }
+                None
+            }
             KeyCode::Char('x') => {
                 self.hexbin_mode = !self.hexbin_mode;
+                None
+            }
+            KeyCode::Char('K') => {
+                self.kde_kernel = (self.kde_kernel + 1) % 2;
+                None
+            }
+            KeyCode::Char('B') => {
+                self.kde_bandwidth = (self.kde_bandwidth + 1) % 2;
+                None
+            }
+            KeyCode::Char('I') => {
+                self.show_inset = !self.show_inset;
+                None
+            }
+            KeyCode::Char('d') => {
+                self.brush_mode = !self.brush_mode;
+                if !self.brush_mode {
+                    self.brush.borrow_mut().clear();
+                    self.brush_start = None;
+                }
                 None
             }
             _ => None,
@@ -269,12 +312,18 @@ impl PhaseSpaceTab {
                 format!(" [{}]", parts.join(","))
             }
         };
+        let inset_tag = if self.show_inset && self.zoom > 1.0 {
+            " [inset]"
+        } else {
+            ""
+        };
         let title = format!(
-            " f({}, {}){}{}",
+            " f({}, {}){}{}{}",
             dim_labels[self.dim_x],
             vel_labels[self.dim_v],
             self.norm_mode.tag(),
             slice_info,
+            inset_tag,
         );
 
         let [main_area, info_area] = if self.show_info && area.height > 4 {
@@ -302,7 +351,7 @@ impl PhaseSpaceTab {
                 (main_area, None, None)
             };
 
-        let (view_data, vnx, vnv) = crop_data(&data, nx, nv, self.zoom);
+        let (view_data, vnx, vnv) = zoom::crop_data(&data, nx, nv, self.zoom);
 
         // Use physical extents for aspect ratio when enabled
         let state = data_provider.current_state();
@@ -381,8 +430,55 @@ impl PhaseSpaceTab {
             frame.render_widget(&hm, heatmap_area);
         }
 
-        // Cache data for mouse cursor lookups — only copy when data actually changed
+        // Inset overview when zoomed
+        if self.show_inset && self.zoom > 1.0 && !data.is_empty() {
+            let inset = InsetAxes::new(0.70, 0.02, 0.28, 0.28)
+                .border(true)
+                .border_color(theme.accent);
+            let full_grid =
+                flat_to_grid_data(&data, nx, nv, (-x_extent, x_extent), (-v_extent, v_extent));
+            inset.render_with(heatmap_area, frame.buffer_mut(), |rect, buf| {
+                let mini_hm = Heatmap::new(full_grid.clone())
+                    .show_colorbar(false)
+                    .theme(theme.clone());
+                (&mini_hm).render(rect, buf);
+            });
+        }
+
+        // Brush selection rectangle overlay
+        if self.brush_mode {
+            let brush = self.brush.borrow();
+            if let Some((x_min, v_min, x_max, v_max)) = brush.selection {
+                let ba = self.last_heatmap_area;
+                let bx_ext = self.last_x_extent;
+                let bv_ext = self.last_v_extent;
+                if bx_ext > 0.0 && bv_ext > 0.0 && ba.width > 0 && ba.height > 0 {
+                    let px_left = ba.x as f64 + (x_min + bx_ext) / (2.0 * bx_ext) * ba.width as f64;
+                    let px_right =
+                        ba.x as f64 + (x_max + bx_ext) / (2.0 * bx_ext) * ba.width as f64;
+                    let px_top = ba.y as f64 + (bv_ext - v_max) / (2.0 * bv_ext) * ba.height as f64;
+                    let px_bottom =
+                        ba.y as f64 + (bv_ext - v_min) / (2.0 * bv_ext) * ba.height as f64;
+
+                    let sel_x = (px_left as u16).max(ba.x);
+                    let sel_y = (px_top as u16).max(ba.y);
+                    let sel_w = ((px_right - px_left) as u16).min(ba.width);
+                    let sel_h = ((px_bottom - px_top) as u16).min(ba.height);
+
+                    if sel_w > 1 && sel_h > 1 {
+                        let sel_rect = Rect::new(sel_x, sel_y, sel_w, sel_h);
+                        let sel_block =
+                            Block::bordered().border_style(Style::default().fg(theme.accent));
+                        frame.render_widget(sel_block, sel_rect);
+                    }
+                }
+            }
+        }
+
+        // Cache data and extents for mouse cursor lookups — only copy when data actually changed
         self.last_heatmap_area = heatmap_area;
+        self.last_x_extent = x_extent;
+        self.last_v_extent = v_extent;
         if let Some(s) = state
             && (s.step != self.last_state_step || vnx != self.last_nx || vnv != self.last_ny)
         {
@@ -457,7 +553,15 @@ impl PhaseSpaceTab {
                     }
 
                     if raw_velocity_data.len() >= 2 {
-                        let kde = Kde::default();
+                        let kde = Kde::default()
+                            .kernel(match self.kde_kernel {
+                                0 => Kernel::Gaussian,
+                                _ => Kernel::Epanechnikov,
+                            })
+                            .bandwidth(match self.kde_bandwidth {
+                                0 => BandwidthMethod::Silverman,
+                                _ => BandwidthMethod::Scott,
+                            });
                         let (eval_points, densities) = kde.fit(&raw_velocity_data);
 
                         // Scale KDE densities to match histogram magnitude
@@ -547,18 +651,26 @@ impl PhaseSpaceTab {
         }
 
         if self.show_info && info_area.width > 0 {
-            let scrub_hint = if let Some((idx, total)) = data_provider.scrub_position() {
-                format!("  SCRUB {}/{total}", idx + 1)
-            } else {
-                String::new()
-            };
-            let stream_tag = if self.show_stream_count { " S" } else { "" };
-            let hint = format!(
-                "[1-3] x={}  [4-6] v={}  [+/-] zoom  [l] norm  [,/.] s1  [(/) s2  {{/}} s3  </> s4]  [p] aspect  [s] stream{stream_tag}  [i] hide{scrub_hint}",
-                dim_labels[self.dim_x], vel_labels[self.dim_v],
-            );
+            let mut status_parts = Vec::new();
+            status_parts.push(format!(
+                "x={} v={}",
+                dim_labels[self.dim_x], vel_labels[self.dim_v]
+            ));
+            if self.crosshair_mode {
+                status_parts.push("crosshair".to_string());
+            }
+            if self.brush_mode {
+                status_parts.push("BRUSH".to_string());
+            }
+            if self.show_stream_count {
+                status_parts.push("streams".to_string());
+            }
+            if let Some((idx, total)) = data_provider.scrub_position() {
+                status_parts.push(format!("SCRUB {}/{total}", idx + 1));
+            }
+            let status = status_parts.join("  ");
             frame.render_widget(
-                Paragraph::new(hint).style(Style::default().fg(theme.dim())),
+                Paragraph::new(status).style(Style::default().fg(theme.dim())),
                 info_area,
             );
         }
@@ -571,6 +683,7 @@ impl PhaseSpaceTab {
         let area = self.last_heatmap_area;
         if area.width == 0 || area.height == 0 || self.last_data.is_empty() {
             self.data_cursor.hide();
+            self.crosshair_data_pos = None;
             return;
         }
         // Check if mouse is within the heatmap area (with 1-cell border for block)
@@ -580,6 +693,7 @@ impl PhaseSpaceTab {
         let inner_h = area.height.saturating_sub(2);
         if col < inner_x || col >= inner_x + inner_w || row < inner_y || row >= inner_y + inner_h {
             self.data_cursor.hide();
+            self.crosshair_data_pos = None;
             return;
         }
         let frac_x = (col - inner_x) as f64 / inner_w as f64;
@@ -588,41 +702,72 @@ impl PhaseSpaceTab {
         let iy = ((frac_y * self.last_ny as f64) as usize).min(self.last_ny.saturating_sub(1));
         let flat = iy * self.last_nx + ix;
         if let Some(&val) = self.last_data.get(flat) {
-            self.data_cursor.show(
-                col,
-                row.saturating_sub(3),
-                format!("[{ix},{iy}] = {val:.4e}"),
-            );
+            let x_ext = self.last_x_extent;
+            let v_ext = self.last_v_extent;
+            if self.crosshair_mode && x_ext > 0.0 && v_ext > 0.0 {
+                let data_x = -x_ext + frac_x * 2.0 * x_ext;
+                let data_v = v_ext - frac_y * 2.0 * v_ext;
+                self.crosshair_data_pos = Some((data_x, data_v));
+                self.data_cursor.show(
+                    col,
+                    row.saturating_sub(3),
+                    format!("({data_x:.3}, {data_v:.3})  f={val:.4e}"),
+                );
+            } else {
+                self.crosshair_data_pos = None;
+                self.data_cursor.show(
+                    col,
+                    row.saturating_sub(3),
+                    format!("[{ix},{iy}] = {val:.4e}"),
+                );
+            }
         } else {
             self.data_cursor.hide();
+            self.crosshair_data_pos = None;
         }
     }
-}
 
-fn crop_data<'a>(
-    data: &'a [f64],
-    nx: usize,
-    ny: usize,
-    zoom: f32,
-) -> (Cow<'a, [f64]>, usize, usize) {
-    if zoom <= 1.0 {
-        return (Cow::Borrowed(data), nx, ny);
-    }
-    let view_w = (nx as f32 / zoom).ceil().max(1.0) as usize;
-    let view_h = (ny as f32 / zoom).ceil().max(1.0) as usize;
-    let view_w = view_w.min(nx);
-    let view_h = view_h.min(ny);
-
-    let x0 = (nx - view_w) / 2;
-    let y0 = (ny - view_h) / 2;
-
-    let mut out = Vec::with_capacity(view_w * view_h);
-    for iy in y0..y0 + view_h {
-        let iy = iy.min(ny - 1);
-        for ix in x0..x0 + view_w {
-            let ix = ix.min(nx - 1);
-            out.push(data[iy * nx + ix]);
+    pub fn handle_mouse_down(&mut self, col: u16, row: u16) {
+        if !self.brush_mode {
+            return;
+        }
+        if let Some((x, v)) = self.pixel_to_data(col, row) {
+            self.brush_start = Some((x, v));
         }
     }
-    (Cow::Owned(out), view_w, view_h)
+
+    pub fn handle_mouse_drag(&mut self, col: u16, row: u16) {
+        if !self.brush_mode {
+            return;
+        }
+        if let (Some((x0, v0)), Some((x1, v1))) = (self.brush_start, self.pixel_to_data(col, row)) {
+            self.brush
+                .borrow_mut()
+                .set_selection(x0.min(x1), v0.min(v1), x0.max(x1), v0.max(v1));
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self, _col: u16, _row: u16) {
+        self.brush_start = None;
+    }
+
+    fn pixel_to_data(&self, col: u16, row: u16) -> Option<(f64, f64)> {
+        let area = self.last_heatmap_area;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let frac_x = (col as f64 - area.x as f64) / area.width as f64;
+        let frac_y = (row as f64 - area.y as f64) / area.height as f64;
+        if !(0.0..=1.0).contains(&frac_x) || !(0.0..=1.0).contains(&frac_y) {
+            return None;
+        }
+        let x_ext = self.last_x_extent;
+        let v_ext = self.last_v_extent;
+        if x_ext <= 0.0 || v_ext <= 0.0 {
+            return None;
+        }
+        let x = -x_ext + frac_x * 2.0 * x_ext;
+        let v = v_ext - frac_y * 2.0 * v_ext; // y inverted
+        Some((x, v))
+    }
 }

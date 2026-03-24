@@ -525,14 +525,14 @@ impl RunControlTab {
             })
             .collect();
 
-        let filter_hint = match self.log_filter {
-            LogFilter::All => "[1]All [2]Warn+ [3]Error",
-            LogFilter::WarnPlus => "[1]All [2]Warn+✓ [3]Error",
-            LogFilter::ErrorOnly => "[1]All [2]Warn+ [3]Error✓",
+        let filter_name = match self.log_filter {
+            LogFilter::All => "All",
+            LogFilter::WarnPlus => "Warn+",
+            LogFilter::ErrorOnly => "Errors",
         };
 
         frame.render_widget(
-            Paragraph::new(lines).block(Block::bordered().title(format!(" Log  {filter_hint} "))),
+            Paragraph::new(lines).block(Block::bordered().title(format!(" Log ({filter_name}) "))),
             log_area,
         );
 

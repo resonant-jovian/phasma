@@ -490,11 +490,13 @@ mod tests {
             green_function_rank: None,
             exp_sum_terms: None,
             density_power_spectrum: None,
+            density_power_spectrum_std: None,
             field_energy_spectrum: None,
             positivity_violations: None,
             near_field_correction_l2: None,
             symplecticity_error: None,
             rank_growth_rate: None,
+            acceleration_xy: None,
             log_messages: vec![],
         }
     }

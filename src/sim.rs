@@ -150,6 +150,9 @@ pub struct SimState {
     /// Density power spectrum P(k) = |ρ̂(k)|² binned by |k|.
     #[serde(default)]
     pub density_power_spectrum: Option<Vec<(f64, f64)>>,
+    /// Per-k-shell standard deviation of density power spectrum (for ErrorBarPlot).
+    #[serde(default)]
+    pub density_power_spectrum_std: Option<Vec<f64>>,
     /// Field energy spectrum E(k) = |k|² |Φ̂(k)|² binned by |k|.
     #[serde(default)]
     pub field_energy_spectrum: Option<Vec<(f64, f64)>>,
@@ -184,6 +187,10 @@ pub struct SimState {
     /// Exponential growth rate of max rank (> 0.5 = doubling every ~2 steps).
     #[serde(default)]
     pub rank_growth_rate: Option<f64>,
+    // ── Acceleration field projection ──
+    /// z-projected acceleration vectors (x, y, gx_avg, gy_avg), sub-sampled.
+    #[serde(default)]
+    pub acceleration_xy: Option<Vec<(f64, f64, f64, f64)>>,
 }
 
 impl SimState {
@@ -204,37 +211,7 @@ impl SimState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExitReason {
-    TimeLimitReached,
-    SteadyState,
-    EnergyDrift,
-    MassLoss,
-    CasimirDrift,
-    CflViolation,
-    WallClockLimit,
-    UserStop,
-    CausticFormed,
-    VirialStabilized,
-}
-
-impl std::fmt::Display for ExitReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ExitReason::TimeLimitReached => "Time limit reached",
-            ExitReason::SteadyState => "Steady state",
-            ExitReason::EnergyDrift => "Energy drift threshold",
-            ExitReason::MassLoss => "Mass loss threshold",
-            ExitReason::CasimirDrift => "Casimir drift",
-            ExitReason::CflViolation => "CFL violation",
-            ExitReason::WallClockLimit => "Wall-clock limit",
-            ExitReason::UserStop => "User stop",
-            ExitReason::CausticFormed => "Caustic formed",
-            ExitReason::VirialStabilized => "Virial ratio stabilized",
-        };
-        write!(f, "{s}")
-    }
-}
+pub use caustic::ExitReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimControl {
@@ -447,7 +424,7 @@ fn run_caustic_sim(
             }
             Ok(Some(reason)) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
-                let exit = map_exit_reason(reason);
+                let exit = reason;
                 let mut state = extract_sim_state(
                     &sim,
                     initial_energy,
@@ -1582,6 +1559,28 @@ fn extract_sim_state(
         }
     }
 
+    // Acceleration field projection: average gx,gy over z, sub-sampled
+    let acceleration_xy = sim.cached_acceleration.as_ref().map(|accel| {
+        let [anx, any, anz] = accel.shape;
+        let subsample = 4;
+        let mut vectors = Vec::new();
+        for ix in (0..anx).step_by(subsample) {
+            for iy in (0..any).step_by(subsample) {
+                let mut gx_sum = 0.0;
+                let mut gy_sum = 0.0;
+                for iz in 0..anz {
+                    let idx = ix * any * anz + iy * anz + iz;
+                    gx_sum += accel.gx[idx];
+                    gy_sum += accel.gy[idx];
+                }
+                let x = -spatial_extent + (ix as f64 + 0.5) * 2.0 * spatial_extent / anx as f64;
+                let y = -spatial_extent + (iy as f64 + 0.5) * 2.0 * spatial_extent / any as f64;
+                vectors.push((x, y, gx_sum / anz as f64, gy_sum / anz as f64));
+            }
+        }
+        vectors
+    });
+
     // Poisson diagnostics: residual and power spectrum (only every Nth step)
     let (residual, spectrum, density_ps, field_es) = if compute_poisson_diag {
         let potential = sim
@@ -1699,6 +1698,7 @@ fn extract_sim_state(
         poisson_residual_l2: residual,
         potential_power_spectrum: spectrum,
         density_power_spectrum: density_ps,
+        density_power_spectrum_std: None, // TODO: populate from power_spectrum_with_scatter
         field_energy_spectrum: field_es,
         // Phase timings from caustic instrumentation
         phase_timings: {
@@ -1726,23 +1726,8 @@ fn extract_sim_state(
         near_field_correction_l2: None,
         symplecticity_error: diag.symplecticity_error,
         rank_growth_rate: None,
+        acceleration_xy,
         log_messages: Vec::new(),
-    }
-}
-
-fn map_exit_reason(r: caustic::ExitReason) -> ExitReason {
-    use caustic::ExitReason as C;
-    match r {
-        C::TimeLimitReached => ExitReason::TimeLimitReached,
-        C::SteadyState => ExitReason::SteadyState,
-        C::EnergyDrift => ExitReason::EnergyDrift,
-        C::MassLoss => ExitReason::MassLoss,
-        C::CasimirDrift => ExitReason::CasimirDrift,
-        C::CflViolation => ExitReason::CflViolation,
-        C::WallClockLimit => ExitReason::WallClockLimit,
-        C::FirstCausticFormed => ExitReason::CausticFormed,
-        C::VirialRelaxed => ExitReason::VirialStabilized,
-        C::UserDefined => ExitReason::UserStop,
     }
 }
 
@@ -1863,7 +1848,7 @@ fn error_state(msg: String) -> SimState {
         spatial_extent: 0.0,
         gravitational_constant: 0.0,
         dt: 0.0,
-        exit_reason: Some(ExitReason::UserStop),
+        exit_reason: Some(ExitReason::UserDefined),
         rank_per_node: None,
         rank_total: None,
         rank_memory_bytes: None,
@@ -1873,6 +1858,7 @@ fn error_state(msg: String) -> SimState {
         poisson_residual_l2: None,
         potential_power_spectrum: None,
         density_power_spectrum: None,
+        density_power_spectrum_std: None,
         field_energy_spectrum: None,
         phase_timings: None,
         truncation_errors: None,
@@ -1889,6 +1875,7 @@ fn error_state(msg: String) -> SimState {
         near_field_correction_l2: None,
         symplecticity_error: None,
         rank_growth_rate: None,
+        acceleration_xy: None,
         log_messages: vec![format!("ERROR: {msg}")],
     }
 }
@@ -2175,7 +2162,7 @@ mod drift_threshold_tests {
             match sim.step() {
                 Ok(None) => {} // step completed, sim continues
                 Ok(Some(reason)) => {
-                    let exit = map_exit_reason(reason);
+                    let exit = reason;
                     return Some((i + 1, Some(exit)));
                 }
                 Err(e) => {
@@ -2355,6 +2342,7 @@ mod unit_tests {
             poisson_residual_l2: None,
             potential_power_spectrum: None,
             density_power_spectrum: None,
+            density_power_spectrum_std: None,
             field_energy_spectrum: None,
             phase_timings: None,
             truncation_errors: None,
@@ -2371,6 +2359,7 @@ mod unit_tests {
             near_field_correction_l2: None,
             symplecticity_error: None,
             rank_growth_rate: None,
+            acceleration_xy: None,
             log_messages: vec![],
         }
     }
@@ -2427,9 +2416,9 @@ mod unit_tests {
             ExitReason::CasimirDrift,
             ExitReason::CflViolation,
             ExitReason::WallClockLimit,
-            ExitReason::UserStop,
-            ExitReason::CausticFormed,
-            ExitReason::VirialStabilized,
+            ExitReason::UserDefined,
+            ExitReason::FirstCausticFormed,
+            ExitReason::VirialRelaxed,
         ];
         for v in variants {
             let s = format!("{v}");

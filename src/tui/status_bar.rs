@@ -210,6 +210,7 @@ impl StatusBar {
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("  [?] Help", Style::default().fg(theme.dim())),
             sep.clone(),
             Span::styled(
                 self.config_name.clone(),
@@ -270,7 +271,7 @@ impl StatusBar {
         if let Some((idx, total)) = self.scrub_position {
             spans.push(sep.clone());
             spans.push(Span::styled(
-                format!(" SCRUB {}/{total}  [Backspace] live", idx + 1),
+                format!(" SCRUB {}/{total}", idx + 1),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
