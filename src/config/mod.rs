@@ -25,10 +25,7 @@ mod decimal_serde {
     }
 }
 
-/// Helper: create Decimal from f64 literal.
-fn dec(f: f64) -> Decimal {
-    Decimal::from_f64_retain(f).unwrap_or(Decimal::ZERO)
-}
+use caustic::dec;
 
 // ── Top-level ────────────────────────────────────────────────────────────────
 
