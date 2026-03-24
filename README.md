@@ -3,10 +3,11 @@
 **Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov–Poisson solver.**
 
 [![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
-[![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
-[![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Support on thanks.dev](https://img.shields.io/badge/Support-thanks.dev-green)](https://thanks.dev/u/gh/resonant-jovian)
+
+[![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
+[![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the interface and configuration format may change without notice. Until version 1.0.0 it should not be relied upon for production workloads.
