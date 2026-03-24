@@ -7,22 +7,9 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use crate::{
-    colormaps::Colormap,
-    themes::{Theme, ThemeColors},
-    tui::action::Action,
-};
+use ratatui_plt::prelude::Theme;
 
-const THEMES: &[Theme] = &[Theme::Dark, Theme::Light, Theme::Solarized, Theme::Gruvbox];
-const COLORMAPS: &[Colormap] = &[
-    Colormap::Viridis,
-    Colormap::Inferno,
-    Colormap::Plasma,
-    Colormap::Magma,
-    Colormap::Grayscale,
-    Colormap::Cubehelix,
-    Colormap::Coolwarm,
-];
+use crate::tui::{action::Action, plt_bridge::PhasmaThemeExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsSection {
@@ -66,18 +53,30 @@ impl Default for SettingsTab {
 }
 
 impl SettingsTab {
+    fn theme_names() -> &'static [&'static str] {
+        ratatui_plt::theme::theme_names()
+    }
+
+    fn colormap_names() -> &'static [&'static str] {
+        ratatui_plt::colormap::colormap_names()
+    }
+
     /// Sync local state from app-level values so the tab always shows the real current settings.
-    pub fn sync(&mut self, theme: Theme, colormap: Colormap) {
-        self.theme_idx = THEMES.iter().position(|t| *t == theme).unwrap_or(0);
-        self.colormap_idx = COLORMAPS.iter().position(|c| *c == colormap).unwrap_or(0);
+    pub fn sync(&mut self, theme_name: &str, colormap_name: &str) {
+        let themes = Self::theme_names();
+        self.theme_idx = themes.iter().position(|&n| n == theme_name).unwrap_or(0);
+        let cmaps = Self::colormap_names();
+        self.colormap_idx = cmaps.iter().position(|&n| n == colormap_name).unwrap_or(0);
     }
 
-    pub fn current_theme(&self) -> Theme {
-        THEMES[self.theme_idx]
+    pub fn current_theme_name(&self) -> String {
+        let themes = Self::theme_names();
+        themes[self.theme_idx].to_string()
     }
 
-    pub fn current_colormap(&self) -> Colormap {
-        COLORMAPS[self.colormap_idx]
+    pub fn current_colormap_name(&self) -> String {
+        let cmaps = Self::colormap_names();
+        cmaps[self.colormap_idx].to_string()
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
@@ -94,12 +93,13 @@ impl SettingsTab {
             KeyCode::Left | KeyCode::Char('h') => {
                 match section {
                     SettingsSection::Theme => {
-                        self.theme_idx = (self.theme_idx + THEMES.len() - 1) % THEMES.len();
+                        let len = Self::theme_names().len();
+                        self.theme_idx = (self.theme_idx + len - 1) % len;
                         Some(Action::ThemeCycle) // we'll handle direction in app
                     }
                     SettingsSection::Colormap => {
-                        self.colormap_idx =
-                            (self.colormap_idx + COLORMAPS.len() - 1) % COLORMAPS.len();
+                        let len = Self::colormap_names().len();
+                        self.colormap_idx = (self.colormap_idx + len - 1) % len;
                         Some(Action::VizCycleColormap)
                     }
                     SettingsSection::CellAspect => {
@@ -118,11 +118,11 @@ impl SettingsTab {
             }
             KeyCode::Right | KeyCode::Char('l') => match section {
                 SettingsSection::Theme => {
-                    self.theme_idx = (self.theme_idx + 1) % THEMES.len();
+                    self.theme_idx = (self.theme_idx + 1) % Self::theme_names().len();
                     Some(Action::ThemeCycle)
                 }
                 SettingsSection::Colormap => {
-                    self.colormap_idx = (self.colormap_idx + 1) % COLORMAPS.len();
+                    self.colormap_idx = (self.colormap_idx + 1) % Self::colormap_names().len();
                     Some(Action::VizCycleColormap)
                 }
                 SettingsSection::CellAspect => {
@@ -142,7 +142,7 @@ impl SettingsTab {
         }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let [settings_area, preview_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(area);
@@ -151,10 +151,10 @@ impl SettingsTab {
         self.draw_preview(frame, preview_area, theme);
     }
 
-    fn draw_settings_list(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_settings_list(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::bordered()
             .title(" Settings ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -162,7 +162,7 @@ impl SettingsTab {
 
         lines.push(Line::from(Span::styled(
             "Use ◄/► or h/l to change, ▲/▼ or j/k to navigate",
-            Style::default().fg(theme.dim),
+            Style::default().fg(theme.dim()),
         )));
         lines.push(Line::from(""));
 
@@ -174,27 +174,29 @@ impl SettingsTab {
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.fg)
+                Style::default().fg(theme.foreground)
             };
             let value_style = if focused {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.fg)
+                Style::default().fg(theme.foreground)
             };
 
             let (label, value) = match section {
                 SettingsSection::Theme => {
-                    let name = THEMES[self.theme_idx].name();
+                    let themes = Self::theme_names();
+                    let name = themes[self.theme_idx];
                     let idx = self.theme_idx + 1;
-                    let total = THEMES.len();
+                    let total = themes.len();
                     ("Theme", format!("◄ {name} ►  ({idx}/{total})"))
                 }
                 SettingsSection::Colormap => {
-                    let name = COLORMAPS[self.colormap_idx].name();
+                    let cmaps = Self::colormap_names();
+                    let name = cmaps[self.colormap_idx];
                     let idx = self.colormap_idx + 1;
-                    let total = COLORMAPS.len();
+                    let total = cmaps.len();
                     ("Colormap", format!("◄ {name} ►  ({idx}/{total})"))
                 }
                 SettingsSection::CellAspect => {
@@ -208,11 +210,7 @@ impl SettingsTab {
                 }
             };
 
-            let bg = if focused {
-                theme.highlight
-            } else {
-                Color::Reset
-            };
+            let bg = if focused { theme.surface } else { Color::Reset };
             lines.push(
                 Line::from(vec![
                     Span::styled(format!("{marker} "), label_style),
@@ -226,82 +224,88 @@ impl SettingsTab {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Settings are saved automatically on quit.",
-            Style::default().fg(theme.dim),
+            Style::default().fg(theme.dim()),
         )));
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
 
-    fn draw_preview(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_preview(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::bordered()
             .title(" Preview ")
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let cur_theme = THEMES[self.theme_idx];
-        let tc = cur_theme.colors();
-        let cur_cmap = COLORMAPS[self.colormap_idx];
+        let theme_names = Self::theme_names();
+        let cmap_names = Self::colormap_names();
+        let cur_theme_name = theme_names[self.theme_idx];
+        let tc = Theme::from_name(cur_theme_name).unwrap_or_default();
+        let cur_cmap_name = cmap_names[self.colormap_idx];
 
         let mut lines: Vec<Line> = Vec::new();
 
         // Theme preview
         lines.push(Line::from(Span::styled(
-            format!("Theme: {}", cur_theme.name()),
+            format!("Theme: {cur_theme_name}"),
             Style::default().fg(tc.accent).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
         lines.push(Line::from(vec![
-            Span::styled("  fg:        ", Style::default().fg(tc.dim)),
-            Span::styled("Sample text", Style::default().fg(tc.fg)),
+            Span::styled("  fg:        ", Style::default().fg(tc.dim())),
+            Span::styled("Sample text", Style::default().fg(tc.foreground)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  accent:    ", Style::default().fg(tc.dim)),
+            Span::styled("  accent:    ", Style::default().fg(tc.dim())),
             Span::styled("Accent text", Style::default().fg(tc.accent)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  border:    ", Style::default().fg(tc.dim)),
-            Span::styled("Border text", Style::default().fg(tc.border)),
+            Span::styled("  border:    ", Style::default().fg(tc.dim())),
+            Span::styled("Border text", Style::default().fg(tc.border_color())),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  dim:       ", Style::default().fg(tc.dim)),
-            Span::styled("Dim text", Style::default().fg(tc.dim)),
+            Span::styled("  dim:       ", Style::default().fg(tc.dim())),
+            Span::styled("Dim text", Style::default().fg(tc.dim())),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  ok:        ", Style::default().fg(tc.dim)),
-            Span::styled("✓ OK", Style::default().fg(tc.ok)),
+            Span::styled("  ok:        ", Style::default().fg(tc.dim())),
+            Span::styled("\u{2713} OK", Style::default().fg(tc.ok())),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  warn:      ", Style::default().fg(tc.dim)),
-            Span::styled("⚠ Warning", Style::default().fg(tc.warn)),
+            Span::styled("  warn:      ", Style::default().fg(tc.dim())),
+            Span::styled("\u{26a0} Warning", Style::default().fg(tc.warn())),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  error:     ", Style::default().fg(tc.dim)),
-            Span::styled("✗ Error", Style::default().fg(tc.error)),
+            Span::styled("  error:     ", Style::default().fg(tc.dim())),
+            Span::styled("\u{2717} Error", Style::default().fg(tc.error())),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  highlight: ", Style::default().fg(tc.dim)),
-            Span::styled(" Highlight ", Style::default().fg(tc.fg).bg(tc.highlight)),
+            Span::styled("  highlight: ", Style::default().fg(tc.dim())),
+            Span::styled(
+                " Highlight ",
+                Style::default().fg(tc.foreground).bg(tc.surface),
+            ),
         ]));
 
         lines.push(Line::from(""));
 
         // Colormap preview — render a gradient bar
         lines.push(Line::from(Span::styled(
-            format!("Colormap: {}", cur_cmap.name()),
+            format!("Colormap: {cur_cmap_name}"),
             Style::default().fg(tc.accent).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
         let bar_width = inner.width.saturating_sub(4) as usize;
         if bar_width > 0 {
+            let cmap_plt = ratatui_plt::colormap::get_colormap(cur_cmap_name)
+                .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis));
             let mut upper_spans: Vec<Span> = Vec::with_capacity(bar_width);
             for i in 0..bar_width {
                 let t = i as f64 / (bar_width - 1).max(1) as f64;
-                let cmap_plt = crate::tui::plt_bridge::phasma_cmap_to_plt(cur_cmap);
-                let color = ratatui_plt::colormap::Colormap::color_at(&cmap_plt, t);
-                upper_spans.push(Span::styled("█", Style::default().fg(color)));
+                let color = ratatui_plt::colormap::Colormap::color_at(&*cmap_plt, t);
+                upper_spans.push(Span::styled("\u{2588}", Style::default().fg(color)));
             }
             lines.push(Line::from(vec![Span::raw("  ")]).patch_style(Style::default()));
             // Build the gradient line manually
@@ -310,9 +314,9 @@ impl SettingsTab {
             lines.push(Line::from(gradient_spans));
 
             lines.push(Line::from(vec![
-                Span::styled("  0.0", Style::default().fg(tc.dim)),
+                Span::styled("  0.0", Style::default().fg(tc.dim())),
                 Span::styled(" ".repeat(bar_width.saturating_sub(7)), Style::default()),
-                Span::styled("1.0", Style::default().fg(tc.dim)),
+                Span::styled("1.0", Style::default().fg(tc.dim())),
             ]));
         }
 

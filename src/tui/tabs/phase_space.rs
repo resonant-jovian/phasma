@@ -14,13 +14,13 @@ use ratatui_plt::prelude::{
 };
 use ratatui_plt::widgets::hexbin::HexbinPlot;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    colormaps::Colormap,
     data::DataProvider,
-    themes::ThemeColors,
     tui::{
         action::Action,
-        plt_bridge::{NormMode, flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        plt_bridge::{NormMode, PhasmaThemeExt, flat_to_grid_data},
         widgets::data_cursor::DataCursor,
     },
 };
@@ -31,7 +31,6 @@ pub struct PhaseSpaceTab {
     /// Which velocity dimension for y-axis (0=v₁, 1=v₂, 2=v₃)
     dim_v: usize,
     norm_mode: NormMode,
-    colormap: Colormap,
     show_info: bool,
     zoom: f32,
     /// Slice position offsets for the 4 hidden dimensions (-1.0 to 1.0 each).
@@ -59,7 +58,6 @@ impl Default for PhaseSpaceTab {
             dim_x: 0,
             dim_v: 0,
             norm_mode: NormMode::default(),
-            colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
             slice_offsets: [0.0; 4],
@@ -195,7 +193,7 @@ impl PhaseSpaceTab {
     pub fn update(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::VizCycleColormap => {
-                self.colormap = self.colormap.next();
+                // Colormap cycling is now handled globally by ColormapState
             }
             Action::VizToggleLog => {
                 self.norm_mode = self.norm_mode.next();
@@ -209,12 +207,10 @@ impl PhaseSpaceTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
-        let effective_cmap = colormap;
-
         // Build fixed-dim slice specifications from the 4 hidden dimension offsets.
         // The 6 dimensions are [x1, x2, x3, v1, v2, v3]; the visible pair is
         // (dim_x, 3+dim_v). The remaining 4 are "hidden" and can be sliced.
@@ -244,7 +240,7 @@ impl PhaseSpaceTab {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         "No phase-space data yet — start a simulation on ",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         "[F2]",
@@ -337,7 +333,7 @@ impl PhaseSpaceTab {
         );
 
         let (vmin, vmax) = grid.value_bounds();
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         if self.hexbin_mode {
             // Convert grid to scatter points for HexbinPlot
@@ -360,7 +356,10 @@ impl PhaseSpaceTab {
             }
             let hexbin = HexbinPlot::new(points)
                 .gridsize(vnx.min(30).max(5))
-                .colormap(phasma_cmap_to_plt(effective_cmap))
+                .colormap(
+                    ratatui_plt::colormap::get_colormap(colormap_name)
+                        .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                )
                 .title(format!("{title} [hexbin]"))
                 .x_axis(PltAxis::new().bounds(Bounds::Manual(-x_extent, x_extent)))
                 .y_axis(PltAxis::new().bounds(Bounds::Manual(-v_extent, v_extent)))
@@ -368,7 +367,10 @@ impl PhaseSpaceTab {
             frame.render_widget(&hexbin, heatmap_area);
         } else {
             let mut hm = Heatmap::new(grid)
-                .colormap(phasma_cmap_to_plt(effective_cmap))
+                .colormap(
+                    ratatui_plt::colormap::get_colormap(colormap_name)
+                        .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                )
                 .title(title.clone())
                 .aspect_ratio(aspect)
                 .show_colorbar(true)
@@ -407,7 +409,7 @@ impl PhaseSpaceTab {
                     })
                     .collect();
 
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
 
                 // Build bin edges (n+1 edges for n bins)
                 let n_bins = self.last_ny;
@@ -423,7 +425,7 @@ impl PhaseSpaceTab {
                         "f(v)",
                         edges,
                         vel_marginal.clone(),
-                        theme.chart[0],
+                        theme.chart_color(0),
                     ))
                     .x_axis(PltAxis::new().label("v"))
                     .y_axis(PltAxis::new().label("f"))
@@ -470,11 +472,7 @@ impl PhaseSpaceTab {
                                 .map(|(&x, &y)| (x, y * scale))
                                 .collect();
 
-                            let kde_color = if theme.chart.len() > 2 {
-                                theme.chart[2]
-                            } else {
-                                theme.chart[theme.chart.len() - 1]
-                            };
+                            let kde_color = theme.chart_color(2);
                             let kde_series = Series::new("KDE").data(kde_data).color(kde_color);
 
                             let kde_plot = LinePlot::new()
@@ -517,7 +515,7 @@ impl PhaseSpaceTab {
                     })
                     .collect();
 
-                let plt_theme = phasma_theme_to_plt(theme);
+                let plt_theme = theme.clone();
                 let n_bins = self.last_nx;
                 let dx = if n_bins > 0 {
                     2.0 * x_extent / n_bins as f64
@@ -531,7 +529,7 @@ impl PhaseSpaceTab {
                         "ρ(x)",
                         edges,
                         spatial_marginal,
-                        theme.chart[1],
+                        theme.chart_color(1),
                     ))
                     .x_axis(
                         PltAxis::new()
@@ -560,7 +558,7 @@ impl PhaseSpaceTab {
                 dim_labels[self.dim_x], vel_labels[self.dim_v],
             );
             frame.render_widget(
-                Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+                Paragraph::new(hint).style(Style::default().fg(theme.dim())),
                 info_area,
             );
         }

@@ -4,13 +4,11 @@ use ratatui_plt::export::{
     ExportOptions, buffer_to_ansi, buffer_to_png, buffer_to_svg, buffer_to_text, render_to_buffer,
     save_svg,
 };
-use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Heatmap, LinePlot, Scale, Series};
+use ratatui_plt::prelude::{Axis as PltAxis, Bounds, Heatmap, LinePlot, Scale, Series, Theme};
 
-use crate::colormaps::Colormap;
 use crate::data::live::DiagnosticsStore;
 use crate::sim::SimState;
-use crate::themes::ThemeColors;
-use crate::tui::plt_bridge::{flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt};
+use crate::tui::plt_bridge::{PhasmaThemeExt, flat_to_grid_data};
 
 /// Default export dimensions (cells).
 pub const DEFAULT_EXPORT_WIDTH: u16 = 120;
@@ -43,7 +41,7 @@ impl ExportResolution {
 pub fn export_energy_svg(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
+    theme: &Theme,
     stem: &str,
 ) -> Result<String, String> {
     export_energy(dir, diagnostics, theme, stem, ExportResolution::default())
@@ -52,7 +50,7 @@ pub fn export_energy_svg(
 pub fn export_energy(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
+    theme: &Theme,
     stem: &str,
     resolution: ExportResolution,
 ) -> Result<String, String> {
@@ -64,11 +62,15 @@ pub fn export_energy(
         return Err("No energy data available".to_string());
     }
 
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
     let plot = LinePlot::new()
-        .series(Series::new("E_tot").data(energy).color(theme.chart[0]))
-        .series(Series::new("T").data(kinetic).color(theme.chart[1]))
-        .series(Series::new("W").data(potential).color(theme.chart[2]))
+        .series(
+            Series::new("E_tot")
+                .data(energy)
+                .color(theme.chart_color(0)),
+        )
+        .series(Series::new("T").data(kinetic).color(theme.chart_color(1)))
+        .series(Series::new("W").data(potential).color(theme.chart_color(2)))
         .x_axis(PltAxis::new().label("t"))
         .y_axis(PltAxis::new().label("Energy"))
         .title("Energy Evolution")
@@ -97,18 +99,25 @@ pub fn export_energy(
 pub fn export_density_svg(
     dir: &Path,
     state: &SimState,
-    theme: &ThemeColors,
-    cmap: Colormap,
+    theme: &Theme,
+    colormap_name: &str,
     stem: &str,
 ) -> Result<String, String> {
-    export_density(dir, state, theme, cmap, stem, ExportResolution::default())
+    export_density(
+        dir,
+        state,
+        theme,
+        colormap_name,
+        stem,
+        ExportResolution::default(),
+    )
 }
 
 pub fn export_density(
     dir: &Path,
     state: &SimState,
-    theme: &ThemeColors,
-    cmap: Colormap,
+    theme: &Theme,
+    colormap_name: &str,
     stem: &str,
     resolution: ExportResolution,
 ) -> Result<String, String> {
@@ -125,8 +134,9 @@ pub fn export_density(
         (-ext, ext),
     );
 
-    let plt_theme = phasma_theme_to_plt(theme);
-    let colormap = phasma_cmap_to_plt(cmap);
+    let plt_theme = theme.clone();
+    let colormap = ratatui_plt::colormap::get_colormap(colormap_name)
+        .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis));
     let heatmap = Heatmap::new(grid)
         .colormap(colormap)
         .title("Density projection (x-y)")
@@ -155,7 +165,7 @@ pub fn export_density(
 pub fn export_conservation_svg(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
+    theme: &Theme,
     stem: &str,
 ) -> Result<String, String> {
     export_conservation(dir, diagnostics, theme, stem, ExportResolution::default())
@@ -164,7 +174,7 @@ pub fn export_conservation_svg(
 pub fn export_conservation(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
+    theme: &Theme,
     stem: &str,
     resolution: ExportResolution,
 ) -> Result<String, String> {
@@ -176,11 +186,23 @@ pub fn export_conservation(
         return Err("No drift data available".to_string());
     }
 
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
     let plot = LinePlot::new()
-        .series(Series::new("dE/E").data(energy_drift).color(theme.chart[0]))
-        .series(Series::new("dM/M").data(mass_drift).color(theme.chart[1]))
-        .series(Series::new("dC2/C2").data(c2_drift).color(theme.chart[2]))
+        .series(
+            Series::new("dE/E")
+                .data(energy_drift)
+                .color(theme.chart_color(0)),
+        )
+        .series(
+            Series::new("dM/M")
+                .data(mass_drift)
+                .color(theme.chart_color(1)),
+        )
+        .series(
+            Series::new("dC2/C2")
+                .data(c2_drift)
+                .color(theme.chart_color(2)),
+        )
         .x_axis(PltAxis::new().label("t"))
         .y_axis(PltAxis::new().label("Relative drift"))
         .title("Conservation Diagnostics")
@@ -210,8 +232,8 @@ pub fn export_charts_batch(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
-    theme: &ThemeColors,
-    cmap: Colormap,
+    theme: &Theme,
+    colormap_name: &str,
     stem: &str,
 ) -> Result<Vec<String>, String> {
     export_charts_batch_with_resolution(
@@ -219,7 +241,7 @@ pub fn export_charts_batch(
         diagnostics,
         state,
         theme,
-        cmap,
+        colormap_name,
         stem,
         ExportResolution::default(),
     )
@@ -229,8 +251,8 @@ pub fn export_charts_batch_with_resolution(
     dir: &Path,
     diagnostics: &DiagnosticsStore,
     state: Option<&SimState>,
-    theme: &ThemeColors,
-    cmap: Colormap,
+    theme: &Theme,
+    colormap_name: &str,
     stem: &str,
     resolution: ExportResolution,
 ) -> Result<Vec<String>, String> {
@@ -248,7 +270,7 @@ pub fn export_charts_batch_with_resolution(
     }
 
     if let Some(s) = state {
-        if let Ok(path) = export_density(&charts_dir, s, theme, cmap, stem, resolution) {
+        if let Ok(path) = export_density(&charts_dir, s, theme, colormap_name, stem, resolution) {
             exported.push(path);
         }
     }
@@ -263,10 +285,7 @@ pub fn export_charts_batch_with_resolution(
 // ── ANSI / Text export ────────────────────────────────────────────────
 
 /// Export energy chart as ANSI-colored terminal text (for CI logs, HPC environments).
-pub fn export_energy_ansi(
-    diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
-) -> Result<String, String> {
+pub fn export_energy_ansi(diagnostics: &DiagnosticsStore, theme: &Theme) -> Result<String, String> {
     let energy = diagnostics.total_energy.iter_chart_data();
     if energy.is_empty() {
         return Err("No energy data".to_string());
@@ -274,11 +293,15 @@ pub fn export_energy_ansi(
     let kinetic = diagnostics.kinetic_energy.iter_chart_data();
     let potential = diagnostics.potential_energy.iter_chart_data();
 
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
     let plot = LinePlot::new()
-        .series(Series::new("E_tot").data(energy).color(theme.chart[0]))
-        .series(Series::new("T").data(kinetic).color(theme.chart[1]))
-        .series(Series::new("W").data(potential).color(theme.chart[2]))
+        .series(
+            Series::new("E_tot")
+                .data(energy)
+                .color(theme.chart_color(0)),
+        )
+        .series(Series::new("T").data(kinetic).color(theme.chart_color(1)))
+        .series(Series::new("W").data(potential).color(theme.chart_color(2)))
         .x_axis(PltAxis::new().label("t"))
         .y_axis(PltAxis::new().label("Energy"))
         .title("Energy Evolution")
@@ -292,7 +315,7 @@ pub fn export_energy_ansi(
 /// Export conservation chart as plain text (no colors).
 pub fn export_conservation_text(
     diagnostics: &DiagnosticsStore,
-    theme: &ThemeColors,
+    theme: &Theme,
 ) -> Result<String, String> {
     let energy_drift = diagnostics.energy_drift_series();
     if energy_drift.is_empty() {
@@ -301,11 +324,23 @@ pub fn export_conservation_text(
     let mass_drift = diagnostics.mass_drift_series();
     let c2_drift = diagnostics.c2_drift_series();
 
-    let plt_theme = phasma_theme_to_plt(theme);
+    let plt_theme = theme.clone();
     let plot = LinePlot::new()
-        .series(Series::new("dE/E").data(energy_drift).color(theme.chart[0]))
-        .series(Series::new("dM/M").data(mass_drift).color(theme.chart[1]))
-        .series(Series::new("dC2/C2").data(c2_drift).color(theme.chart[2]))
+        .series(
+            Series::new("dE/E")
+                .data(energy_drift)
+                .color(theme.chart_color(0)),
+        )
+        .series(
+            Series::new("dM/M")
+                .data(mass_drift)
+                .color(theme.chart_color(1)),
+        )
+        .series(
+            Series::new("dC2/C2")
+                .data(c2_drift)
+                .color(theme.chart_color(2)),
+        )
         .x_axis(PltAxis::new().label("t"))
         .y_axis(PltAxis::new().label("Relative drift"))
         .title("Conservation Diagnostics")

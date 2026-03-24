@@ -22,11 +22,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use std::sync::Arc;
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    colormaps::Colormap,
     data::DataProvider,
-    themes::{Theme, ThemeColors},
-    tui::{action::Action, config::Config, layout::LayoutMode},
+    tui::{action::Action, config::Config, layout::LayoutMode, plt_bridge::PhasmaThemeExt},
 };
 
 use density::DensityTab;
@@ -118,18 +118,18 @@ impl TabView {
     }
 
     /// Sync settings tab state from app-level theme/colormap.
-    pub fn sync_settings(&mut self, theme: Theme, colormap: Colormap) {
-        self.settings.sync(theme, colormap);
+    pub fn sync_settings(&mut self, theme_name: &str, colormap_name: &str) {
+        self.settings.sync(theme_name, colormap_name);
     }
 
-    /// Read the theme chosen in the settings tab.
-    pub fn settings_theme(&self) -> Theme {
-        self.settings.current_theme()
+    /// Read the theme name chosen in the settings tab.
+    pub fn settings_theme_name(&self) -> String {
+        self.settings.current_theme_name()
     }
 
-    /// Read the colormap chosen in the settings tab.
-    pub fn settings_colormap(&self) -> Colormap {
-        self.settings.current_colormap()
+    /// Read the colormap name chosen in the settings tab.
+    pub fn settings_colormap_name(&self) -> String {
+        self.settings.current_colormap_name()
     }
 
     /// Toggle the preset popup on the Setup tab (§2.2).
@@ -252,8 +252,8 @@ impl TabView {
         &mut self,
         frame: &mut Frame,
         areas: TabAreas,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
         // Tab bar — manual rendering for per-tab dimming
@@ -275,7 +275,7 @@ impl TabView {
             if i > 0 {
                 tab_spans.push(Span::styled(
                     if compact { "|" } else { " | " },
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 ));
             }
             let label = if compact {
@@ -289,13 +289,13 @@ impl TabView {
 
             let style = if is_selected {
                 Style::default()
-                    .fg(theme.fg)
-                    .bg(theme.highlight)
+                    .fg(theme.foreground)
+                    .bg(theme.surface)
                     .add_modifier(Modifier::BOLD)
             } else if is_dimmed {
-                Style::default().fg(theme.dim).add_modifier(Modifier::DIM)
+                Style::default().fg(theme.dim()).add_modifier(Modifier::DIM)
             } else {
-                Style::default().fg(theme.dim)
+                Style::default().fg(theme.dim())
             };
             tab_spans.push(Span::styled(label, style));
         }
@@ -319,7 +319,7 @@ impl TabView {
         };
         let content_block = Block::bordered()
             .title(tab_title)
-            .border_style(Style::default().fg(theme.border));
+            .border_style(Style::default().fg(theme.border_color()));
         let inner = content_block.inner(areas.content);
         frame.render_widget(content_block, areas.content);
 
@@ -336,7 +336,7 @@ impl TabView {
             frame.render_widget(
                 ratatui::widgets::Paragraph::new(Line::from(vec![Span::styled(
                     format!("  {msg}"),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )])),
                 inner,
             );
@@ -345,14 +345,15 @@ impl TabView {
                 Tab::Setup => self.setup.draw(frame, inner, theme),
                 Tab::RunControl => {
                     self.run_control
-                        .draw(frame, inner, theme, colormap, data_provider)
+                        .draw(frame, inner, theme, colormap_name, data_provider)
                 }
-                Tab::Density => self
-                    .density
-                    .draw(frame, inner, theme, colormap, data_provider),
+                Tab::Density => {
+                    self.density
+                        .draw(frame, inner, theme, colormap_name, data_provider)
+                }
                 Tab::PhaseSpace => {
                     self.phase_space
-                        .draw(frame, inner, theme, colormap, data_provider)
+                        .draw(frame, inner, theme, colormap_name, data_provider)
                 }
                 Tab::Energy => self.energy.draw(frame, inner, theme, data_provider),
                 Tab::Rank => self.rank.draw(frame, inner, theme, data_provider),
@@ -367,7 +368,7 @@ impl TabView {
         let hint = help_line(self.selected);
         let lines = wrap_hint_line(hint, areas.footer.width as usize);
         frame.render_widget(
-            ratatui::widgets::Paragraph::new(lines).style(Style::default().fg(theme.dim)),
+            ratatui::widgets::Paragraph::new(lines).style(Style::default().fg(theme.dim())),
             areas.footer,
         );
     }

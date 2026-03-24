@@ -5,7 +5,8 @@ use ratatui::{
     widgets::{Block, Cell, Row, Table},
 };
 
-use crate::themes::ThemeColors;
+use crate::tui::plt_bridge::PhasmaThemeExt;
+use ratatui_plt::prelude::Theme;
 
 #[derive(Debug, Clone)]
 pub struct SparklineRow {
@@ -40,14 +41,14 @@ impl SparklineRow {
         self
     }
 
-    fn status_symbol(&self, theme: &ThemeColors) -> (&'static str, ratatui::style::Color) {
+    fn status_symbol(&self, theme: &Theme) -> (&'static str, ratatui::style::Color) {
         let d = self.drift.abs();
         if d >= self.error_threshold {
-            ("✗", theme.error)
+            ("✗", theme.error())
         } else if d >= self.warn_threshold {
-            ("⚠", theme.warn)
+            ("⚠", theme.warn())
         } else {
-            ("✓", theme.ok)
+            ("✓", theme.ok())
         }
     }
 }
@@ -62,7 +63,7 @@ impl<'a> SparklineTable<'a> {
         Self { rows, title }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let header = Row::new(vec!["Quantity", "Value", "Drift", ""]).style(
             Style::default()
                 .add_modifier(Modifier::BOLD)
@@ -90,7 +91,7 @@ impl<'a> SparklineTable<'a> {
                 };
 
                 Row::new(vec![
-                    Cell::from(r.label.clone()).style(Style::default().fg(theme.fg)),
+                    Cell::from(r.label.clone()).style(Style::default().fg(theme.foreground)),
                     Cell::from(format!(
                         "{value_str}{}",
                         if r.unit.is_empty() {
@@ -99,7 +100,7 @@ impl<'a> SparklineTable<'a> {
                             format!(" {}", r.unit)
                         }
                     ))
-                    .style(Style::default().fg(theme.dim)),
+                    .style(Style::default().fg(theme.dim())),
                     Cell::from(drift_str).style(Style::default().fg(drift_color)),
                     Cell::from(sym)
                         .style(Style::default().fg(sym_color).add_modifier(Modifier::BOLD)),

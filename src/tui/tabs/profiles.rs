@@ -13,10 +13,9 @@ use ratatui_plt::prelude::{
     Scale, Series,
 };
 
-use crate::{
-    data::DataProvider, themes::ThemeColors, tui::action::Action,
-    tui::plt_bridge::phasma_theme_to_plt,
-};
+use ratatui_plt::prelude::Theme;
+
+use crate::{data::DataProvider, tui::action::Action, tui::plt_bridge::PhasmaThemeExt};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ProfileKind {
@@ -198,7 +197,7 @@ impl ProfilesTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
@@ -207,7 +206,7 @@ impl ProfilesTab {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         "No profile data yet — start a simulation on ",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         "[F2]",
@@ -325,7 +324,7 @@ impl ProfilesTab {
         ));
         let hint = hint_parts.join("  ");
         frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(theme.dim)),
+            Paragraph::new(hint).style(Style::default().fg(theme.dim())),
             info_area,
         );
     }
@@ -334,7 +333,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         // 4 profile panels + Lagrangian radii stub, sharing the r axis
@@ -378,7 +377,7 @@ impl ProfilesTab {
                 kind,
                 title,
                 profile_data,
-                theme.chart[color_idx],
+                theme.chart_color(color_idx),
             );
         }
 
@@ -390,7 +389,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
     ) {
         let (kind, title, color, profile_data): (ProfileKind, &str, _, &[(f64, f64)]) =
@@ -398,31 +397,31 @@ impl ProfilesTab {
                 ProfileKind::Density => (
                     ProfileKind::Density,
                     " ρ(r) ",
-                    theme.chart[0],
+                    theme.chart_color(0),
                     &self.cached_profiles.density,
                 ),
                 ProfileKind::Mass => (
                     ProfileKind::Mass,
                     " M(<r) ",
-                    theme.chart[1],
+                    theme.chart_color(1),
                     &self.cached_profiles.mass,
                 ),
                 ProfileKind::Potential => (
                     ProfileKind::Potential,
                     " Φ(r) ",
-                    theme.chart[2],
+                    theme.chart_color(2),
                     &self.cached_profiles.potential,
                 ),
                 ProfileKind::Velocity => (
                     ProfileKind::Velocity,
                     " σ(r) ",
-                    theme.chart[4],
+                    theme.chart_color(4),
                     &self.cached_profiles.sigma,
                 ),
                 ProfileKind::Anisotropy => (
                     ProfileKind::Anisotropy,
                     " β(r) ",
-                    theme.chart[3],
+                    theme.chart_color(3),
                     &self.cached_profiles.density,
                 ),
             };
@@ -457,7 +456,7 @@ impl ProfilesTab {
         &self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
+        theme: &Theme,
         data_provider: &dyn DataProvider,
         kind: ProfileKind,
         title: &str,
@@ -499,7 +498,7 @@ impl ProfilesTab {
             frame.render_widget(
                 Block::bordered()
                     .title(full_title.as_str())
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border_color())),
                 area,
             );
             return;
@@ -516,7 +515,7 @@ impl ProfilesTab {
                 (area, None)
             };
 
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         let mut series_vec = vec![Series::new("sim").data(chart_data.clone()).color(color)];
 
@@ -524,7 +523,7 @@ impl ProfilesTab {
             series_vec.push(
                 Series::new("analytic")
                     .data(analytic_data.clone())
-                    .color(theme.chart[5 % theme.chart.len()])
+                    .color(theme.chart_color(5))
                     .line_style(LineStyle::dashed()),
             );
         }
@@ -534,7 +533,7 @@ impl ProfilesTab {
             let x_vals: Vec<f64> = chart_data.iter().map(|(x, _)| *x).collect();
             let y_vals: Vec<f64> = chart_data.iter().map(|(_, y)| *y).collect();
             if let Some(result) = ratatui_plt::statistics::lowess(&x_vals, &y_vals, 0.3) {
-                series_vec.push(result.to_series("LOWESS", theme.chart[6 % theme.chart.len()]));
+                series_vec.push(result.to_series("LOWESS", theme.chart_color(6)));
             }
         }
 
@@ -567,7 +566,7 @@ impl ProfilesTab {
                 .map(|(_, mean, std)| (mean - std).max(0.0))
                 .collect();
             let y_upper: Vec<f64> = scatter.iter().map(|(_, mean, std)| mean + std).collect();
-            let band_color = theme.chart[6 % theme.chart.len()];
+            let band_color = theme.chart_color(6);
             let band = Band::new("±σ", x, y_lower, y_upper).color(band_color);
             let band_plot = BandPlot::new()
                 .band(band)
@@ -618,12 +617,12 @@ impl ProfilesTab {
                     .series(
                         Series::new("residual")
                             .data(residual)
-                            .color(theme.chart[3 % theme.chart.len()]),
+                            .color(theme.chart_color(3)),
                     )
                     .x_axis(res_x)
                     .y_axis(PltAxis::new())
                     .title(" Residual ")
-                    .reference_line(ReferenceLine::hline(0.0, theme.dim))
+                    .reference_line(ReferenceLine::hline(0.0, theme.dim()))
                     .theme(plt_theme);
 
                 frame.render_widget(&res_plot, res_area);
@@ -631,19 +630,19 @@ impl ProfilesTab {
         }
     }
 
-    fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    fn draw_lagrangian_panel(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Check if we have any data
         let has_data = self.lagrangian_history[0].len() >= 2;
         if !has_data {
             let block = Block::bordered()
                 .title(" Lagrangian Radii ")
-                .border_style(Style::default().fg(theme.border));
+                .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "  Lagrangian radii appear once simulation runs",
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 )),
                 inner,
             );
@@ -651,7 +650,7 @@ impl ProfilesTab {
         }
 
         const LABELS: [&str; 5] = ["L10", "L25", "L50", "L75", "L90"];
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         let series_vec: Vec<Series> = self
             .cached_lagrangian
@@ -660,7 +659,7 @@ impl ProfilesTab {
             .map(|(i, data)| {
                 Series::new(LABELS[i])
                     .data(data.clone())
-                    .color(theme.chart[i % theme.chart.len()])
+                    .color(theme.chart_color(i))
             })
             .collect();
 

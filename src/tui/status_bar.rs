@@ -9,7 +9,8 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::sim::SimState;
-use crate::themes::ThemeColors;
+use crate::tui::plt_bridge::PhasmaThemeExt;
+use ratatui_plt::prelude::Theme;
 
 pub struct StatusBar {
     config_name: String,
@@ -184,23 +185,23 @@ impl StatusBar {
         self.sim_running && !self.sim_paused && !self.sim_done
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let state_icon = if !self.sim_running && !self.sim_done {
-            Span::styled(" ⏹ Idle", Style::default().fg(theme.dim))
+            Span::styled(" ⏹ Idle", Style::default().fg(theme.dim()))
         } else if self.sim_paused {
-            Span::styled(" ⏸ Paused", Style::default().fg(theme.warn))
+            Span::styled(" ⏸ Paused", Style::default().fg(theme.warn()))
         } else if self.sim_done {
-            Span::styled(" ■ Done", Style::default().fg(theme.ok))
+            Span::styled(" ■ Done", Style::default().fg(theme.ok()))
         } else {
             Span::styled(
                 " ▶ Running",
-                Style::default().fg(theme.ok).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.ok()).add_modifier(Modifier::BOLD),
             )
         };
 
         let version = env!("CARGO_PKG_VERSION");
 
-        let sep = Span::styled(" │ ", Style::default().fg(theme.dim));
+        let sep = Span::styled(" │ ", Style::default().fg(theme.dim()));
 
         let mut spans = vec![
             Span::styled(
@@ -210,7 +211,10 @@ impl StatusBar {
                     .add_modifier(Modifier::BOLD),
             ),
             sep.clone(),
-            Span::styled(self.config_name.clone(), Style::default().fg(theme.fg)),
+            Span::styled(
+                self.config_name.clone(),
+                Style::default().fg(theme.foreground),
+            ),
             sep.clone(),
             state_icon,
         ];
@@ -227,7 +231,7 @@ impl StatusBar {
                 spans.push(sep.clone());
                 spans.push(Span::styled(
                     format!(" {hz:.1} steps/s"),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 ));
             }
 
@@ -235,7 +239,7 @@ impl StatusBar {
                 spans.push(sep.clone());
                 spans.push(Span::styled(
                     format!(" ρ_max={:.2e}", self.max_density),
-                    Style::default().fg(theme.dim),
+                    Style::default().fg(theme.dim()),
                 ));
             }
 
@@ -252,7 +256,11 @@ impl StatusBar {
         // HT rank display (spec §2.1: "current rank (HT only)")
         if let Some((avg, max_r, _budget)) = self.rank_info {
             spans.push(sep.clone());
-            let rank_color = if max_r > 80 { theme.warn } else { theme.dim };
+            let rank_color = if max_r > 80 {
+                theme.warn()
+            } else {
+                theme.dim()
+            };
             spans.push(Span::styled(
                 format!(" Rank {avg:.0}/{max_r}"),
                 Style::default().fg(rank_color),
@@ -271,13 +279,13 @@ impl StatusBar {
 
         if self.rss_mb > 0.0 {
             let rss_color = if self.rss_mb > 8192.0 {
-                theme.error
+                theme.error()
             } else if self.rss_mb > 4096.0 {
-                theme.warn
+                theme.warn()
             } else {
-                theme.dim
+                theme.dim()
             };
-            spans.push(Span::styled(" │ ", Style::default().fg(theme.dim)));
+            spans.push(Span::styled(" │ ", Style::default().fg(theme.dim())));
             if self.rss_mb >= 1024.0 {
                 spans.push(Span::styled(
                     format!(" RSS {:.1} GB", self.rss_mb / 1024.0),
@@ -291,7 +299,7 @@ impl StatusBar {
             }
         }
 
-        let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.highlight));
+        let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.surface));
         frame.render_widget(bar, area);
     }
 }

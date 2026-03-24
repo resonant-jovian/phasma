@@ -6,7 +6,8 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph},
 };
 
-use crate::themes::ThemeColors;
+use crate::tui::plt_bridge::PhasmaThemeExt;
+use ratatui_plt::prelude::Theme;
 
 #[derive(Default)]
 pub struct HelpOverlay {
@@ -27,7 +28,7 @@ impl HelpOverlay {
         self.scroll = self.scroll.saturating_sub(1);
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &ThemeColors) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -49,7 +50,7 @@ impl HelpOverlay {
                     .add_modifier(Modifier::BOLD),
             )
         };
-        let desc = |s: &'static str| Span::styled(s, Style::default().fg(theme.fg));
+        let desc = |s: &'static str| Span::styled(s, Style::default().fg(theme.foreground));
 
         let section = |s: &'static str| {
             Line::from(vec![Span::styled(
@@ -224,14 +225,14 @@ impl HelpOverlay {
             Line::from(""),
             Line::from(vec![Span::styled(
                 " ? or Esc to close  \u{25b2}/\u{25bc} to scroll",
-                Style::default().fg(theme.dim),
+                Style::default().fg(theme.dim()),
             )]),
         ];
 
         let block = Block::bordered()
             .title(" Help ")
             .border_style(Style::default().fg(theme.accent))
-            .style(Style::default().bg(theme.bg));
+            .style(Style::default().bg(theme.background));
         let inner = block.inner(overlay);
         frame.render_widget(block, overlay);
         frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), inner);

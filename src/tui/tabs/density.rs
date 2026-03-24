@@ -12,14 +12,14 @@ use ratatui_plt::prelude::{
     AspectRatio, Axis as PltAxis, Bounds, ContourPlot, GridData, Heatmap, LinePlot, Series,
 };
 
+use ratatui_plt::prelude::Theme;
+
 use crate::{
-    colormaps::Colormap,
     data::DataProvider,
-    themes::ThemeColors,
     tui::widgets::data_cursor::DataCursor,
     tui::{
         action::Action,
-        plt_bridge::{NormMode, flat_to_grid_data, phasma_cmap_to_plt, phasma_theme_to_plt},
+        plt_bridge::{NormMode, PhasmaThemeExt, flat_to_grid_data},
     },
 };
 
@@ -53,7 +53,6 @@ pub struct DensityTab {
     axis: usize, // 0=yz, 1=xz, 2=xy (default)
     norm_mode: NormMode,
     show_marginals: bool,
-    colormap: Colormap,
     show_info: bool,
     zoom: f32,
     contour_mode: ContourMode,
@@ -71,7 +70,6 @@ impl Default for DensityTab {
             axis: 2,
             norm_mode: NormMode::default(),
             show_marginals: false,
-            colormap: Colormap::Viridis,
             show_info: true,
             zoom: 1.0,
             contour_mode: ContourMode::default(),
@@ -183,7 +181,7 @@ impl DensityTab {
     pub fn update(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::VizCycleColormap => {
-                self.colormap = self.colormap.next();
+                // Colormap cycling is now handled globally by ColormapState
             }
             Action::VizToggleLog => {
                 self.norm_mode = self.norm_mode.next();
@@ -197,18 +195,16 @@ impl DensityTab {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        theme: &ThemeColors,
-        colormap: Colormap,
+        theme: &Theme,
+        colormap_name: &str,
         data_provider: &dyn DataProvider,
     ) {
-        let effective_cmap = colormap;
-
         let Some((data, nx, ny)) = data_provider.density_projection(self.axis) else {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         "No density data yet — start a simulation on ",
-                        Style::default().fg(theme.dim),
+                        Style::default().fg(theme.dim()),
                     ),
                     Span::styled(
                         "[F2]",
@@ -262,12 +258,15 @@ impl DensityTab {
         let grid = flat_to_grid_data(&view_data, vnx, vny, (-extent, extent), (-extent, extent));
 
         let (vmin, vmax) = grid.value_bounds();
-        let plt_theme = phasma_theme_to_plt(theme);
+        let plt_theme = theme.clone();
 
         match self.contour_mode {
             ContourMode::HeatmapOnly | ContourMode::HeatmapContour => {
                 let mut hm = Heatmap::new(grid.clone())
-                    .colormap(phasma_cmap_to_plt(effective_cmap))
+                    .colormap(
+                        ratatui_plt::colormap::get_colormap(colormap_name)
+                            .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                    )
                     .title(full_title.clone())
                     .aspect_ratio(AspectRatio::Equal)
                     .show_colorbar(true)
@@ -282,7 +281,7 @@ impl DensityTab {
                     let contour = ContourPlot::new(grid)
                         .levels(10)
                         .aspect_ratio(AspectRatio::Equal)
-                        .theme(phasma_theme_to_plt(theme));
+                        .theme(theme.clone());
                     frame.render_widget(&contour, heatmap_area);
                 }
             }
@@ -290,7 +289,10 @@ impl DensityTab {
                 let contour = ContourPlot::new(grid)
                     .levels(10)
                     .filled(true)
-                    .colormap(phasma_cmap_to_plt(effective_cmap))
+                    .colormap(
+                        ratatui_plt::colormap::get_colormap(colormap_name)
+                            .unwrap_or_else(|| Box::new(ratatui_plt::colormap::Viridis)),
+                    )
                     .title(full_title.clone())
                     .aspect_ratio(AspectRatio::Equal)
                     .theme(plt_theme);
@@ -312,9 +314,13 @@ impl DensityTab {
                     (x, sum)
                 })
                 .collect();
-            let plt_theme = phasma_theme_to_plt(theme);
+            let plt_theme = theme.clone();
             let plot = LinePlot::new()
-                .series(Series::new("ρ(x)").data(col_sums).color(theme.chart[0]))
+                .series(
+                    Series::new("ρ(x)")
+                        .data(col_sums)
+                        .color(theme.chart_color(0)),
+                )
                 .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
                 .y_axis(PltAxis::new())
                 .theme(plt_theme);
@@ -331,9 +337,13 @@ impl DensityTab {
                     (y, sum)
                 })
                 .collect();
-            let plt_theme = phasma_theme_to_plt(theme);
+            let plt_theme = theme.clone();
             let plot = LinePlot::new()
-                .series(Series::new("ρ(y)").data(row_sums).color(theme.chart[1]))
+                .series(
+                    Series::new("ρ(y)")
+                        .data(row_sums)
+                        .color(theme.chart_color(1)),
+                )
                 .x_axis(PltAxis::new().bounds(Bounds::Manual(-extent, extent)))
                 .y_axis(PltAxis::new())
                 .theme(plt_theme);
@@ -361,7 +371,7 @@ impl DensityTab {
                 "[1/2/3] axis  [l] norm  [Shift+c] cmap  [+/-/scroll] zoom  [r/0] reset  [n] contour  [i] hide{scrub_hint}"
             );
             frame.render_widget(
-                Paragraph::new(axis_hint).style(Style::default().fg(theme.dim)),
+                Paragraph::new(axis_hint).style(Style::default().fg(theme.dim())),
                 info_area,
             );
         }
