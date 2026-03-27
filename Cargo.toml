@@ -1,6 +1,6 @@
 [package]
 name = "phasma"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2024"
 description = "Terminal interface for the caustic Vlasov-Poisson solver"
 authors = ["Albin <albin@sjoegren.se>"]
@@ -20,7 +20,7 @@ include = [
 ]
 
 [dependencies]
-caustic = { version = "0.0.12", features = ["hdf5"] }
+caustic = { path = "../caustic", features = ["hdf5"] }
 hdf5-metno = "0.12.4"
 toml = "1.0.7"
 clap = { version = "4.6.0", features = [
@@ -57,8 +57,8 @@ ndarray = "0.17.2"
 ndarray-npy = "0.10.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 notify-rust = { version = "4.12.0", optional = true }
-arrow = "58.0.0"
-parquet = "58.0.0"
+arrow = "58.1.0"
+parquet = "58.1.0"
 rustfft = "6.4.1"
 ratatui-plt = { version = "0.0.2", features = [
     "fft", "async", "unicode-extended", "statistics", "export", "toml-themes",
