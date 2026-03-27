@@ -191,6 +191,33 @@ pub struct SimState {
     /// z-projected acceleration vectors (x, y, gx_avg, gy_avg), sub-sampled.
     #[serde(default)]
     pub acceleration_xy: Option<Vec<(f64, f64, f64, f64)>>,
+    // ── SimEvent-derived observability ──
+    /// Per-exit-condition distance-to-threshold (fraction 0.0–1.0).
+    #[serde(default)]
+    pub exit_condition_status: Vec<ExitConditionProgress>,
+    /// Poisson solver wall time in microseconds this step.
+    #[serde(default)]
+    pub poisson_wall_us: Option<u64>,
+    /// Multigrid convergence info (if applicable).
+    #[serde(default)]
+    pub multigrid_iterations: Option<u32>,
+    #[serde(default)]
+    pub multigrid_convergence_rate: Option<f64>,
+    /// Structured warnings from this step.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// Integrator kind name from events.
+    #[serde(default)]
+    pub integrator_type: String,
+}
+
+/// Exit condition progress for TUI display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExitConditionProgress {
+    pub name: String,
+    pub fraction: f64,
+    pub current: f64,
+    pub threshold: f64,
 }
 
 impl SimState {
@@ -323,6 +350,11 @@ fn run_caustic_sim(
             return;
         }
     };
+
+    // Create event channel and wire it to the simulation
+    let (emitter, event_rx) = caustic::EventEmitter::channel(4096);
+    sim.emitter = emitter;
+
     sim.set_progress(progress);
 
     if verbose {
@@ -377,6 +409,55 @@ fn run_caustic_sim(
         match sim.step() {
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+
+                // Drain SimEvents and fold into state
+                let events = event_rx.drain();
+                let mut exit_condition_status = Vec::new();
+                let mut poisson_wall_us = None;
+                let mut multigrid_iterations = None;
+                let mut multigrid_convergence_rate = None;
+                let mut warnings = Vec::new();
+                let mut integrator_type = String::new();
+
+                for event in &events {
+                    match event {
+                        caustic::SimEvent::ExitConditionStatus {
+                            condition,
+                            current_value,
+                            threshold,
+                            fraction_to_threshold,
+                        } => {
+                            let name = format!("{condition:?}");
+                            exit_condition_status.push(ExitConditionProgress {
+                                name,
+                                fraction: *fraction_to_threshold,
+                                current: *current_value,
+                                threshold: *threshold,
+                            });
+                        }
+                        caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
+                            poisson_wall_us = Some(*wall_us);
+                        }
+                        caustic::SimEvent::MultigridConverged {
+                            iterations,
+                            convergence_rate,
+                            ..
+                        } => {
+                            multigrid_iterations = Some(*iterations);
+                            multigrid_convergence_rate = Some(*convergence_rate);
+                        }
+                        caustic::SimEvent::Warning(w) => {
+                            warnings.push(format!("{w:?}"));
+                        }
+                        caustic::SimEvent::SimStarted {
+                            integrator_kind, ..
+                        } => {
+                            integrator_type = format!("{integrator_kind:?}");
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Skip expensive Poisson diagnostics on first frame for fast visual feedback
                 let compute_poisson_diag =
                     !first_state && diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
@@ -394,6 +475,14 @@ fn run_caustic_sim(
                     compute_poisson_diag,
                     compute_phase,
                 );
+                state.exit_condition_status = exit_condition_status;
+                state.poisson_wall_us = poisson_wall_us;
+                state.multigrid_iterations = multigrid_iterations;
+                state.multigrid_convergence_rate = multigrid_convergence_rate;
+                state.warnings = warnings;
+                if !integrator_type.is_empty() {
+                    state.integrator_type = integrator_type;
+                }
                 // Cache or reuse phase-space projections
                 if compute_phase && state.phase_nx > 0 {
                     cached_phase_slices = Arc::clone(&state.phase_slices);
@@ -424,6 +513,55 @@ fn run_caustic_sim(
             }
             Ok(Some(reason)) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+
+                // Drain SimEvents and fold into state
+                let events = event_rx.drain();
+                let mut exit_condition_status = Vec::new();
+                let mut poisson_wall_us = None;
+                let mut multigrid_iterations = None;
+                let mut multigrid_convergence_rate = None;
+                let mut warnings = Vec::new();
+                let mut integrator_type = String::new();
+
+                for event in &events {
+                    match event {
+                        caustic::SimEvent::ExitConditionStatus {
+                            condition,
+                            current_value,
+                            threshold,
+                            fraction_to_threshold,
+                        } => {
+                            let name = format!("{condition:?}");
+                            exit_condition_status.push(ExitConditionProgress {
+                                name,
+                                fraction: *fraction_to_threshold,
+                                current: *current_value,
+                                threshold: *threshold,
+                            });
+                        }
+                        caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
+                            poisson_wall_us = Some(*wall_us);
+                        }
+                        caustic::SimEvent::MultigridConverged {
+                            iterations,
+                            convergence_rate,
+                            ..
+                        } => {
+                            multigrid_iterations = Some(*iterations);
+                            multigrid_convergence_rate = Some(*convergence_rate);
+                        }
+                        caustic::SimEvent::Warning(w) => {
+                            warnings.push(format!("{w:?}"));
+                        }
+                        caustic::SimEvent::SimStarted {
+                            integrator_kind, ..
+                        } => {
+                            integrator_type = format!("{integrator_kind:?}");
+                        }
+                        _ => {}
+                    }
+                }
+
                 let exit = reason;
                 let mut state = extract_sim_state(
                     &sim,
@@ -437,6 +575,14 @@ fn run_caustic_sim(
                     true, // always compute diagnostics on exit
                     true, // always compute phase slices on exit
                 );
+                state.exit_condition_status = exit_condition_status;
+                state.poisson_wall_us = poisson_wall_us;
+                state.multigrid_iterations = multigrid_iterations;
+                state.multigrid_convergence_rate = multigrid_convergence_rate;
+                state.warnings = warnings;
+                if !integrator_type.is_empty() {
+                    state.integrator_type = integrator_type;
+                }
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
                 }
@@ -908,55 +1054,40 @@ fn build_from_config(
         logs.push(format!("Building integrator: {}", cfg.solver.integrator));
     }
     let integrator: Box<dyn caustic::TimeIntegrator> = match cfg.solver.integrator.as_str() {
-        "strang" | "strang_splitting" => Box::new(StrangSplitting::new(g)),
-        "yoshida" | "yoshida_splitting" => Box::new(YoshidaSplitting::new(g)),
-        "lie" => Box::new(LieSplitting::new(g)),
-        "unsplit" | "unsplit_rk4" => {
-            Box::new(caustic::UnsplitIntegrator::new(4, g, domain.clone()))
-        }
-        "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, g, domain.clone())),
-        "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, g, domain.clone())),
-        "rkei" => Box::new(caustic::RkeiIntegrator::new(g)),
-        "bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: false,
-                conservative: false,
-                ..Default::default()
-            },
-        )),
-        "midpoint_bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: true,
-                conservative: false,
-                ..Default::default()
-            },
-        )),
-        "conservative_bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: false,
-                conservative: true,
-                ..Default::default()
-            },
-        )),
-        "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new(g)),
-        "rkn6" => Box::new(caustic::Rkn6Splitting::new(g)),
-        "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(g, 1e-6)),
+        "strang" | "strang_splitting" => Box::new(StrangSplitting::new()),
+        "yoshida" | "yoshida_splitting" => Box::new(YoshidaSplitting::new()),
+        "lie" => Box::new(LieSplitting::new()),
+        "unsplit" | "unsplit_rk4" => Box::new(caustic::UnsplitIntegrator::new(4, domain.clone())),
+        "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, domain.clone())),
+        "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, domain.clone())),
+        "rkei" => Box::new(caustic::RkeiIntegrator::new()),
+        "bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: false,
+            conservative: false,
+            ..Default::default()
+        })),
+        "midpoint_bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: true,
+            conservative: false,
+            ..Default::default()
+        })),
+        "conservative_bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: false,
+            conservative: true,
+            ..Default::default()
+        })),
+        "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new()),
+        "rkn6" => Box::new(caustic::Rkn6Splitting::new()),
+        "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(1e-6)),
         "parallel_bug" | "pbug" => Box::new(caustic::ParallelBugIntegrator::new(
-            g,
             caustic::ParallelBugConfig {
                 ..Default::default()
             },
         )),
-        "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(
-            g,
-            caustic::RkBugConfig {
-                ..Default::default()
-            },
-        )),
-        "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
+        "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(caustic::RkBugConfig {
+            ..Default::default()
+        })),
+        "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new()),
         "cosmological" | "cosmological_strang" => {
             // Pull cosmology parameters from Zeldovich config if available,
             // otherwise use sensible defaults.
@@ -984,14 +1115,13 @@ fn build_from_config(
                 ));
             }
             Box::new(caustic::CosmologicalStrangSplitting::new(
-                g,
                 scale_factor,
                 hubble,
                 omega_m,
             ))
         }
         "instrumented" | "instrumented_strang" => {
-            Box::new(caustic::InstrumentedStrangSplitting::new(g))
+            Box::new(caustic::InstrumentedStrangSplitting::new())
         }
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
@@ -1486,7 +1616,7 @@ fn build_from_legacy(config_path: &str) -> anyhow::Result<caustic::Simulation> {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(p.t_final)
         .cfl_factor(p.cfl_factor)
@@ -1584,10 +1714,22 @@ fn extract_sim_state(
 
     // Poisson diagnostics: residual and power spectrum (only every Nth step)
     let (residual, spectrum, density_ps, field_es) = if compute_poisson_diag {
-        let potential = sim
-            .cached_potential
-            .clone()
-            .unwrap_or_else(|| sim.poisson.solve(&density, sim.g));
+        let potential = sim.cached_potential.clone().unwrap_or_else(|| {
+            let sink = caustic::EventEmitter::sink();
+            let advector = caustic::SemiLagrangian::new();
+            let progress = caustic::StepProgress::new();
+            let ctx = caustic::SimContext {
+                solver: &*sim.poisson,
+                advector: &advector,
+                emitter: &sink,
+                progress: &progress,
+                step: sim.step,
+                time: sim.time,
+                dt: 0.0,
+                g: sim.g,
+            };
+            sim.poisson.solve(&density, &ctx)
+        });
         let dx = sim.domain.dx();
         let r = caustic::poisson_residual_l2(&density, &potential, sim.g, [dx[0], dx[1], dx[2]]);
         let sp = if density.shape.iter().all(|&n| n <= 32) {
@@ -1729,6 +1871,12 @@ fn extract_sim_state(
         rank_growth_rate: None,
         acceleration_xy,
         log_messages: Vec::new(),
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
     }
 }
 
@@ -1878,6 +2026,12 @@ fn error_state(msg: String) -> SimState {
         rank_growth_rate: None,
         acceleration_xy: None,
         log_messages: vec![format!("ERROR: {msg}")],
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
     }
 }
 
@@ -2362,6 +2516,12 @@ mod unit_tests {
             rank_growth_rate: None,
             acceleration_xy: None,
             log_messages: vec![],
+            exit_condition_status: Vec::new(),
+            poisson_wall_us: None,
+            multigrid_iterations: None,
+            multigrid_convergence_rate: None,
+            warnings: Vec::new(),
+            integrator_type: String::new(),
         }
     }
 

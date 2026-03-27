@@ -153,6 +153,11 @@ impl RunControlTab {
                     self.push_log(Level::Info, msg.clone());
                 }
 
+                // Add warnings to log stream
+                for warning in &state.warnings {
+                    self.push_log(Level::Warn, warning.clone());
+                }
+
                 // Track initial values
                 if self.initial_energy == 0.0 && state.total_energy != 0.0 {
                     self.initial_energy = state.total_energy;
@@ -306,17 +311,29 @@ impl RunControlTab {
                     String::new()
                 };
 
-                frame.render_widget(
-                    Gauge::default()
-                        .gauge_style(Style::default().fg(theme.ok()))
-                        .ratio(progress)
-                        .label(format!(
+                let (prog_label, prog_style) = if let Some(ref reason) = state.exit_reason {
+                    (
+                        format!("\u{2713} Complete: {reason}  (step {})", state.step),
+                        Style::default().fg(theme.ok()).add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    (
+                        format!(
                             "t = {:.3}/{:.1}  step {}  {:.1}%{paused_tag}{eta}",
                             state.t,
                             state.t_final,
                             state.step,
                             progress * 100.0
-                        )),
+                        ),
+                        Style::default().fg(theme.ok()),
+                    )
+                };
+
+                frame.render_widget(
+                    Gauge::default()
+                        .gauge_style(prog_style)
+                        .ratio(progress)
+                        .label(prog_label),
                     prog_area,
                 );
 
@@ -536,10 +553,22 @@ impl RunControlTab {
             log_area,
         );
 
-        // Right panel — split into progress + diagnostics + config summary
-        let [progress_area, diag_area, summary_area] = Layout::vertical([
-            Constraint::Min(12),
+        // Right panel — split into progress + diagnostics + exit conditions + config summary
+        let exit_conditions_height = data_provider
+            .current_state()
+            .map(|s| {
+                if s.exit_condition_status.is_empty() {
+                    0
+                } else {
+                    s.exit_condition_status.len() as u16 + 2
+                }
+            })
+            .unwrap_or(0);
+
+        let [progress_area, diag_area, exit_area, summary_area] = Layout::vertical([
+            Constraint::Min(10),
             Constraint::Min(6),
+            Constraint::Length(exit_conditions_height),
             Constraint::Length(8),
         ])
         .areas(right_area);
@@ -632,8 +661,17 @@ impl RunControlTab {
 
                 rows.push(SparklineRow::new("Entropy S", state.entropy, 0.0));
 
+                if let Some(us) = state.poisson_wall_us {
+                    rows.push(SparklineRow::new("Poisson \u{00b5}s", us as f64, 0.0));
+                }
+
                 SparklineTable::new(&rows, " Diagnostics ").draw(frame, diag_area, theme);
             }
+        }
+
+        // Exit conditions panel
+        if let Some(state) = data_provider.current_state() {
+            self.draw_exit_conditions(frame, exit_area, theme, &state);
         }
 
         // Config summary panel (bottom-right)
@@ -1001,6 +1039,61 @@ impl RunControlTab {
         }
 
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_exit_conditions(&self, frame: &mut Frame, area: Rect, theme: &Theme, state: &SimState) {
+        if state.exit_condition_status.is_empty() || area.height < 3 {
+            return;
+        }
+
+        let block = Block::bordered()
+            .title(" Exit Conditions ")
+            .border_style(Style::default().fg(theme.border_color()));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        for (i, cond) in state.exit_condition_status.iter().enumerate() {
+            if i as u16 >= inner.height {
+                break;
+            }
+            let row_area = Rect {
+                x: inner.x,
+                y: inner.y + i as u16,
+                width: inner.width,
+                height: 1,
+            };
+
+            // Color based on fraction: green < 0.5, yellow < 0.8, red >= 0.8
+            let color = if cond.fraction < 0.5 {
+                theme.ok()
+            } else if cond.fraction < 0.8 {
+                theme.warn()
+            } else {
+                theme.error()
+            };
+
+            // Format: "TimeLimit     [░░░░░░░░░░] 45%"
+            let label_width: u16 = 14;
+            let pct_width: u16 = 6;
+            let bar_width = row_area.width.saturating_sub(label_width + pct_width) as u16;
+            let filled = ((cond.fraction * bar_width as f64).round() as u16).min(bar_width);
+            let empty = bar_width.saturating_sub(filled);
+
+            let label = format!("{:<12}", &cond.name[..cond.name.len().min(12)]);
+            let pct = format!("{:>3.0}%", cond.fraction * 100.0);
+            let bar_filled = "\u{2588}".repeat(filled as usize);
+            let bar_empty = "\u{2591}".repeat(empty as usize);
+
+            let line = Line::from(vec![
+                Span::styled(label, Style::default().fg(theme.foreground)),
+                Span::raw(" "),
+                Span::styled(bar_filled, Style::default().fg(color)),
+                Span::styled(bar_empty, Style::default().fg(theme.dim())),
+                Span::raw(" "),
+                Span::styled(pct, Style::default().fg(color)),
+            ]);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
     }
 
     fn draw_config_summary(

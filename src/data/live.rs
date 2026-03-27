@@ -498,6 +498,12 @@ mod tests {
             rank_growth_rate: None,
             acceleration_xy: None,
             log_messages: vec![],
+            exit_condition_status: Vec::new(),
+            poisson_wall_us: None,
+            multigrid_iterations: None,
+            multigrid_convergence_rate: None,
+            warnings: Vec::new(),
+            integrator_type: String::new(),
         }
     }
 
