@@ -1078,9 +1078,10 @@ fn build_from_config(
     }
     if cfg.exit.virial_equilibrium {
         sim.exit_evaluator
-            .add_condition(Box::new(VirialRelaxedCondition {
-                tolerance: cfg.exit.virial_tolerance,
-            }));
+            .add_condition(Box::new(VirialRelaxedCondition::new(
+                cfg.exit.virial_tolerance,
+                10, // Grace period: don't trigger before 10 steps
+            )));
         exit_count += 1;
     }
     if cfg.exit.cfl_violation {
