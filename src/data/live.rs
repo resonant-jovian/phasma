@@ -131,6 +131,18 @@ pub struct DiagnosticsStore {
     pub phase_timing_drift: TimeSeriesStore,
     pub phase_timing_poisson: TimeSeriesStore,
     pub phase_timing_kick: TimeSeriesStore,
+    // ── Event-derived time series (Layer 4) ──
+    pub poisson_wall_us: TimeSeriesStore,
+    pub advection_wall_us: TimeSeriesStore,
+    pub ht_slar_wall_us: TimeSeriesStore,
+    pub ht_fiber_negatives: TimeSeriesStore,
+    pub spectral_hypercollision: TimeSeriesStore,
+    pub amr_leaves: TimeSeriesStore,
+    pub flow_map_jacobian: TimeSeriesStore,
+    pub hybrid_sheet_fraction: TimeSeriesStore,
+    pub lomac_correction: TimeSeriesStore,
+    pub density_rho_max_ts: TimeSeriesStore,
+    pub density_rho_min_ts: TimeSeriesStore,
     /// Monotonic counter incremented on each push_state() call.
     /// Used for cache invalidation instead of `len()` which plateaus
     /// when the recent buffer is full.
@@ -175,6 +187,40 @@ impl DiagnosticsStore {
             self.phase_timing_drift.push(t, timings[0]);
             self.phase_timing_poisson.push(t, timings[1]);
             self.phase_timing_kick.push(t, timings[2]);
+        }
+        // Event-derived time series
+        if let Some(us) = state.poisson_wall_us {
+            self.poisson_wall_us.push(t, us as f64);
+        }
+        if let Some(us) = state.advection_wall_us {
+            self.advection_wall_us.push(t, us as f64);
+        }
+        if let Some(us) = state.ht_slar_wall_us {
+            self.ht_slar_wall_us.push(t, us as f64);
+        }
+        if let Some(neg) = state.ht_fiber_negatives {
+            self.ht_fiber_negatives.push(t, neg as f64);
+        }
+        if let Some(hc) = state.spectral_hypercollision_max {
+            self.spectral_hypercollision.push(t, hc);
+        }
+        if let Some(leaves) = state.amr_num_leaves {
+            self.amr_leaves.push(t, leaves as f64);
+        }
+        if let Some(jac) = state.flow_map_min_jacobian {
+            self.flow_map_jacobian.push(t, jac);
+        }
+        if let Some(frac) = state.hybrid_sheet_fraction {
+            self.hybrid_sheet_fraction.push(t, frac);
+        }
+        if let Some(norm) = state.lomac_correction_norm {
+            self.lomac_correction.push(t, norm);
+        }
+        if let Some(rho_max) = state.density_rho_max {
+            self.density_rho_max_ts.push(t, rho_max);
+        }
+        if let Some(rho_min) = state.density_rho_min {
+            self.density_rho_min_ts.push(t, rho_min);
         }
         self.push_count += 1;
     }
@@ -519,6 +565,29 @@ mod tests {
             flow_map_min_jacobian: None,
             hybrid_sheet_fraction: None,
             rayon_threads: None,
+            step_timings: None,
+            adaptive_dt_accepted: None,
+            adaptive_dt_error: None,
+            adaptive_dt_rejections: None,
+            ht_truncation_max_discarded: None,
+            ht_aca_func_evals: None,
+            ht_frame_nan_recovery: None,
+            ht_materialization_fits: None,
+            sheet_max_stream_count: None,
+            sheet_caustic_cells: None,
+            sheet_num_particles: None,
+            macro_micro_ratio: None,
+            lomac_wall_ms: None,
+            lomac_correction_norm: None,
+            build_phase_timings: Vec::new(),
+            cfl_spatial: None,
+            cfl_velocity: None,
+            cfl_dynamical: None,
+            memory_repr_bytes: None,
+            fft_plan_wall_us: None,
+            op_compute_density_us: None,
+            op_compute_accel_us: None,
+            tt_rank_change: None,
         }
     }
 

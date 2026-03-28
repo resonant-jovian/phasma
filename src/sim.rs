@@ -248,6 +248,64 @@ pub struct SimState {
     // ── Performance ──
     #[serde(default)]
     pub rayon_threads: Option<usize>,
+    // ── StepComplete timing (mirrors phase_timings) ──
+    #[serde(default)]
+    pub step_timings: Option<[f64; 7]>,
+    // ── Adaptive dt info ──
+    #[serde(default)]
+    pub adaptive_dt_accepted: Option<bool>,
+    #[serde(default)]
+    pub adaptive_dt_error: Option<f64>,
+    #[serde(default)]
+    pub adaptive_dt_rejections: Option<u32>,
+    // ── HT deep observability ──
+    #[serde(default)]
+    pub ht_truncation_max_discarded: Option<u32>,
+    #[serde(default)]
+    pub ht_aca_func_evals: Option<u64>,
+    #[serde(default)]
+    pub ht_frame_nan_recovery: Option<bool>,
+    #[serde(default)]
+    pub ht_materialization_fits: Option<bool>,
+    // ── Sheet tracker ──
+    #[serde(default)]
+    pub sheet_max_stream_count: Option<u32>,
+    #[serde(default)]
+    pub sheet_caustic_cells: Option<u64>,
+    #[serde(default)]
+    pub sheet_num_particles: Option<u64>,
+    // ── Macro-micro ──
+    #[serde(default)]
+    pub macro_micro_ratio: Option<f64>,
+    // ── LoMaC ──
+    #[serde(default)]
+    pub lomac_wall_ms: Option<f64>,
+    #[serde(default)]
+    pub lomac_correction_norm: Option<f64>,
+    // ── Build phases ──
+    #[serde(default)]
+    pub build_phase_timings: Vec<(String, f64)>,
+    // ── CFL breakdown ──
+    #[serde(default)]
+    pub cfl_spatial: Option<f64>,
+    #[serde(default)]
+    pub cfl_velocity: Option<f64>,
+    #[serde(default)]
+    pub cfl_dynamical: Option<f64>,
+    // ── Memory ──
+    #[serde(default)]
+    pub memory_repr_bytes: Option<usize>,
+    // ── FFT ──
+    #[serde(default)]
+    pub fft_plan_wall_us: Option<u64>,
+    // ── Operation timings ──
+    #[serde(default)]
+    pub op_compute_density_us: Option<u64>,
+    #[serde(default)]
+    pub op_compute_accel_us: Option<u64>,
+    // ── TT recompression ──
+    #[serde(default)]
+    pub tt_rank_change: Option<i32>,
 }
 
 /// Exit condition progress for TUI display.
@@ -393,6 +451,29 @@ struct DrainedEvents {
     hybrid_sheet_fraction: Option<f64>,
     rayon_threads: Option<usize>,
     ht_rank_snapshot: Option<(u32, usize, f64, Vec<u32>)>,
+    step_timings: Option<[f64; 7]>,
+    adaptive_accepted: Option<bool>,
+    adaptive_error: Option<f64>,
+    adaptive_rejections: Option<u32>,
+    ht_truncation_max_discarded: Option<u32>,
+    ht_aca_func_evals: Option<u64>,
+    ht_frame_nan_recovery: Option<bool>,
+    ht_materialization_fits: Option<bool>,
+    sheet_max_stream_count: Option<u32>,
+    sheet_caustic_cells: Option<u64>,
+    sheet_num_particles: Option<u64>,
+    macro_micro_ratio: Option<f64>,
+    lomac_wall_ms: Option<f64>,
+    lomac_correction_norm: Option<f64>,
+    build_phase_timings: Vec<(String, f64)>,
+    cfl_spatial: Option<f64>,
+    cfl_velocity: Option<f64>,
+    cfl_dynamical: Option<f64>,
+    memory_repr_bytes: Option<usize>,
+    fft_plan_wall_us: Option<u64>,
+    op_compute_density_us: Option<u64>,
+    op_compute_accel_us: Option<u64>,
+    tt_rank_change: Option<i32>,
 }
 
 fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
@@ -420,6 +501,29 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
         hybrid_sheet_fraction: None,
         rayon_threads: None,
         ht_rank_snapshot: None,
+        step_timings: None,
+        adaptive_accepted: None,
+        adaptive_error: None,
+        adaptive_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
     };
 
     for event in &events {
@@ -527,7 +631,126 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
             } => {
                 d.rayon_threads = Some(*active_threads);
             }
-            _ => {}
+            caustic::SimEvent::StepComplete { timings, .. } => {
+                d.step_timings = Some(timings.to_array());
+            }
+            caustic::SimEvent::TimestepComputed { .. } => {}
+            caustic::SimEvent::AdaptiveDtAccepted { error_estimate, .. } => {
+                d.adaptive_accepted = Some(true);
+                d.adaptive_error = Some(*error_estimate);
+            }
+            caustic::SimEvent::AdaptiveDtRejected {
+                error_estimate,
+                rejection_count,
+                ..
+            } => {
+                d.adaptive_accepted = Some(false);
+                d.adaptive_error = Some(*error_estimate);
+                d.adaptive_rejections = Some(*rejection_count);
+            }
+            caustic::SimEvent::HtTruncation {
+                discarded_count, ..
+            } => {
+                d.ht_truncation_max_discarded = Some(*discarded_count);
+            }
+            caustic::SimEvent::HtAcaEvaluation {
+                function_evaluations,
+                ..
+            } => {
+                d.ht_aca_func_evals = Some(*function_evaluations);
+            }
+            caustic::SimEvent::HtFrameQuality {
+                nan_recovery_used, ..
+            } => {
+                d.ht_frame_nan_recovery = Some(*nan_recovery_used);
+            }
+            caustic::SimEvent::HtMaterializationStatus {
+                fits_in_memory, ..
+            } => {
+                d.ht_materialization_fits = Some(*fits_in_memory);
+            }
+            caustic::SimEvent::HtPerAxisAdvection { .. } => {}
+            caustic::SimEvent::SheetCausticDetected {
+                max_stream_count,
+                cells_with_caustics,
+            } => {
+                d.sheet_max_stream_count = Some(*max_stream_count);
+                d.sheet_caustic_cells = Some(*cells_with_caustics);
+            }
+            caustic::SimEvent::SheetDensityDeposited {
+                num_particles, ..
+            } => {
+                d.sheet_num_particles = Some(*num_particles);
+            }
+            caustic::SimEvent::SheetAdvectionComplete { .. } => {}
+            caustic::SimEvent::MacroMicroDecomposition { ratio, .. } => {
+                d.macro_micro_ratio = Some(*ratio);
+            }
+            caustic::SimEvent::MacroMicroReprojected { .. } => {}
+            caustic::SimEvent::HybridInterfaceUpdate { .. } => {}
+            caustic::SimEvent::LoMaCComplete {
+                correction_norm,
+                wall_ms,
+                ..
+            } => {
+                d.lomac_wall_ms = Some(*wall_ms);
+                d.lomac_correction_norm = Some(*correction_norm);
+            }
+            caustic::SimEvent::LoMaCSkipped { .. } => {}
+            caustic::SimEvent::LoMaCMacroAdvance { .. } => {}
+            caustic::SimEvent::LoMaCCorrectionStrength { correction_norm } => {
+                d.lomac_correction_norm = Some(*correction_norm);
+            }
+            caustic::SimEvent::RankAdaptiveUpdate { .. } => {}
+            caustic::SimEvent::BuildPhaseStarted { .. } => {}
+            caustic::SimEvent::BuildPhaseComplete { phase, wall_ms } => {
+                d.build_phase_timings.push((format!("{phase:?}"), *wall_ms));
+            }
+            caustic::SimEvent::ICGenerationStarted { .. } => {}
+            caustic::SimEvent::ICGenerationComplete { .. } => {}
+            caustic::SimEvent::PoissonSolverInitialized { .. } => {}
+            caustic::SimEvent::CflConstraintComputed {
+                spatial_cfl,
+                velocity_cfl,
+                dynamical,
+                ..
+            } => {
+                d.cfl_spatial = Some(*spatial_cfl);
+                d.cfl_velocity = Some(*velocity_cfl);
+                d.cfl_dynamical = Some(*dynamical);
+            }
+            caustic::SimEvent::MemorySnapshot { bytes, .. } => {
+                d.memory_repr_bytes = Some(*bytes);
+            }
+            caustic::SimEvent::FftPlanStatus { plan_wall_us, .. } => {
+                d.fft_plan_wall_us = Some(*plan_wall_us);
+            }
+            caustic::SimEvent::OperationTiming { operation, wall_us } => match operation.as_str() {
+                "compute_density" => d.op_compute_density_us = Some(*wall_us),
+                "compute_acceleration" => d.op_compute_accel_us = Some(*wall_us),
+                _ => {}
+            },
+            caustic::SimEvent::ScratchBufferAllocated { .. } => {}
+            caustic::SimEvent::TtRecompression {
+                old_ranks,
+                new_ranks,
+            } => {
+                let old_total: u32 = old_ranks.iter().sum();
+                let new_total: u32 = new_ranks.iter().sum();
+                d.tt_rank_change = Some(new_total as i32 - old_total as i32);
+            }
+            caustic::SimEvent::PositivityViolations { .. } => {}
+            caustic::SimEvent::SpectralBasisStats { .. } => {}
+            caustic::SimEvent::AmrGridHierarchy { .. } => {}
+            caustic::SimEvent::AdvectionLimiterActivation { .. } => {}
+            caustic::SimEvent::FlowMapRemapTriggered { .. } => {}
+            caustic::SimEvent::SubStepProgress { .. } => {}
+            caustic::SimEvent::SimComplete { .. } => {}
+            caustic::SimEvent::ExitTriggered { .. } => {}
+            caustic::SimEvent::StepStarted { .. } => {}
+            caustic::SimEvent::PhaseEntered { .. } => {}
+            caustic::SimEvent::DiagnosticsComputed(_) => {}
+            caustic::SimEvent::MultigridDiverged { .. } => {}
         }
     }
 
@@ -565,6 +788,29 @@ fn apply_drained_events(state: &mut SimState, d: DrainedEvents) {
         state.compression_ratio = Some(ratio);
         state.rank_per_node = Some(ranks.iter().map(|&r| r as usize).collect());
     }
+    state.step_timings = d.step_timings;
+    state.adaptive_dt_accepted = d.adaptive_accepted;
+    state.adaptive_dt_error = d.adaptive_error;
+    state.adaptive_dt_rejections = d.adaptive_rejections;
+    state.ht_truncation_max_discarded = d.ht_truncation_max_discarded;
+    state.ht_aca_func_evals = d.ht_aca_func_evals;
+    state.ht_frame_nan_recovery = d.ht_frame_nan_recovery;
+    state.ht_materialization_fits = d.ht_materialization_fits;
+    state.sheet_max_stream_count = d.sheet_max_stream_count;
+    state.sheet_caustic_cells = d.sheet_caustic_cells;
+    state.sheet_num_particles = d.sheet_num_particles;
+    state.macro_micro_ratio = d.macro_micro_ratio;
+    state.lomac_wall_ms = d.lomac_wall_ms;
+    state.lomac_correction_norm = d.lomac_correction_norm;
+    state.build_phase_timings = d.build_phase_timings;
+    state.cfl_spatial = d.cfl_spatial;
+    state.cfl_velocity = d.cfl_velocity;
+    state.cfl_dynamical = d.cfl_dynamical;
+    state.memory_repr_bytes = d.memory_repr_bytes;
+    state.fft_plan_wall_us = d.fft_plan_wall_us;
+    state.op_compute_density_us = d.op_compute_density_us;
+    state.op_compute_accel_us = d.op_compute_accel_us;
+    state.tt_rank_change = d.tt_rank_change;
 }
 
 fn run_caustic_sim(
@@ -2023,6 +2269,29 @@ fn extract_sim_state(
         flow_map_min_jacobian: None,
         hybrid_sheet_fraction: None,
         rayon_threads: None,
+        step_timings: None,
+        adaptive_dt_accepted: None,
+        adaptive_dt_error: None,
+        adaptive_dt_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
     }
 }
 
@@ -2193,6 +2462,29 @@ fn error_state(msg: String) -> SimState {
         flow_map_min_jacobian: None,
         hybrid_sheet_fraction: None,
         rayon_threads: None,
+        step_timings: None,
+        adaptive_dt_accepted: None,
+        adaptive_dt_error: None,
+        adaptive_dt_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
     }
 }
 
@@ -2698,6 +2990,29 @@ mod unit_tests {
             flow_map_min_jacobian: None,
             hybrid_sheet_fraction: None,
             rayon_threads: None,
+            step_timings: None,
+            adaptive_dt_accepted: None,
+            adaptive_dt_error: None,
+            adaptive_dt_rejections: None,
+            ht_truncation_max_discarded: None,
+            ht_aca_func_evals: None,
+            ht_frame_nan_recovery: None,
+            ht_materialization_fits: None,
+            sheet_max_stream_count: None,
+            sheet_caustic_cells: None,
+            sheet_num_particles: None,
+            macro_micro_ratio: None,
+            lomac_wall_ms: None,
+            lomac_correction_norm: None,
+            build_phase_timings: Vec::new(),
+            cfl_spatial: None,
+            cfl_velocity: None,
+            cfl_dynamical: None,
+            memory_repr_bytes: None,
+            fft_plan_wall_us: None,
+            op_compute_density_us: None,
+            op_compute_accel_us: None,
+            tt_rank_change: None,
         }
     }
 

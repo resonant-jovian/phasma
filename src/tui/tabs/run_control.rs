@@ -553,7 +553,7 @@ impl RunControlTab {
             log_area,
         );
 
-        // Right panel — split into progress + diagnostics + exit conditions + config summary
+        // Right panel — split into progress + diagnostics + exit conditions + build timings + config summary
         let exit_conditions_height = data_provider
             .current_state()
             .map(|s| {
@@ -565,10 +565,22 @@ impl RunControlTab {
             })
             .unwrap_or(0);
 
-        let [progress_area, diag_area, exit_area, summary_area] = Layout::vertical([
+        let build_timings_height = data_provider
+            .current_state()
+            .map(|s| {
+                if s.build_phase_timings.is_empty() {
+                    0
+                } else {
+                    s.build_phase_timings.len() as u16 + 2
+                }
+            })
+            .unwrap_or(0);
+
+        let [progress_area, diag_area, exit_area, build_area, summary_area] = Layout::vertical([
             Constraint::Min(10),
             Constraint::Min(6),
             Constraint::Length(exit_conditions_height),
+            Constraint::Length(build_timings_height),
             Constraint::Length(8),
         ])
         .areas(right_area);
@@ -678,6 +690,34 @@ impl RunControlTab {
                 if let Some(rho_max) = state.density_rho_max {
                     rows.push(SparklineRow::new("\u{03c1}_max", rho_max, 0.0));
                 }
+                if let Some(rho_min) = state.density_rho_min {
+                    rows.push(SparklineRow::new("\u{03c1}_min", rho_min, 0.0));
+                }
+
+                // Adaptive dt status
+                if let Some(accepted) = state.adaptive_dt_accepted {
+                    let label = if accepted { "dt accepted" } else { "dt rejected" };
+                    let drift = if accepted { 0.0 } else { 1.0 };
+                    let mut row =
+                        SparklineRow::new(label, state.dt, drift).thresholds(0.5, 0.9);
+                    if let Some(err) = state.adaptive_dt_error {
+                        row = SparklineRow::new(label, err, drift).thresholds(0.5, 0.9);
+                    }
+                    rows.push(row);
+                }
+
+                // Sheet tracker
+                if let Some(streams) = state.sheet_max_stream_count {
+                    rows.push(SparklineRow::new("Streams", streams as f64, 0.0));
+                }
+                if let Some(cells) = state.sheet_caustic_cells {
+                    rows.push(SparklineRow::new("Caustic cells", cells as f64, 0.0));
+                }
+
+                // LoMaC timing
+                if let Some(ms) = state.lomac_wall_ms {
+                    rows.push(SparklineRow::new("LoMaC ms", ms, 0.0));
+                }
 
                 // Rayon threads (static, show once)
                 if let Some(threads) = state.rayon_threads {
@@ -732,6 +772,11 @@ impl RunControlTab {
         // Exit conditions panel
         if let Some(state) = data_provider.current_state() {
             self.draw_exit_conditions(frame, exit_area, theme, &state);
+        }
+
+        // Build phase timings panel
+        if let Some(state) = data_provider.current_state() {
+            Self::draw_build_timings(frame, build_area, theme, &state);
         }
 
         // Config summary panel (bottom-right)
@@ -1154,6 +1199,41 @@ impl RunControlTab {
             ]);
             frame.render_widget(Paragraph::new(line), row_area);
         }
+    }
+
+    fn draw_build_timings(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        state: &SimState,
+    ) {
+        if state.build_phase_timings.is_empty() || area.height < 3 {
+            return;
+        }
+        let block = Block::bordered()
+            .title(" Build Timings ")
+            .border_style(Style::default().fg(theme.border_color()));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let label_style = Style::default().fg(theme.dim());
+        let value_style = Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::BOLD);
+
+        let lines: Vec<Line> = state
+            .build_phase_timings
+            .iter()
+            .take(inner.height as usize)
+            .map(|(name, ms)| {
+                Line::from(vec![
+                    Span::styled(format!(" {name:<16}"), label_style),
+                    Span::styled(format!("{ms:.1}ms"), value_style),
+                ])
+            })
+            .collect();
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn draw_config_summary(

@@ -401,7 +401,7 @@ impl PoissonDetailTab {
                 theme.warn()
             };
 
-            vec![
+            let mut lines = vec![
                 Line::from(vec![
                     Span::styled(" Type:      ", label_style),
                     Span::styled(poisson_label, value_style),
@@ -453,7 +453,47 @@ impl PoissonDetailTab {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
-            ]
+            ];
+
+            // Multigrid-specific info
+            if let Some(iters) = state.multigrid_iterations {
+                lines.push(Line::from(vec![
+                    Span::styled(" V-cycles:  ", label_style),
+                    Span::styled(format!("{iters}"), value_style),
+                ]));
+            }
+            if let Some(rate) = state.multigrid_convergence_rate {
+                let rate_color = if rate < 0.5 {
+                    theme.ok()
+                } else {
+                    theme.warn()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(" Conv rate: ", label_style),
+                    Span::styled(
+                        format!("{rate:.4}"),
+                        Style::default()
+                            .fg(rate_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            // FFT plan timing
+            if let Some(us) = state.fft_plan_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" FFT plan:  ", label_style),
+                    Span::styled(format!("{us}\u{00b5}s"), value_style),
+                ]));
+            }
+            // Poisson solve wall time
+            if let Some(us) = state.poisson_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" Solve:     ", label_style),
+                    Span::styled(format!("{us}\u{00b5}s"), value_style),
+                ]));
+            }
+
+            lines
         } else {
             vec![
                 Line::from(""),
