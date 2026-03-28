@@ -605,8 +605,7 @@ impl RankTab {
                         .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Cell::from(format!("{evals}"))
-                    .style(Style::default().fg(theme.chart_color(4))),
+                Cell::from(format!("{evals}")).style(Style::default().fg(theme.chart_color(4))),
             ]));
         }
 

@@ -463,18 +463,12 @@ impl PoissonDetailTab {
                 ]));
             }
             if let Some(rate) = state.multigrid_convergence_rate {
-                let rate_color = if rate < 0.5 {
-                    theme.ok()
-                } else {
-                    theme.warn()
-                };
+                let rate_color = if rate < 0.5 { theme.ok() } else { theme.warn() };
                 lines.push(Line::from(vec![
                     Span::styled(" Conv rate: ", label_style),
                     Span::styled(
                         format!("{rate:.4}"),
-                        Style::default()
-                            .fg(rate_color)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(rate_color).add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }

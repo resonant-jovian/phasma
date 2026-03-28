@@ -952,9 +952,7 @@ impl PerformanceTab {
         let advection_data = diag.advection_wall_us.iter_chart_data();
         let slar_data = diag.ht_slar_wall_us.iter_chart_data();
 
-        let has_data = poisson_data.len() >= 2
-            || advection_data.len() >= 2
-            || slar_data.len() >= 2;
+        let has_data = poisson_data.len() >= 2 || advection_data.len() >= 2 || slar_data.len() >= 2;
 
         if !has_data {
             let block = Block::bordered()
@@ -1057,9 +1055,7 @@ impl PerformanceTab {
         data_provider: &dyn DataProvider,
     ) {
         let state = data_provider.current_state();
-        let has_data = state
-            .map(|s| s.step_timings.is_some())
-            .unwrap_or(false);
+        let has_data = state.map(|s| s.step_timings.is_some()).unwrap_or(false);
 
         if !has_data {
             let block = Block::bordered()
@@ -1070,10 +1066,14 @@ impl PerformanceTab {
         }
 
         let Some(s) = state else { return };
-        let Some(ref timings) = s.step_timings else { return };
+        let Some(ref timings) = s.step_timings else {
+            return;
+        };
         let total: f64 = timings.iter().sum();
 
-        const LABELS: [&str; 7] = ["Drift", "Poisson", "Kick", "Density", "Diag", "I/O", "Other"];
+        const LABELS: [&str; 7] = [
+            "Drift", "Poisson", "Kick", "Density", "Diag", "I/O", "Other",
+        ];
 
         let categories: Vec<String> = LABELS
             .iter()

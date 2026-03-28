@@ -590,8 +590,12 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
                 memory_bytes,
                 compression_ratio,
             } => {
-                d.ht_rank_snapshot =
-                    Some((*total_rank, *memory_bytes, *compression_ratio, ranks.clone()));
+                d.ht_rank_snapshot = Some((
+                    *total_rank,
+                    *memory_bytes,
+                    *compression_ratio,
+                    ranks.clone(),
+                ));
             }
             caustic::SimEvent::HtSlarPath { wall_us, .. } => {
                 d.ht_slar_wall_us = Some(*wall_us);
@@ -626,9 +630,7 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
             } => {
                 d.hybrid_sheet_fraction = Some(*sheet_volume_fraction);
             }
-            caustic::SimEvent::RayonPoolStatus {
-                active_threads, ..
-            } => {
+            caustic::SimEvent::RayonPoolStatus { active_threads, .. } => {
                 d.rayon_threads = Some(*active_threads);
             }
             caustic::SimEvent::StepComplete { timings, .. } => {
@@ -664,9 +666,7 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
             } => {
                 d.ht_frame_nan_recovery = Some(*nan_recovery_used);
             }
-            caustic::SimEvent::HtMaterializationStatus {
-                fits_in_memory, ..
-            } => {
+            caustic::SimEvent::HtMaterializationStatus { fits_in_memory, .. } => {
                 d.ht_materialization_fits = Some(*fits_in_memory);
             }
             caustic::SimEvent::HtPerAxisAdvection { .. } => {}
@@ -677,9 +677,7 @@ fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
                 d.sheet_max_stream_count = Some(*max_stream_count);
                 d.sheet_caustic_cells = Some(*cells_with_caustics);
             }
-            caustic::SimEvent::SheetDensityDeposited {
-                num_particles, ..
-            } => {
+            caustic::SimEvent::SheetDensityDeposited { num_particles, .. } => {
                 d.sheet_num_particles = Some(*num_particles);
             }
             caustic::SimEvent::SheetAdvectionComplete { .. } => {}

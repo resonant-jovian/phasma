@@ -576,7 +576,13 @@ impl RunControlTab {
             })
             .unwrap_or(0);
 
-        let [progress_area, diag_area, exit_area, build_area, summary_area] = Layout::vertical([
+        let [
+            progress_area,
+            diag_area,
+            exit_area,
+            build_area,
+            summary_area,
+        ] = Layout::vertical([
             Constraint::Min(10),
             Constraint::Min(6),
             Constraint::Length(exit_conditions_height),
@@ -696,10 +702,13 @@ impl RunControlTab {
 
                 // Adaptive dt status
                 if let Some(accepted) = state.adaptive_dt_accepted {
-                    let label = if accepted { "dt accepted" } else { "dt rejected" };
+                    let label = if accepted {
+                        "dt accepted"
+                    } else {
+                        "dt rejected"
+                    };
                     let drift = if accepted { 0.0 } else { 1.0 };
-                    let mut row =
-                        SparklineRow::new(label, state.dt, drift).thresholds(0.5, 0.9);
+                    let mut row = SparklineRow::new(label, state.dt, drift).thresholds(0.5, 0.9);
                     if let Some(err) = state.adaptive_dt_error {
                         row = SparklineRow::new(label, err, drift).thresholds(0.5, 0.9);
                     }
@@ -727,12 +736,8 @@ impl RunControlTab {
                 // Conservation drift per quantity
                 for (name, drift) in &state.conservation_drift {
                     rows.push(
-                        SparklineRow::new(
-                            format!("\u{0394}{name}"),
-                            *drift,
-                            *drift,
-                        )
-                        .thresholds(1e-4, 1e-2),
+                        SparklineRow::new(format!("\u{0394}{name}"), *drift, *drift)
+                            .thresholds(1e-4, 1e-2),
                     );
                 }
 
@@ -757,8 +762,7 @@ impl RunControlTab {
                 }
                 if let Some(jac) = state.flow_map_min_jacobian {
                     rows.push(
-                        SparklineRow::new("FlowMap J_min", jac, jac - 1.0)
-                            .thresholds(0.1, 0.5),
+                        SparklineRow::new("FlowMap J_min", jac, jac - 1.0).thresholds(0.1, 0.5),
                     );
                 }
                 if let Some(frac) = state.hybrid_sheet_fraction {
@@ -1201,12 +1205,7 @@ impl RunControlTab {
         }
     }
 
-    fn draw_build_timings(
-        frame: &mut Frame,
-        area: Rect,
-        theme: &Theme,
-        state: &SimState,
-    ) {
+    fn draw_build_timings(frame: &mut Frame, area: Rect, theme: &Theme, state: &SimState) {
         if state.build_phase_timings.is_empty() || area.height < 3 {
             return;
         }
