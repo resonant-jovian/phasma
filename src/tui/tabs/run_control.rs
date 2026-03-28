@@ -633,7 +633,11 @@ impl RunControlTab {
 
                 // HT rank rows (§2.2 spec: Avg rank, Peak rank)
                 if let Some(ref ranks) = state.rank_per_node {
-                    let budget = 100u32; // fallback budget
+                    // Use compression ratio as effective budget when available
+                    let budget = state
+                        .compression_ratio
+                        .map(|cr| (cr as u32).max(1))
+                        .unwrap_or(100u32);
                     let avg = if ranks.is_empty() {
                         0.0
                     } else {
@@ -663,6 +667,62 @@ impl RunControlTab {
 
                 if let Some(us) = state.poisson_wall_us {
                     rows.push(SparklineRow::new("Poisson \u{00b5}s", us as f64, 0.0));
+                }
+
+                // Advection timing
+                if let Some(us) = state.advection_wall_us {
+                    rows.push(SparklineRow::new("Advect \u{00b5}s", us as f64, 0.0));
+                }
+
+                // Density extremes
+                if let Some(rho_max) = state.density_rho_max {
+                    rows.push(SparklineRow::new("\u{03c1}_max", rho_max, 0.0));
+                }
+
+                // Rayon threads (static, show once)
+                if let Some(threads) = state.rayon_threads {
+                    rows.push(SparklineRow::new("Threads", threads as f64, 0.0));
+                }
+
+                // Conservation drift per quantity
+                for (name, drift) in &state.conservation_drift {
+                    rows.push(
+                        SparklineRow::new(
+                            format!("\u{0394}{name}"),
+                            *drift,
+                            *drift,
+                        )
+                        .thresholds(1e-4, 1e-2),
+                    );
+                }
+
+                // Repr-specific diagnostics
+                if let Some(us) = state.ht_slar_wall_us {
+                    rows.push(SparklineRow::new("SLAR \u{00b5}s", us as f64, 0.0));
+                }
+                if let Some(neg) = state.ht_fiber_negatives {
+                    rows.push(SparklineRow::new("HT neg fibers", neg as f64, 0.0));
+                }
+                if let Some(hc) = state.spectral_hypercollision_max {
+                    rows.push(SparklineRow::new("Hypercoll max", hc, 0.0));
+                }
+                if let Some(v) = state.spectral_positivity_violations {
+                    rows.push(SparklineRow::new("Pos. viol.", v as f64, 0.0));
+                }
+                if let Some(leaves) = state.amr_num_leaves {
+                    rows.push(SparklineRow::new("AMR leaves", leaves as f64, 0.0));
+                }
+                if let Some(lvl) = state.amr_max_level {
+                    rows.push(SparklineRow::new("AMR max lvl", lvl as f64, 0.0));
+                }
+                if let Some(jac) = state.flow_map_min_jacobian {
+                    rows.push(
+                        SparklineRow::new("FlowMap J_min", jac, jac - 1.0)
+                            .thresholds(0.1, 0.5),
+                    );
+                }
+                if let Some(frac) = state.hybrid_sheet_fraction {
+                    rows.push(SparklineRow::new("Sheet frac", frac, 0.0));
                 }
 
                 SparklineTable::new(&rows, " Diagnostics ").draw(frame, diag_area, theme);

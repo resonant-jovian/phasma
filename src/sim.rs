@@ -209,6 +209,45 @@ pub struct SimState {
     /// Integrator kind name from events.
     #[serde(default)]
     pub integrator_type: String,
+    // ── Advection observability ──
+    #[serde(default)]
+    pub advection_wall_us: Option<u64>,
+    #[serde(default)]
+    pub advection_mass_before: Option<f64>,
+    #[serde(default)]
+    pub advection_mass_after: Option<f64>,
+    // ── Density observability ──
+    #[serde(default)]
+    pub density_rho_max: Option<f64>,
+    #[serde(default)]
+    pub density_rho_min: Option<f64>,
+    // ── Conservation drift ──
+    #[serde(default)]
+    pub conservation_drift: Vec<(String, f64)>,
+    // ── HT deep observability ──
+    #[serde(default)]
+    pub ht_slar_wall_us: Option<u64>,
+    #[serde(default)]
+    pub ht_fiber_negatives: Option<u64>,
+    // ── Spectral observability ──
+    #[serde(default)]
+    pub spectral_hypercollision_max: Option<f64>,
+    #[serde(default)]
+    pub spectral_positivity_violations: Option<u64>,
+    // ── AMR observability ──
+    #[serde(default)]
+    pub amr_num_leaves: Option<u64>,
+    #[serde(default)]
+    pub amr_max_level: Option<u32>,
+    // ── Flow map observability ──
+    #[serde(default)]
+    pub flow_map_min_jacobian: Option<f64>,
+    // ── Hybrid observability ──
+    #[serde(default)]
+    pub hybrid_sheet_fraction: Option<f64>,
+    // ── Performance ──
+    #[serde(default)]
+    pub rayon_threads: Option<usize>,
 }
 
 /// Exit condition progress for TUI display.
@@ -330,6 +369,204 @@ impl SimHandle {
     }
 }
 
+/// Accumulated event data from draining SimEvent channel each step.
+struct DrainedEvents {
+    exit_condition_status: Vec<ExitConditionProgress>,
+    poisson_wall_us: Option<u64>,
+    multigrid_iterations: Option<u32>,
+    multigrid_convergence_rate: Option<f64>,
+    warnings: Vec<String>,
+    integrator_type: String,
+    advection_wall_us: Option<u64>,
+    advection_mass_before: Option<f64>,
+    advection_mass_after: Option<f64>,
+    density_rho_max: Option<f64>,
+    density_rho_min: Option<f64>,
+    conservation_drift: Vec<(String, f64)>,
+    ht_slar_wall_us: Option<u64>,
+    ht_fiber_negatives: Option<u64>,
+    spectral_hypercollision_max: Option<f64>,
+    spectral_positivity_violations: Option<u64>,
+    amr_num_leaves: Option<u64>,
+    amr_max_level: Option<u32>,
+    flow_map_min_jacobian: Option<f64>,
+    hybrid_sheet_fraction: Option<f64>,
+    rayon_threads: Option<usize>,
+    ht_rank_snapshot: Option<(u32, usize, f64, Vec<u32>)>,
+}
+
+fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
+    let events = event_rx.drain();
+    let mut d = DrainedEvents {
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
+        ht_rank_snapshot: None,
+    };
+
+    for event in &events {
+        match event {
+            caustic::SimEvent::ExitConditionStatus {
+                condition,
+                current_value,
+                threshold,
+                fraction_to_threshold,
+            } => {
+                let name = format!("{condition:?}");
+                d.exit_condition_status.push(ExitConditionProgress {
+                    name,
+                    fraction: *fraction_to_threshold,
+                    current: *current_value,
+                    threshold: *threshold,
+                });
+            }
+            caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
+                d.poisson_wall_us = Some(*wall_us);
+            }
+            caustic::SimEvent::MultigridConverged {
+                iterations,
+                convergence_rate,
+                ..
+            } => {
+                d.multigrid_iterations = Some(*iterations);
+                d.multigrid_convergence_rate = Some(*convergence_rate);
+            }
+            caustic::SimEvent::Warning(w) => {
+                d.warnings.push(format!("{w:?}"));
+            }
+            caustic::SimEvent::SimStarted {
+                integrator_kind, ..
+            } => {
+                d.integrator_type = format!("{integrator_kind:?}");
+            }
+            caustic::SimEvent::AdvectionComplete {
+                mass_before,
+                mass_after,
+                wall_us,
+                ..
+            } => {
+                d.advection_wall_us = Some(*wall_us);
+                d.advection_mass_before = Some(*mass_before);
+                d.advection_mass_after = Some(*mass_after);
+            }
+            caustic::SimEvent::DensityComputed {
+                rho_max, rho_min, ..
+            } => {
+                d.density_rho_max = Some(*rho_max);
+                d.density_rho_min = Some(*rho_min);
+            }
+            caustic::SimEvent::ConservationDrift {
+                quantity,
+                relative_drift,
+            } => {
+                d.conservation_drift
+                    .push((format!("{quantity:?}"), *relative_drift));
+            }
+            caustic::SimEvent::HtRankSnapshot {
+                ranks,
+                total_rank,
+                memory_bytes,
+                compression_ratio,
+            } => {
+                d.ht_rank_snapshot =
+                    Some((*total_rank, *memory_bytes, *compression_ratio, ranks.clone()));
+            }
+            caustic::SimEvent::HtSlarPath { wall_us, .. } => {
+                d.ht_slar_wall_us = Some(*wall_us);
+            }
+            caustic::SimEvent::HtFiberSampling {
+                negative_values, ..
+            } => {
+                d.ht_fiber_negatives = Some(*negative_values);
+            }
+            caustic::SimEvent::SpectralHypercollisionApplied {
+                max_mode_dampening, ..
+            } => {
+                d.spectral_hypercollision_max = Some(*max_mode_dampening);
+            }
+            caustic::SimEvent::SpectralPositivityEnforced { violations, .. } => {
+                d.spectral_positivity_violations = Some(*violations);
+            }
+            caustic::SimEvent::AmrRefinementStep {
+                cells_after,
+                max_level,
+                ..
+            } => {
+                d.amr_num_leaves = Some(*cells_after);
+                d.amr_max_level = Some(*max_level);
+            }
+            caustic::SimEvent::FlowMapJacobianQuality { min_det, .. } => {
+                d.flow_map_min_jacobian = Some(*min_det);
+            }
+            caustic::SimEvent::HybridRegionStats {
+                sheet_volume_fraction,
+                ..
+            } => {
+                d.hybrid_sheet_fraction = Some(*sheet_volume_fraction);
+            }
+            caustic::SimEvent::RayonPoolStatus {
+                active_threads, ..
+            } => {
+                d.rayon_threads = Some(*active_threads);
+            }
+            _ => {}
+        }
+    }
+
+    d
+}
+
+/// Apply drained event data onto a SimState.
+fn apply_drained_events(state: &mut SimState, d: DrainedEvents) {
+    state.exit_condition_status = d.exit_condition_status;
+    state.poisson_wall_us = d.poisson_wall_us;
+    state.multigrid_iterations = d.multigrid_iterations;
+    state.multigrid_convergence_rate = d.multigrid_convergence_rate;
+    state.warnings = d.warnings;
+    if !d.integrator_type.is_empty() {
+        state.integrator_type = d.integrator_type;
+    }
+    state.advection_wall_us = d.advection_wall_us;
+    state.advection_mass_before = d.advection_mass_before;
+    state.advection_mass_after = d.advection_mass_after;
+    state.density_rho_max = d.density_rho_max;
+    state.density_rho_min = d.density_rho_min;
+    state.conservation_drift = d.conservation_drift;
+    state.ht_slar_wall_us = d.ht_slar_wall_us;
+    state.ht_fiber_negatives = d.ht_fiber_negatives;
+    state.spectral_hypercollision_max = d.spectral_hypercollision_max;
+    state.spectral_positivity_violations = d.spectral_positivity_violations;
+    state.amr_num_leaves = d.amr_num_leaves;
+    state.amr_max_level = d.amr_max_level;
+    state.flow_map_min_jacobian = d.flow_map_min_jacobian;
+    state.hybrid_sheet_fraction = d.hybrid_sheet_fraction;
+    state.rayon_threads = d.rayon_threads;
+    if let Some((total, mem, ratio, ranks)) = d.ht_rank_snapshot {
+        state.rank_total = Some(total as usize);
+        state.rank_memory_bytes = Some(mem);
+        state.compression_ratio = Some(ratio);
+        state.rank_per_node = Some(ranks.iter().map(|&r| r as usize).collect());
+    }
+}
+
 fn run_caustic_sim(
     config_path: String,
     state_tx: StateSender,
@@ -410,53 +647,7 @@ fn run_caustic_sim(
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
 
-                // Drain SimEvents and fold into state
-                let events = event_rx.drain();
-                let mut exit_condition_status = Vec::new();
-                let mut poisson_wall_us = None;
-                let mut multigrid_iterations = None;
-                let mut multigrid_convergence_rate = None;
-                let mut warnings = Vec::new();
-                let mut integrator_type = String::new();
-
-                for event in &events {
-                    match event {
-                        caustic::SimEvent::ExitConditionStatus {
-                            condition,
-                            current_value,
-                            threshold,
-                            fraction_to_threshold,
-                        } => {
-                            let name = format!("{condition:?}");
-                            exit_condition_status.push(ExitConditionProgress {
-                                name,
-                                fraction: *fraction_to_threshold,
-                                current: *current_value,
-                                threshold: *threshold,
-                            });
-                        }
-                        caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
-                            poisson_wall_us = Some(*wall_us);
-                        }
-                        caustic::SimEvent::MultigridConverged {
-                            iterations,
-                            convergence_rate,
-                            ..
-                        } => {
-                            multigrid_iterations = Some(*iterations);
-                            multigrid_convergence_rate = Some(*convergence_rate);
-                        }
-                        caustic::SimEvent::Warning(w) => {
-                            warnings.push(format!("{w:?}"));
-                        }
-                        caustic::SimEvent::SimStarted {
-                            integrator_kind, ..
-                        } => {
-                            integrator_type = format!("{integrator_kind:?}");
-                        }
-                        _ => {}
-                    }
-                }
+                let drained = drain_events(&event_rx);
 
                 // Skip expensive Poisson diagnostics on first frame for fast visual feedback
                 let compute_poisson_diag =
@@ -475,14 +666,7 @@ fn run_caustic_sim(
                     compute_poisson_diag,
                     compute_phase,
                 );
-                state.exit_condition_status = exit_condition_status;
-                state.poisson_wall_us = poisson_wall_us;
-                state.multigrid_iterations = multigrid_iterations;
-                state.multigrid_convergence_rate = multigrid_convergence_rate;
-                state.warnings = warnings;
-                if !integrator_type.is_empty() {
-                    state.integrator_type = integrator_type;
-                }
+                apply_drained_events(&mut state, drained);
                 // Cache or reuse phase-space projections
                 if compute_phase && state.phase_nx > 0 {
                     cached_phase_slices = Arc::clone(&state.phase_slices);
@@ -514,53 +698,7 @@ fn run_caustic_sim(
             Ok(Some(reason)) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
 
-                // Drain SimEvents and fold into state
-                let events = event_rx.drain();
-                let mut exit_condition_status = Vec::new();
-                let mut poisson_wall_us = None;
-                let mut multigrid_iterations = None;
-                let mut multigrid_convergence_rate = None;
-                let mut warnings = Vec::new();
-                let mut integrator_type = String::new();
-
-                for event in &events {
-                    match event {
-                        caustic::SimEvent::ExitConditionStatus {
-                            condition,
-                            current_value,
-                            threshold,
-                            fraction_to_threshold,
-                        } => {
-                            let name = format!("{condition:?}");
-                            exit_condition_status.push(ExitConditionProgress {
-                                name,
-                                fraction: *fraction_to_threshold,
-                                current: *current_value,
-                                threshold: *threshold,
-                            });
-                        }
-                        caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
-                            poisson_wall_us = Some(*wall_us);
-                        }
-                        caustic::SimEvent::MultigridConverged {
-                            iterations,
-                            convergence_rate,
-                            ..
-                        } => {
-                            multigrid_iterations = Some(*iterations);
-                            multigrid_convergence_rate = Some(*convergence_rate);
-                        }
-                        caustic::SimEvent::Warning(w) => {
-                            warnings.push(format!("{w:?}"));
-                        }
-                        caustic::SimEvent::SimStarted {
-                            integrator_kind, ..
-                        } => {
-                            integrator_type = format!("{integrator_kind:?}");
-                        }
-                        _ => {}
-                    }
-                }
+                let drained = drain_events(&event_rx);
 
                 let exit = reason;
                 let mut state = extract_sim_state(
@@ -575,14 +713,7 @@ fn run_caustic_sim(
                     true, // always compute diagnostics on exit
                     true, // always compute phase slices on exit
                 );
-                state.exit_condition_status = exit_condition_status;
-                state.poisson_wall_us = poisson_wall_us;
-                state.multigrid_iterations = multigrid_iterations;
-                state.multigrid_convergence_rate = multigrid_convergence_rate;
-                state.warnings = warnings;
-                if !integrator_type.is_empty() {
-                    state.integrator_type = integrator_type;
-                }
+                apply_drained_events(&mut state, drained);
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
                 }
@@ -1877,6 +2008,21 @@ fn extract_sim_state(
         multigrid_convergence_rate: None,
         warnings: Vec::new(),
         integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
     }
 }
 
@@ -2032,6 +2178,21 @@ fn error_state(msg: String) -> SimState {
         multigrid_convergence_rate: None,
         warnings: Vec::new(),
         integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
     }
 }
 
@@ -2522,6 +2683,21 @@ mod unit_tests {
             multigrid_convergence_rate: None,
             warnings: Vec::new(),
             integrator_type: String::new(),
+            advection_wall_us: None,
+            advection_mass_before: None,
+            advection_mass_after: None,
+            density_rho_max: None,
+            density_rho_min: None,
+            conservation_drift: Vec::new(),
+            ht_slar_wall_us: None,
+            ht_fiber_negatives: None,
+            spectral_hypercollision_max: None,
+            spectral_positivity_violations: None,
+            amr_num_leaves: None,
+            amr_max_level: None,
+            flow_map_min_jacobian: None,
+            hybrid_sheet_fraction: None,
+            rayon_threads: None,
         }
     }
 

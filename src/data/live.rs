@@ -504,6 +504,21 @@ mod tests {
             multigrid_convergence_rate: None,
             warnings: Vec::new(),
             integrator_type: String::new(),
+            advection_wall_us: None,
+            advection_mass_before: None,
+            advection_mass_after: None,
+            density_rho_max: None,
+            density_rho_min: None,
+            conservation_drift: Vec::new(),
+            ht_slar_wall_us: None,
+            ht_fiber_negatives: None,
+            spectral_hypercollision_max: None,
+            spectral_positivity_violations: None,
+            amr_num_leaves: None,
+            amr_max_level: None,
+            flow_map_min_jacobian: None,
+            hybrid_sheet_fraction: None,
+            rayon_threads: None,
         }
     }
 

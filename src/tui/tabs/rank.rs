@@ -679,7 +679,11 @@ impl RankTab {
             .as_ref()
             .and_then(|e| e.get(node))
             .copied();
-        let budget = 100usize;
+        // Use compression ratio as effective budget indicator when available
+        let budget = state
+            .compression_ratio
+            .map(|cr| (cr as usize).max(1))
+            .unwrap_or(100usize);
 
         // Try to render StemPlot of singular values
         let has_sv_plot = if let Some(ref svs) = state.singular_values

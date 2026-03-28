@@ -494,20 +494,43 @@ impl PerformanceTab {
 
         const PHASE_NAMES: [&str; 7] = ["Drift", "Poissn", "Kick", "Dens", "Diag", "I/O", "Other"];
 
+        // Collect event-derived timing entries
+        let mut event_categories: Vec<String> = Vec::new();
+        let mut event_values: Vec<f64> = Vec::new();
+        if let Some(us) = s.poisson_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("Poissn*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+        if let Some(us) = s.advection_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("Advect*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+        if let Some(us) = s.ht_slar_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("SLAR*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+
         if let Some(ref timings) = s.phase_timings {
-            // Real phase timings → BarChart
+            // Real phase timings → BarChart (augmented with event-derived timings)
             let plt_theme = theme.clone();
-            let categories: Vec<String> = PHASE_NAMES
+            let mut categories: Vec<String> = PHASE_NAMES
                 .iter()
                 .zip(timings.iter())
                 .filter(|&(_, ms)| *ms > 0.0)
                 .map(|(&name, _)| name.to_string())
                 .collect();
-            let values: Vec<f64> = timings
+            let mut values: Vec<f64> = timings
                 .iter()
                 .filter(|&&ms| ms > 0.0)
                 .map(|&ms| if total > 0.0 { ms / total * 100.0 } else { 0.0 })
                 .collect();
+
+            // Append event-derived timing entries
+            categories.extend(event_categories);
+            values.extend(event_values);
 
             let chart = BarChart::new()
                 .categories(categories)
@@ -518,34 +541,66 @@ impl PerformanceTab {
 
             frame.render_widget(&chart, area);
         } else {
-            // Estimated split (Strang) — text fallback
+            // Estimated split (Strang) — text fallback, augmented with event timings
             let block = Block::bordered()
                 .title(format!(" Phase Timings ({total:.1}ms) "))
                 .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
-            frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled(" Drift   ", Style::default().fg(theme.dim())),
-                        Span::styled("~33%", Style::default().fg(theme.chart_color(0))),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
-                        Span::styled("~34%", Style::default().fg(theme.chart_color(1))),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(" Kick    ", Style::default().fg(theme.dim())),
-                        Span::styled("~33%", Style::default().fg(theme.chart_color(2))),
-                    ]),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        " (estimated)",
-                        Style::default().fg(theme.dim()),
-                    )),
+
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled(" Drift   ", Style::default().fg(theme.dim())),
+                    Span::styled("~33%", Style::default().fg(theme.chart_color(0))),
                 ]),
-                inner,
-            );
+                Line::from(vec![
+                    Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
+                    Span::styled("~34%", Style::default().fg(theme.chart_color(1))),
+                ]),
+                Line::from(vec![
+                    Span::styled(" Kick    ", Style::default().fg(theme.dim())),
+                    Span::styled("~33%", Style::default().fg(theme.chart_color(2))),
+                ]),
+            ];
+
+            // Add event-derived timings when available
+            if let Some(us) = s.poisson_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(3)),
+                    ),
+                ]));
+            }
+            if let Some(us) = s.advection_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" Advect  ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(4)),
+                    ),
+                ]));
+            }
+            if let Some(us) = s.ht_slar_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" SLAR    ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(5)),
+                    ),
+                ]));
+            }
+
+            if event_categories.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    " (estimated)",
+                    Style::default().fg(theme.dim()),
+                )));
+            }
+
+            frame.render_widget(Paragraph::new(lines), inner);
         }
     }
 
@@ -629,7 +684,7 @@ impl PerformanceTab {
             "—".to_string()
         };
 
-        let lines = vec![
+        let mut lines = vec![
             Line::from(Span::styled(
                 " Performance",
                 Style::default()
@@ -659,6 +714,19 @@ impl PerformanceTab {
                 },
             ),
         ];
+
+        // Event-derived component timings
+        if let Some(s) = state {
+            if let Some(us) = s.poisson_wall_us {
+                lines.push(val("Poisson", format!("{us}\u{00b5}s")));
+            }
+            if let Some(us) = s.advection_wall_us {
+                lines.push(val("Advect", format!("{us}\u{00b5}s")));
+            }
+            if let Some(us) = s.ht_slar_wall_us {
+                lines.push(val("SLAR", format!("{us}\u{00b5}s")));
+            }
+        }
 
         let block = Block::bordered()
             .title(" Stats ")
