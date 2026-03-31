@@ -191,6 +191,130 @@ pub struct SimState {
     /// z-projected acceleration vectors (x, y, gx_avg, gy_avg), sub-sampled.
     #[serde(default)]
     pub acceleration_xy: Option<Vec<(f64, f64, f64, f64)>>,
+    // ── SimEvent-derived observability ──
+    /// Per-exit-condition distance-to-threshold (fraction 0.0–1.0).
+    #[serde(default)]
+    pub exit_condition_status: Vec<ExitConditionProgress>,
+    /// Poisson solver wall time in microseconds this step.
+    #[serde(default)]
+    pub poisson_wall_us: Option<u64>,
+    /// Multigrid convergence info (if applicable).
+    #[serde(default)]
+    pub multigrid_iterations: Option<u32>,
+    #[serde(default)]
+    pub multigrid_convergence_rate: Option<f64>,
+    /// Structured warnings from this step.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// Integrator kind name from events.
+    #[serde(default)]
+    pub integrator_type: String,
+    // ── Advection observability ──
+    #[serde(default)]
+    pub advection_wall_us: Option<u64>,
+    #[serde(default)]
+    pub advection_mass_before: Option<f64>,
+    #[serde(default)]
+    pub advection_mass_after: Option<f64>,
+    // ── Density observability ──
+    #[serde(default)]
+    pub density_rho_max: Option<f64>,
+    #[serde(default)]
+    pub density_rho_min: Option<f64>,
+    // ── Conservation drift ──
+    #[serde(default)]
+    pub conservation_drift: Vec<(String, f64)>,
+    // ── HT deep observability ──
+    #[serde(default)]
+    pub ht_slar_wall_us: Option<u64>,
+    #[serde(default)]
+    pub ht_fiber_negatives: Option<u64>,
+    // ── Spectral observability ──
+    #[serde(default)]
+    pub spectral_hypercollision_max: Option<f64>,
+    #[serde(default)]
+    pub spectral_positivity_violations: Option<u64>,
+    // ── AMR observability ──
+    #[serde(default)]
+    pub amr_num_leaves: Option<u64>,
+    #[serde(default)]
+    pub amr_max_level: Option<u32>,
+    // ── Flow map observability ──
+    #[serde(default)]
+    pub flow_map_min_jacobian: Option<f64>,
+    // ── Hybrid observability ──
+    #[serde(default)]
+    pub hybrid_sheet_fraction: Option<f64>,
+    // ── Performance ──
+    #[serde(default)]
+    pub rayon_threads: Option<usize>,
+    // ── StepComplete timing (mirrors phase_timings) ──
+    #[serde(default)]
+    pub step_timings: Option<[f64; 7]>,
+    // ── Adaptive dt info ──
+    #[serde(default)]
+    pub adaptive_dt_accepted: Option<bool>,
+    #[serde(default)]
+    pub adaptive_dt_error: Option<f64>,
+    #[serde(default)]
+    pub adaptive_dt_rejections: Option<u32>,
+    // ── HT deep observability ──
+    #[serde(default)]
+    pub ht_truncation_max_discarded: Option<u32>,
+    #[serde(default)]
+    pub ht_aca_func_evals: Option<u64>,
+    #[serde(default)]
+    pub ht_frame_nan_recovery: Option<bool>,
+    #[serde(default)]
+    pub ht_materialization_fits: Option<bool>,
+    // ── Sheet tracker ──
+    #[serde(default)]
+    pub sheet_max_stream_count: Option<u32>,
+    #[serde(default)]
+    pub sheet_caustic_cells: Option<u64>,
+    #[serde(default)]
+    pub sheet_num_particles: Option<u64>,
+    // ── Macro-micro ──
+    #[serde(default)]
+    pub macro_micro_ratio: Option<f64>,
+    // ── LoMaC ──
+    #[serde(default)]
+    pub lomac_wall_ms: Option<f64>,
+    #[serde(default)]
+    pub lomac_correction_norm: Option<f64>,
+    // ── Build phases ──
+    #[serde(default)]
+    pub build_phase_timings: Vec<(String, f64)>,
+    // ── CFL breakdown ──
+    #[serde(default)]
+    pub cfl_spatial: Option<f64>,
+    #[serde(default)]
+    pub cfl_velocity: Option<f64>,
+    #[serde(default)]
+    pub cfl_dynamical: Option<f64>,
+    // ── Memory ──
+    #[serde(default)]
+    pub memory_repr_bytes: Option<usize>,
+    // ── FFT ──
+    #[serde(default)]
+    pub fft_plan_wall_us: Option<u64>,
+    // ── Operation timings ──
+    #[serde(default)]
+    pub op_compute_density_us: Option<u64>,
+    #[serde(default)]
+    pub op_compute_accel_us: Option<u64>,
+    // ── TT recompression ──
+    #[serde(default)]
+    pub tt_rank_change: Option<i32>,
+}
+
+/// Exit condition progress for TUI display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExitConditionProgress {
+    pub name: String,
+    pub fraction: f64,
+    pub current: f64,
+    pub threshold: f64,
 }
 
 impl SimState {
@@ -303,6 +427,390 @@ impl SimHandle {
     }
 }
 
+/// Accumulated event data from draining SimEvent channel each step.
+struct DrainedEvents {
+    exit_condition_status: Vec<ExitConditionProgress>,
+    poisson_wall_us: Option<u64>,
+    multigrid_iterations: Option<u32>,
+    multigrid_convergence_rate: Option<f64>,
+    warnings: Vec<String>,
+    integrator_type: String,
+    advection_wall_us: Option<u64>,
+    advection_mass_before: Option<f64>,
+    advection_mass_after: Option<f64>,
+    density_rho_max: Option<f64>,
+    density_rho_min: Option<f64>,
+    conservation_drift: Vec<(String, f64)>,
+    ht_slar_wall_us: Option<u64>,
+    ht_fiber_negatives: Option<u64>,
+    spectral_hypercollision_max: Option<f64>,
+    spectral_positivity_violations: Option<u64>,
+    amr_num_leaves: Option<u64>,
+    amr_max_level: Option<u32>,
+    flow_map_min_jacobian: Option<f64>,
+    hybrid_sheet_fraction: Option<f64>,
+    rayon_threads: Option<usize>,
+    ht_rank_snapshot: Option<(u32, usize, f64, Vec<u32>)>,
+    step_timings: Option<[f64; 7]>,
+    adaptive_accepted: Option<bool>,
+    adaptive_error: Option<f64>,
+    adaptive_rejections: Option<u32>,
+    ht_truncation_max_discarded: Option<u32>,
+    ht_aca_func_evals: Option<u64>,
+    ht_frame_nan_recovery: Option<bool>,
+    ht_materialization_fits: Option<bool>,
+    sheet_max_stream_count: Option<u32>,
+    sheet_caustic_cells: Option<u64>,
+    sheet_num_particles: Option<u64>,
+    macro_micro_ratio: Option<f64>,
+    lomac_wall_ms: Option<f64>,
+    lomac_correction_norm: Option<f64>,
+    build_phase_timings: Vec<(String, f64)>,
+    cfl_spatial: Option<f64>,
+    cfl_velocity: Option<f64>,
+    cfl_dynamical: Option<f64>,
+    memory_repr_bytes: Option<usize>,
+    fft_plan_wall_us: Option<u64>,
+    op_compute_density_us: Option<u64>,
+    op_compute_accel_us: Option<u64>,
+    tt_rank_change: Option<i32>,
+}
+
+fn drain_events(event_rx: &caustic::EventReceiver) -> DrainedEvents {
+    let events = event_rx.drain();
+    let mut d = DrainedEvents {
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
+        ht_rank_snapshot: None,
+        step_timings: None,
+        adaptive_accepted: None,
+        adaptive_error: None,
+        adaptive_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
+    };
+
+    for event in &events {
+        match event {
+            caustic::SimEvent::ExitConditionStatus {
+                condition,
+                current_value,
+                threshold,
+                fraction_to_threshold,
+            } => {
+                let name = format!("{condition:?}");
+                d.exit_condition_status.push(ExitConditionProgress {
+                    name,
+                    fraction: *fraction_to_threshold,
+                    current: *current_value,
+                    threshold: *threshold,
+                });
+            }
+            caustic::SimEvent::PoissonSolveComplete { wall_us, .. } => {
+                d.poisson_wall_us = Some(*wall_us);
+            }
+            caustic::SimEvent::MultigridConverged {
+                iterations,
+                convergence_rate,
+                ..
+            } => {
+                d.multigrid_iterations = Some(*iterations);
+                d.multigrid_convergence_rate = Some(*convergence_rate);
+            }
+            caustic::SimEvent::Warning(w) => {
+                d.warnings.push(format!("{w:?}"));
+            }
+            caustic::SimEvent::SimStarted {
+                integrator_kind, ..
+            } => {
+                d.integrator_type = format!("{integrator_kind:?}");
+            }
+            caustic::SimEvent::AdvectionComplete {
+                mass_before,
+                mass_after,
+                wall_us,
+                ..
+            } => {
+                d.advection_wall_us = Some(*wall_us);
+                d.advection_mass_before = Some(*mass_before);
+                d.advection_mass_after = Some(*mass_after);
+            }
+            caustic::SimEvent::DensityComputed {
+                rho_max, rho_min, ..
+            } => {
+                d.density_rho_max = Some(*rho_max);
+                d.density_rho_min = Some(*rho_min);
+            }
+            caustic::SimEvent::ConservationDrift {
+                quantity,
+                relative_drift,
+            } => {
+                d.conservation_drift
+                    .push((format!("{quantity:?}"), *relative_drift));
+            }
+            caustic::SimEvent::HtRankSnapshot {
+                ranks,
+                total_rank,
+                memory_bytes,
+                compression_ratio,
+            } => {
+                d.ht_rank_snapshot = Some((
+                    *total_rank,
+                    *memory_bytes,
+                    *compression_ratio,
+                    ranks.clone(),
+                ));
+            }
+            caustic::SimEvent::HtSlarPath { wall_us, .. } => {
+                d.ht_slar_wall_us = Some(*wall_us);
+            }
+            caustic::SimEvent::HtFiberSampling {
+                negative_values, ..
+            } => {
+                d.ht_fiber_negatives = Some(*negative_values);
+            }
+            caustic::SimEvent::SpectralHypercollisionApplied {
+                max_mode_dampening, ..
+            } => {
+                d.spectral_hypercollision_max = Some(*max_mode_dampening);
+            }
+            caustic::SimEvent::SpectralPositivityEnforced { violations, .. } => {
+                d.spectral_positivity_violations = Some(*violations);
+            }
+            caustic::SimEvent::AmrRefinementStep {
+                cells_after,
+                max_level,
+                ..
+            } => {
+                d.amr_num_leaves = Some(*cells_after);
+                d.amr_max_level = Some(*max_level);
+            }
+            caustic::SimEvent::FlowMapJacobianQuality { min_det, .. } => {
+                d.flow_map_min_jacobian = Some(*min_det);
+            }
+            caustic::SimEvent::HybridRegionStats {
+                sheet_volume_fraction,
+                ..
+            } => {
+                d.hybrid_sheet_fraction = Some(*sheet_volume_fraction);
+            }
+            caustic::SimEvent::RayonPoolStatus { active_threads, .. } => {
+                d.rayon_threads = Some(*active_threads);
+            }
+            caustic::SimEvent::StepComplete { timings, .. } => {
+                d.step_timings = Some(timings.to_array());
+            }
+            caustic::SimEvent::TimestepComputed { .. } => {}
+            caustic::SimEvent::AdaptiveDtAccepted { error_estimate, .. } => {
+                d.adaptive_accepted = Some(true);
+                d.adaptive_error = Some(*error_estimate);
+            }
+            caustic::SimEvent::AdaptiveDtRejected {
+                error_estimate,
+                rejection_count,
+                ..
+            } => {
+                d.adaptive_accepted = Some(false);
+                d.adaptive_error = Some(*error_estimate);
+                d.adaptive_rejections = Some(*rejection_count);
+            }
+            caustic::SimEvent::HtTruncation {
+                discarded_count, ..
+            } => {
+                d.ht_truncation_max_discarded = Some(*discarded_count);
+            }
+            caustic::SimEvent::HtAcaEvaluation {
+                function_evaluations,
+                ..
+            } => {
+                d.ht_aca_func_evals = Some(*function_evaluations);
+            }
+            caustic::SimEvent::HtFrameQuality {
+                nan_recovery_used, ..
+            } => {
+                d.ht_frame_nan_recovery = Some(*nan_recovery_used);
+            }
+            caustic::SimEvent::HtMaterializationStatus { fits_in_memory, .. } => {
+                d.ht_materialization_fits = Some(*fits_in_memory);
+            }
+            caustic::SimEvent::HtPerAxisAdvection { .. } => {}
+            caustic::SimEvent::SheetCausticDetected {
+                max_stream_count,
+                cells_with_caustics,
+            } => {
+                d.sheet_max_stream_count = Some(*max_stream_count);
+                d.sheet_caustic_cells = Some(*cells_with_caustics);
+            }
+            caustic::SimEvent::SheetDensityDeposited { num_particles, .. } => {
+                d.sheet_num_particles = Some(*num_particles);
+            }
+            caustic::SimEvent::SheetAdvectionComplete { .. } => {}
+            caustic::SimEvent::MacroMicroDecomposition { ratio, .. } => {
+                d.macro_micro_ratio = Some(*ratio);
+            }
+            caustic::SimEvent::MacroMicroReprojected { .. } => {}
+            caustic::SimEvent::HybridInterfaceUpdate { .. } => {}
+            caustic::SimEvent::LoMaCComplete {
+                correction_norm,
+                wall_ms,
+                ..
+            } => {
+                d.lomac_wall_ms = Some(*wall_ms);
+                d.lomac_correction_norm = Some(*correction_norm);
+            }
+            caustic::SimEvent::LoMaCSkipped { .. } => {}
+            caustic::SimEvent::LoMaCMacroAdvance { .. } => {}
+            caustic::SimEvent::LoMaCCorrectionStrength { correction_norm } => {
+                d.lomac_correction_norm = Some(*correction_norm);
+            }
+            caustic::SimEvent::RankAdaptiveUpdate { .. } => {}
+            caustic::SimEvent::BuildPhaseStarted { .. } => {}
+            caustic::SimEvent::BuildPhaseComplete { phase, wall_ms } => {
+                d.build_phase_timings.push((format!("{phase:?}"), *wall_ms));
+            }
+            caustic::SimEvent::ICGenerationStarted { .. } => {}
+            caustic::SimEvent::ICGenerationComplete { .. } => {}
+            caustic::SimEvent::PoissonSolverInitialized { .. } => {}
+            caustic::SimEvent::CflConstraintComputed {
+                spatial_cfl,
+                velocity_cfl,
+                dynamical,
+                ..
+            } => {
+                d.cfl_spatial = Some(*spatial_cfl);
+                d.cfl_velocity = Some(*velocity_cfl);
+                d.cfl_dynamical = Some(*dynamical);
+            }
+            caustic::SimEvent::MemorySnapshot { bytes, .. } => {
+                d.memory_repr_bytes = Some(*bytes);
+            }
+            caustic::SimEvent::FftPlanStatus { plan_wall_us, .. } => {
+                d.fft_plan_wall_us = Some(*plan_wall_us);
+            }
+            caustic::SimEvent::OperationTiming { operation, wall_us } => match operation.as_str() {
+                "compute_density" => d.op_compute_density_us = Some(*wall_us),
+                "compute_acceleration" => d.op_compute_accel_us = Some(*wall_us),
+                _ => {}
+            },
+            caustic::SimEvent::ScratchBufferAllocated { .. } => {}
+            caustic::SimEvent::TtRecompression {
+                old_ranks,
+                new_ranks,
+            } => {
+                let old_total: u32 = old_ranks.iter().sum();
+                let new_total: u32 = new_ranks.iter().sum();
+                d.tt_rank_change = Some(new_total as i32 - old_total as i32);
+            }
+            caustic::SimEvent::PositivityViolations { .. } => {}
+            caustic::SimEvent::SpectralBasisStats { .. } => {}
+            caustic::SimEvent::AmrGridHierarchy { .. } => {}
+            caustic::SimEvent::AdvectionLimiterActivation { .. } => {}
+            caustic::SimEvent::FlowMapRemapTriggered { .. } => {}
+            caustic::SimEvent::SubStepProgress { .. } => {}
+            caustic::SimEvent::SimComplete { .. } => {}
+            caustic::SimEvent::ExitTriggered { .. } => {}
+            caustic::SimEvent::StepStarted { .. } => {}
+            caustic::SimEvent::PhaseEntered { .. } => {}
+            caustic::SimEvent::DiagnosticsComputed(_) => {}
+            caustic::SimEvent::MultigridDiverged { .. } => {}
+        }
+    }
+
+    d
+}
+
+/// Apply drained event data onto a SimState.
+fn apply_drained_events(state: &mut SimState, d: DrainedEvents) {
+    state.exit_condition_status = d.exit_condition_status;
+    state.poisson_wall_us = d.poisson_wall_us;
+    state.multigrid_iterations = d.multigrid_iterations;
+    state.multigrid_convergence_rate = d.multigrid_convergence_rate;
+    state.warnings = d.warnings;
+    if !d.integrator_type.is_empty() {
+        state.integrator_type = d.integrator_type;
+    }
+    state.advection_wall_us = d.advection_wall_us;
+    state.advection_mass_before = d.advection_mass_before;
+    state.advection_mass_after = d.advection_mass_after;
+    state.density_rho_max = d.density_rho_max;
+    state.density_rho_min = d.density_rho_min;
+    state.conservation_drift = d.conservation_drift;
+    state.ht_slar_wall_us = d.ht_slar_wall_us;
+    state.ht_fiber_negatives = d.ht_fiber_negatives;
+    state.spectral_hypercollision_max = d.spectral_hypercollision_max;
+    state.spectral_positivity_violations = d.spectral_positivity_violations;
+    state.amr_num_leaves = d.amr_num_leaves;
+    state.amr_max_level = d.amr_max_level;
+    state.flow_map_min_jacobian = d.flow_map_min_jacobian;
+    state.hybrid_sheet_fraction = d.hybrid_sheet_fraction;
+    state.rayon_threads = d.rayon_threads;
+    if let Some((total, mem, ratio, ranks)) = d.ht_rank_snapshot {
+        state.rank_total = Some(total as usize);
+        state.rank_memory_bytes = Some(mem);
+        state.compression_ratio = Some(ratio);
+        state.rank_per_node = Some(ranks.iter().map(|&r| r as usize).collect());
+    }
+    state.step_timings = d.step_timings;
+    state.adaptive_dt_accepted = d.adaptive_accepted;
+    state.adaptive_dt_error = d.adaptive_error;
+    state.adaptive_dt_rejections = d.adaptive_rejections;
+    state.ht_truncation_max_discarded = d.ht_truncation_max_discarded;
+    state.ht_aca_func_evals = d.ht_aca_func_evals;
+    state.ht_frame_nan_recovery = d.ht_frame_nan_recovery;
+    state.ht_materialization_fits = d.ht_materialization_fits;
+    state.sheet_max_stream_count = d.sheet_max_stream_count;
+    state.sheet_caustic_cells = d.sheet_caustic_cells;
+    state.sheet_num_particles = d.sheet_num_particles;
+    state.macro_micro_ratio = d.macro_micro_ratio;
+    state.lomac_wall_ms = d.lomac_wall_ms;
+    state.lomac_correction_norm = d.lomac_correction_norm;
+    state.build_phase_timings = d.build_phase_timings;
+    state.cfl_spatial = d.cfl_spatial;
+    state.cfl_velocity = d.cfl_velocity;
+    state.cfl_dynamical = d.cfl_dynamical;
+    state.memory_repr_bytes = d.memory_repr_bytes;
+    state.fft_plan_wall_us = d.fft_plan_wall_us;
+    state.op_compute_density_us = d.op_compute_density_us;
+    state.op_compute_accel_us = d.op_compute_accel_us;
+    state.tt_rank_change = d.tt_rank_change;
+}
+
 fn run_caustic_sim(
     config_path: String,
     state_tx: StateSender,
@@ -323,6 +831,11 @@ fn run_caustic_sim(
             return;
         }
     };
+
+    // Create event channel and wire it to the simulation
+    let (emitter, event_rx) = caustic::EventEmitter::channel(4096);
+    sim.emitter = emitter;
+
     sim.set_progress(progress);
 
     if verbose {
@@ -377,6 +890,9 @@ fn run_caustic_sim(
         match sim.step() {
             Ok(None) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+
+                let drained = drain_events(&event_rx);
+
                 // Skip expensive Poisson diagnostics on first frame for fast visual feedback
                 let compute_poisson_diag =
                     !first_state && diag_step.is_multiple_of(POISSON_DIAG_INTERVAL);
@@ -394,6 +910,7 @@ fn run_caustic_sim(
                     compute_poisson_diag,
                     compute_phase,
                 );
+                apply_drained_events(&mut state, drained);
                 // Cache or reuse phase-space projections
                 if compute_phase && state.phase_nx > 0 {
                     cached_phase_slices = Arc::clone(&state.phase_slices);
@@ -424,6 +941,9 @@ fn run_caustic_sim(
             }
             Ok(Some(reason)) => {
                 let wall_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+
+                let drained = drain_events(&event_rx);
+
                 let exit = reason;
                 let mut state = extract_sim_state(
                     &sim,
@@ -437,6 +957,7 @@ fn run_caustic_sim(
                     true, // always compute diagnostics on exit
                     true, // always compute phase slices on exit
                 );
+                apply_drained_events(&mut state, drained);
                 if first_state {
                     state.log_messages = std::mem::take(&mut build_logs);
                 }
@@ -908,55 +1429,40 @@ fn build_from_config(
         logs.push(format!("Building integrator: {}", cfg.solver.integrator));
     }
     let integrator: Box<dyn caustic::TimeIntegrator> = match cfg.solver.integrator.as_str() {
-        "strang" | "strang_splitting" => Box::new(StrangSplitting::new(g)),
-        "yoshida" | "yoshida_splitting" => Box::new(YoshidaSplitting::new(g)),
-        "lie" => Box::new(LieSplitting::new(g)),
-        "unsplit" | "unsplit_rk4" => {
-            Box::new(caustic::UnsplitIntegrator::new(4, g, domain.clone()))
-        }
-        "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, g, domain.clone())),
-        "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, g, domain.clone())),
-        "rkei" => Box::new(caustic::RkeiIntegrator::new(g)),
-        "bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: false,
-                conservative: false,
-                ..Default::default()
-            },
-        )),
-        "midpoint_bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: true,
-                conservative: false,
-                ..Default::default()
-            },
-        )),
-        "conservative_bug" => Box::new(caustic::BugIntegrator::new(
-            g,
-            caustic::BugConfig {
-                midpoint: false,
-                conservative: true,
-                ..Default::default()
-            },
-        )),
-        "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new(g)),
-        "rkn6" => Box::new(caustic::Rkn6Splitting::new(g)),
-        "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(g, 1e-6)),
+        "strang" | "strang_splitting" => Box::new(StrangSplitting::new()),
+        "yoshida" | "yoshida_splitting" => Box::new(YoshidaSplitting::new()),
+        "lie" => Box::new(LieSplitting::new()),
+        "unsplit" | "unsplit_rk4" => Box::new(caustic::UnsplitIntegrator::new(4, domain.clone())),
+        "unsplit_rk2" => Box::new(caustic::UnsplitIntegrator::new(2, domain.clone())),
+        "unsplit_rk3" => Box::new(caustic::UnsplitIntegrator::new(3, domain.clone())),
+        "rkei" => Box::new(caustic::RkeiIntegrator::new()),
+        "bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: false,
+            conservative: false,
+            ..Default::default()
+        })),
+        "midpoint_bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: true,
+            conservative: false,
+            ..Default::default()
+        })),
+        "conservative_bug" => Box::new(caustic::BugIntegrator::new(caustic::BugConfig {
+            midpoint: false,
+            conservative: true,
+            ..Default::default()
+        })),
+        "blanes_moan" | "bm4" => Box::new(caustic::BlanesMoanSplitting::new()),
+        "rkn6" => Box::new(caustic::Rkn6Splitting::new()),
+        "adaptive" | "adaptive_strang" => Box::new(caustic::AdaptiveStrangSplitting::new(1e-6)),
         "parallel_bug" | "pbug" => Box::new(caustic::ParallelBugIntegrator::new(
-            g,
             caustic::ParallelBugConfig {
                 ..Default::default()
             },
         )),
-        "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(
-            g,
-            caustic::RkBugConfig {
-                ..Default::default()
-            },
-        )),
-        "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new(g)),
+        "rk_bug" | "rk_bug3" => Box::new(caustic::RkBugIntegrator::new(caustic::RkBugConfig {
+            ..Default::default()
+        })),
+        "lawson" | "lawson_rk4" => Box::new(caustic::LawsonRkIntegrator::new()),
         "cosmological" | "cosmological_strang" => {
             // Pull cosmology parameters from Zeldovich config if available,
             // otherwise use sensible defaults.
@@ -984,14 +1490,13 @@ fn build_from_config(
                 ));
             }
             Box::new(caustic::CosmologicalStrangSplitting::new(
-                g,
                 scale_factor,
                 hubble,
                 omega_m,
             ))
         }
         "instrumented" | "instrumented_strang" => {
-            Box::new(caustic::InstrumentedStrangSplitting::new(g))
+            Box::new(caustic::InstrumentedStrangSplitting::new())
         }
         other => anyhow::bail!("unsupported integrator '{other}'"),
     };
@@ -1486,7 +1991,7 @@ fn build_from_legacy(config_path: &str) -> anyhow::Result<caustic::Simulation> {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(p.t_final)
         .cfl_factor(p.cfl_factor)
@@ -1584,10 +2089,22 @@ fn extract_sim_state(
 
     // Poisson diagnostics: residual and power spectrum (only every Nth step)
     let (residual, spectrum, density_ps, field_es) = if compute_poisson_diag {
-        let potential = sim
-            .cached_potential
-            .clone()
-            .unwrap_or_else(|| sim.poisson.solve(&density, sim.g));
+        let potential = sim.cached_potential.clone().unwrap_or_else(|| {
+            let sink = caustic::EventEmitter::sink();
+            let advector = caustic::SemiLagrangian::new();
+            let progress = caustic::StepProgress::new();
+            let ctx = caustic::SimContext {
+                solver: &*sim.poisson,
+                advector: &advector,
+                emitter: &sink,
+                progress: &progress,
+                step: sim.step,
+                time: sim.time,
+                dt: 0.0,
+                g: sim.g,
+            };
+            sim.poisson.solve(&density, &ctx)
+        });
         let dx = sim.domain.dx();
         let r = caustic::poisson_residual_l2(&density, &potential, sim.g, [dx[0], dx[1], dx[2]]);
         let sp = if density.shape.iter().all(|&n| n <= 32) {
@@ -1729,6 +2246,50 @@ fn extract_sim_state(
         rank_growth_rate: None,
         acceleration_xy,
         log_messages: Vec::new(),
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
+        step_timings: None,
+        adaptive_dt_accepted: None,
+        adaptive_dt_error: None,
+        adaptive_dt_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
     }
 }
 
@@ -1878,6 +2439,50 @@ fn error_state(msg: String) -> SimState {
         rank_growth_rate: None,
         acceleration_xy: None,
         log_messages: vec![format!("ERROR: {msg}")],
+        exit_condition_status: Vec::new(),
+        poisson_wall_us: None,
+        multigrid_iterations: None,
+        multigrid_convergence_rate: None,
+        warnings: Vec::new(),
+        integrator_type: String::new(),
+        advection_wall_us: None,
+        advection_mass_before: None,
+        advection_mass_after: None,
+        density_rho_max: None,
+        density_rho_min: None,
+        conservation_drift: Vec::new(),
+        ht_slar_wall_us: None,
+        ht_fiber_negatives: None,
+        spectral_hypercollision_max: None,
+        spectral_positivity_violations: None,
+        amr_num_leaves: None,
+        amr_max_level: None,
+        flow_map_min_jacobian: None,
+        hybrid_sheet_fraction: None,
+        rayon_threads: None,
+        step_timings: None,
+        adaptive_dt_accepted: None,
+        adaptive_dt_error: None,
+        adaptive_dt_rejections: None,
+        ht_truncation_max_discarded: None,
+        ht_aca_func_evals: None,
+        ht_frame_nan_recovery: None,
+        ht_materialization_fits: None,
+        sheet_max_stream_count: None,
+        sheet_caustic_cells: None,
+        sheet_num_particles: None,
+        macro_micro_ratio: None,
+        lomac_wall_ms: None,
+        lomac_correction_norm: None,
+        build_phase_timings: Vec::new(),
+        cfl_spatial: None,
+        cfl_velocity: None,
+        cfl_dynamical: None,
+        memory_repr_bytes: None,
+        fft_plan_wall_us: None,
+        op_compute_density_us: None,
+        op_compute_accel_us: None,
+        tt_rank_change: None,
     }
 }
 
@@ -2362,6 +2967,50 @@ mod unit_tests {
             rank_growth_rate: None,
             acceleration_xy: None,
             log_messages: vec![],
+            exit_condition_status: Vec::new(),
+            poisson_wall_us: None,
+            multigrid_iterations: None,
+            multigrid_convergence_rate: None,
+            warnings: Vec::new(),
+            integrator_type: String::new(),
+            advection_wall_us: None,
+            advection_mass_before: None,
+            advection_mass_after: None,
+            density_rho_max: None,
+            density_rho_min: None,
+            conservation_drift: Vec::new(),
+            ht_slar_wall_us: None,
+            ht_fiber_negatives: None,
+            spectral_hypercollision_max: None,
+            spectral_positivity_violations: None,
+            amr_num_leaves: None,
+            amr_max_level: None,
+            flow_map_min_jacobian: None,
+            hybrid_sheet_fraction: None,
+            rayon_threads: None,
+            step_timings: None,
+            adaptive_dt_accepted: None,
+            adaptive_dt_error: None,
+            adaptive_dt_rejections: None,
+            ht_truncation_max_discarded: None,
+            ht_aca_func_evals: None,
+            ht_frame_nan_recovery: None,
+            ht_materialization_fits: None,
+            sheet_max_stream_count: None,
+            sheet_caustic_cells: None,
+            sheet_num_particles: None,
+            macro_micro_ratio: None,
+            lomac_wall_ms: None,
+            lomac_correction_norm: None,
+            build_phase_timings: Vec::new(),
+            cfl_spatial: None,
+            cfl_velocity: None,
+            cfl_dynamical: None,
+            memory_repr_bytes: None,
+            fft_plan_wall_us: None,
+            op_compute_density_us: None,
+            op_compute_accel_us: None,
+            tt_rank_change: None,
         }
     }
 

@@ -237,12 +237,13 @@ impl PerformanceTab {
             return;
         }
 
-        // Wide mode (160+): 3-row layout with extra charts
+        // Wide mode (160+): 4-row layout with extra charts
         if area.width >= 156 {
-            let [top, mid, bottom] = Layout::vertical([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+            let [top, mid, bottom, extra] = Layout::vertical([
+                Constraint::Percentage(26),
+                Constraint::Percentage(26),
+                Constraint::Percentage(24),
+                Constraint::Percentage(24),
             ])
             .areas(area);
 
@@ -268,6 +269,10 @@ impl PerformanceTab {
             ])
             .areas(bottom);
 
+            let [op_timing_area, step_bkdn_area] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(extra);
+
             self.draw_stats(frame, stats_area, theme, data_provider);
             Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
             Self::draw_memory_breakdown(frame, memory_area, theme, data_provider);
@@ -278,14 +283,17 @@ impl PerformanceTab {
             Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
             Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
             Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
+            Self::draw_operation_timings(frame, op_timing_area, theme, data_provider);
+            Self::draw_step_breakdown(frame, step_bkdn_area, theme, data_provider);
             return;
         }
 
-        // Standard 3-row layout
-        let [top, mid, bottom] = Layout::vertical([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
+        // Standard 4-row layout
+        let [top, mid, bottom, extra] = Layout::vertical([
+            Constraint::Percentage(26),
+            Constraint::Percentage(26),
+            Constraint::Percentage(24),
+            Constraint::Percentage(24),
         ])
         .areas(area);
 
@@ -307,6 +315,10 @@ impl PerformanceTab {
         ])
         .areas(bottom);
 
+        let [op_timing_area, step_bkdn_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(extra);
+
         self.draw_stats(frame, stats_area, theme, data_provider);
         Self::draw_timing_breakdown(frame, timing_area, theme, data_provider);
         Self::draw_memory_breakdown(frame, memory_area, theme, data_provider);
@@ -316,6 +328,8 @@ impl PerformanceTab {
         Self::draw_phase_timing_stacked(frame, phase_area, theme, data_provider);
         Self::draw_adaptive_dt_chart(frame, adt_area, theme, data_provider);
         Self::draw_positivity_violations(frame, posv_area, theme, data_provider);
+        Self::draw_operation_timings(frame, op_timing_area, theme, data_provider);
+        Self::draw_step_breakdown(frame, step_bkdn_area, theme, data_provider);
     }
 
     fn draw_memory_breakdown(
@@ -494,20 +508,43 @@ impl PerformanceTab {
 
         const PHASE_NAMES: [&str; 7] = ["Drift", "Poissn", "Kick", "Dens", "Diag", "I/O", "Other"];
 
+        // Collect event-derived timing entries
+        let mut event_categories: Vec<String> = Vec::new();
+        let mut event_values: Vec<f64> = Vec::new();
+        if let Some(us) = s.poisson_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("Poissn*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+        if let Some(us) = s.advection_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("Advect*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+        if let Some(us) = s.ht_slar_wall_us {
+            let ms = us as f64 / 1000.0;
+            event_categories.push("SLAR*".to_string());
+            event_values.push(if total > 0.0 { ms / total * 100.0 } else { 0.0 });
+        }
+
         if let Some(ref timings) = s.phase_timings {
-            // Real phase timings → BarChart
+            // Real phase timings → BarChart (augmented with event-derived timings)
             let plt_theme = theme.clone();
-            let categories: Vec<String> = PHASE_NAMES
+            let mut categories: Vec<String> = PHASE_NAMES
                 .iter()
                 .zip(timings.iter())
                 .filter(|&(_, ms)| *ms > 0.0)
                 .map(|(&name, _)| name.to_string())
                 .collect();
-            let values: Vec<f64> = timings
+            let mut values: Vec<f64> = timings
                 .iter()
                 .filter(|&&ms| ms > 0.0)
                 .map(|&ms| if total > 0.0 { ms / total * 100.0 } else { 0.0 })
                 .collect();
+
+            // Append event-derived timing entries
+            categories.extend(event_categories);
+            values.extend(event_values);
 
             let chart = BarChart::new()
                 .categories(categories)
@@ -518,34 +555,66 @@ impl PerformanceTab {
 
             frame.render_widget(&chart, area);
         } else {
-            // Estimated split (Strang) — text fallback
+            // Estimated split (Strang) — text fallback, augmented with event timings
             let block = Block::bordered()
                 .title(format!(" Phase Timings ({total:.1}ms) "))
                 .border_style(Style::default().fg(theme.border_color()));
             let inner = block.inner(area);
             frame.render_widget(block, area);
-            frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled(" Drift   ", Style::default().fg(theme.dim())),
-                        Span::styled("~33%", Style::default().fg(theme.chart_color(0))),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
-                        Span::styled("~34%", Style::default().fg(theme.chart_color(1))),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(" Kick    ", Style::default().fg(theme.dim())),
-                        Span::styled("~33%", Style::default().fg(theme.chart_color(2))),
-                    ]),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        " (estimated)",
-                        Style::default().fg(theme.dim()),
-                    )),
+
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled(" Drift   ", Style::default().fg(theme.dim())),
+                    Span::styled("~33%", Style::default().fg(theme.chart_color(0))),
                 ]),
-                inner,
-            );
+                Line::from(vec![
+                    Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
+                    Span::styled("~34%", Style::default().fg(theme.chart_color(1))),
+                ]),
+                Line::from(vec![
+                    Span::styled(" Kick    ", Style::default().fg(theme.dim())),
+                    Span::styled("~33%", Style::default().fg(theme.chart_color(2))),
+                ]),
+            ];
+
+            // Add event-derived timings when available
+            if let Some(us) = s.poisson_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" Poissn  ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(3)),
+                    ),
+                ]));
+            }
+            if let Some(us) = s.advection_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" Advect  ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(4)),
+                    ),
+                ]));
+            }
+            if let Some(us) = s.ht_slar_wall_us {
+                lines.push(Line::from(vec![
+                    Span::styled(" SLAR    ", Style::default().fg(theme.dim())),
+                    Span::styled(
+                        format!("{:.0}\u{00b5}s", us),
+                        Style::default().fg(theme.chart_color(5)),
+                    ),
+                ]));
+            }
+
+            if event_categories.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    " (estimated)",
+                    Style::default().fg(theme.dim()),
+                )));
+            }
+
+            frame.render_widget(Paragraph::new(lines), inner);
         }
     }
 
@@ -629,7 +698,7 @@ impl PerformanceTab {
             "—".to_string()
         };
 
-        let lines = vec![
+        let mut lines = vec![
             Line::from(Span::styled(
                 " Performance",
                 Style::default()
@@ -659,6 +728,19 @@ impl PerformanceTab {
                 },
             ),
         ];
+
+        // Event-derived component timings
+        if let Some(s) = state {
+            if let Some(us) = s.poisson_wall_us {
+                lines.push(val("Poisson", format!("{us}\u{00b5}s")));
+            }
+            if let Some(us) = s.advection_wall_us {
+                lines.push(val("Advect", format!("{us}\u{00b5}s")));
+            }
+            if let Some(us) = s.ht_slar_wall_us {
+                lines.push(val("SLAR", format!("{us}\u{00b5}s")));
+            }
+        }
 
         let block = Block::bordered()
             .title(" Stats ")
@@ -857,6 +939,171 @@ impl PerformanceTab {
             .theme(plt_theme);
 
         frame.render_widget(&stacked, area);
+    }
+
+    fn draw_operation_timings(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        data_provider: &dyn DataProvider,
+    ) {
+        let diag = data_provider.diagnostics();
+        let poisson_data = diag.poisson_wall_us.iter_chart_data();
+        let advection_data = diag.advection_wall_us.iter_chart_data();
+        let slar_data = diag.ht_slar_wall_us.iter_chart_data();
+
+        let has_data = poisson_data.len() >= 2 || advection_data.len() >= 2 || slar_data.len() >= 2;
+
+        if !has_data {
+            let block = Block::bordered()
+                .title(" Operation Timings ")
+                .border_style(Style::default().fg(theme.border_color()));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Waiting for timing events...",
+                    Style::default().fg(theme.dim()),
+                )),
+            ];
+
+            // Show current snapshot values if available
+            if let Some(s) = data_provider.current_state() {
+                lines.push(Line::from(""));
+                if let Some(us) = s.poisson_wall_us {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Poisson:   ", Style::default().fg(theme.dim())),
+                        Span::styled(
+                            format!("{us}\u{00b5}s"),
+                            Style::default().fg(theme.foreground),
+                        ),
+                    ]));
+                }
+                if let Some(us) = s.advection_wall_us {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Advection: ", Style::default().fg(theme.dim())),
+                        Span::styled(
+                            format!("{us}\u{00b5}s"),
+                            Style::default().fg(theme.foreground),
+                        ),
+                    ]));
+                }
+                if let Some(us) = s.op_compute_density_us {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Density:   ", Style::default().fg(theme.dim())),
+                        Span::styled(
+                            format!("{us}\u{00b5}s"),
+                            Style::default().fg(theme.foreground),
+                        ),
+                    ]));
+                }
+                if let Some(us) = s.op_compute_accel_us {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Accel:     ", Style::default().fg(theme.dim())),
+                        Span::styled(
+                            format!("{us}\u{00b5}s"),
+                            Style::default().fg(theme.foreground),
+                        ),
+                    ]));
+                }
+            }
+
+            frame.render_widget(Paragraph::new(lines), inner);
+            return;
+        }
+
+        let plt_theme = theme.clone();
+        let mut plot = LinePlot::new()
+            .x_axis(PltAxis::new().label("t"))
+            .y_axis(PltAxis::new().label("\u{00b5}s"))
+            .title(" Operation Timings ")
+            .show_legend(true)
+            .legend_position(LegendPosition::TopRight)
+            .theme(plt_theme);
+
+        if poisson_data.len() >= 2 {
+            plot = plot.series(
+                Series::new("Poisson")
+                    .data(poisson_data)
+                    .color(theme.chart_color(0)),
+            );
+        }
+        if advection_data.len() >= 2 {
+            plot = plot.series(
+                Series::new("Advection")
+                    .data(advection_data)
+                    .color(theme.chart_color(1)),
+            );
+        }
+        if slar_data.len() >= 2 {
+            plot = plot.series(
+                Series::new("SLAR")
+                    .data(slar_data)
+                    .color(theme.chart_color(2)),
+            );
+        }
+
+        frame.render_widget(&plot, area);
+    }
+
+    fn draw_step_breakdown(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        data_provider: &dyn DataProvider,
+    ) {
+        let state = data_provider.current_state();
+        let has_data = state.map(|s| s.step_timings.is_some()).unwrap_or(false);
+
+        if !has_data {
+            let block = Block::bordered()
+                .title(" Step Breakdown ")
+                .border_style(Style::default().fg(theme.border_color()));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let Some(s) = state else { return };
+        let Some(ref timings) = s.step_timings else {
+            return;
+        };
+        let total: f64 = timings.iter().sum();
+
+        const LABELS: [&str; 7] = [
+            "Drift", "Poisson", "Kick", "Density", "Diag", "I/O", "Other",
+        ];
+
+        let categories: Vec<String> = LABELS
+            .iter()
+            .zip(timings.iter())
+            .filter(|&(_, &ms)| ms > 0.0)
+            .map(|(&name, _)| name.to_string())
+            .collect();
+        let values: Vec<f64> = timings
+            .iter()
+            .filter(|&&ms| ms > 0.0)
+            .map(|&ms| if total > 0.0 { ms / total * 100.0 } else { 0.0 })
+            .collect();
+
+        if categories.is_empty() {
+            let block = Block::bordered()
+                .title(" Step Breakdown ")
+                .border_style(Style::default().fg(theme.border_color()));
+            frame.render_widget(block, area);
+            return;
+        }
+
+        let plt_theme = theme.clone();
+        let chart = BarChart::new()
+            .categories(categories)
+            .dataset(BarDataset::new("% time", values, theme.chart_color(0)))
+            .orientation(Orientation::Horizontal)
+            .title(format!(" Step Breakdown ({total:.1}ms) "))
+            .theme(plt_theme);
+
+        frame.render_widget(&chart, area);
     }
 
     fn draw_adaptive_dt_chart(

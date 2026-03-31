@@ -584,6 +584,65 @@ impl RankTab {
             ]));
         }
 
+        if let Some(discarded) = state.ht_truncation_max_discarded {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from("Truncated").style(
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(format!("{discarded} SVs"))
+                    .style(Style::default().fg(theme.chart_color(3))),
+            ]));
+        }
+
+        if let Some(evals) = state.ht_aca_func_evals {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from("ACA evals").style(
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(format!("{evals}")).style(Style::default().fg(theme.chart_color(4))),
+            ]));
+        }
+
+        if let Some(recovery) = state.ht_frame_nan_recovery {
+            let (label, color) = if recovery {
+                ("yes", theme.warn())
+            } else {
+                ("no", theme.ok())
+            };
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from("NaN recovery").style(
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(label).style(Style::default().fg(color)),
+            ]));
+        }
+
+        if let Some(fits) = state.ht_materialization_fits {
+            let (label, color) = if fits {
+                ("yes", theme.ok())
+            } else {
+                ("no", theme.warn())
+            };
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from("Fits mem").style(
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(label).style(Style::default().fg(color)),
+            ]));
+        }
+
         let widths = [
             Constraint::Length(4),
             Constraint::Min(10),
@@ -679,7 +738,11 @@ impl RankTab {
             .as_ref()
             .and_then(|e| e.get(node))
             .copied();
-        let budget = 100usize;
+        // Use compression ratio as effective budget indicator when available
+        let budget = state
+            .compression_ratio
+            .map(|cr| (cr as usize).max(1))
+            .unwrap_or(100usize);
 
         // Try to render StemPlot of singular values
         let has_sv_plot = if let Some(ref svs) = state.singular_values
