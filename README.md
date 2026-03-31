@@ -1,13 +1,23 @@
-# phasma
+<div align="center">
+
+<h1>phasma</h1>
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-resonant--jovian-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/resonant-jovian)
+[![Support on thanks.dev](https://img.shields.io/badge/thanks.dev-Support-green?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyMWMtNS41IDAtMTAtMy41LTEwLTkgMC00IDItNy41IDYtMTAgMS41IDIuNSAzIDQuNSA0IDQuNSAxLTEuNSAyLjUtMy41IDQtNC41IDQuNSAyLjUgNiA2IDYgMTAgMCA1LjUtNC41IDktMTAgOXoiLz48L3N2Zz4=)](https://thanks.dev/u/gh/resonant-jovian)
+
+[![Crates.io](https://img.shields.io/crates/v/phasma?style=for-the-badge&logo=rust&logoColor=white&label=crates.io)](https://crates.io/crates/phasma)
+[![docs.rs](https://img.shields.io/docsrs/phasma?style=for-the-badge&logo=docsdotrs&logoColor=white&label=docs.rs)](https://docs.rs/phasma)
+[![Downloads](https://img.shields.io/crates/d/phasma?style=for-the-badge&logo=rust&logoColor=white&color=e6761b)](https://crates.io/crates/phasma)
+
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-3366cc?style=for-the-badge&logo=gnu&logoColor=white)](https://www.gnu.org/licenses/gpl-3.0)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-3366cc?style=for-the-badge&logo=rust&logoColor=white)](https://releases.rs/docs/1.85.0/)
+[![Edition](https://img.shields.io/badge/Edition-2024-3366cc?style=for-the-badge&logo=rust&logoColor=white)](https://doc.rust-lang.org/edition-guide/)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/resonant-jovian/phasma/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=ci)](https://github.com/resonant-jovian/phasma/actions/workflows/ci.yml)
+
+</div>
 
 **Terminal interface for the [caustic](https://github.com/resonant-jovian/caustic) Vlasov–Poisson solver.**
-
-[![Crates.io](https://img.shields.io/crates/v/phasma.svg)](https://crates.io/crates/phasma)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Support on thanks.dev](https://img.shields.io/badge/Support-thanks.dev-green)](https://thanks.dev/u/gh/resonant-jovian)
-
-[![CI](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/test.yml)
-[![Clippy](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/phasma/actions/workflows/clippy.yml)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the interface and configuration format may change without notice. Until version 1.0.0 it should not be relied upon for production workloads.
